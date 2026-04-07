@@ -4,6 +4,113 @@ All notable changes to OTLC Guardian. The format follows [Keep a Changelog](http
 
 ---
 
+## [1.2.0] — 2026-04-07
+
+Two new features land in this minor release — an OWASP-aligned SQL injection
+defense helper and a surgical `guardian uninstall` command that closes the
+merge-safety loop left open in 1.1.1. Both are net-new surface area with their
+own test suites; no behavior changes to the 1.1.1 code.
+
+### Added
+
+- **`security/04-sql-guard.js`** — a zero-dep `sql\`\`` tagged template literal
+  that makes parameterized queries the path of least resistance. Auto-expands
+  `${}` interpolations into placeholders and returns a `{ text, values, driver }`
+  object compatible with `pg`, `mysql2`, and `better-sqlite3`. Both dialects
+  are first-class: the default `sql` export is postgres-bound with
+  `.toMysql()` / `.toSqlite()` / `.toPostgres()` conversion methods, and
+  `createSqlHelper({ driver })` returns a natively-bound tag for projects
+  that prefer the factory pattern. Nested `sql\`\`` composition is supported
+  end-to-end — interpolating one query into another inlines its compiled
+  parts and renumbers placeholders automatically. Dynamic table/column
+  interpolation goes through `sql.identifier(name, allowList)` with three
+  layers of validation: the allow-list must be a non-empty array, the
+  identifier must match a strict safe-shape regex (letters/digits/underscore,
+  optional single-dot schema prefix), and it must be a member of the allow-
+  list. The regex check runs even when the name is on the allow-list, so a
+  caller who accidentally adds a malicious string to the list still has the
+  query aborted (defense in depth). No runtime blocklist scanner, no keyword
+  detection, no input filtering — OWASP's SQL Injection Prevention Cheat
+  Sheet explicitly warns that input filtering is not a primary defense
+  against SQL injection, and Guardian's static audit rules
+  (`INJ-004` / `INJ-005` / `INJ-006` in `security/03-audit.js`) already catch
+  the bad concatenation pattern statically. Wired into
+  `package.json` exports as `./sql` and mentioned in `STANDARDS.md` as the
+  zero-dep fallback for projects that cannot adopt Prisma. Coverage lives
+  in `tests/sql-guard.test.js` — 40 tests across seven security properties
+  (parameterization, literal-text preservation, injection-payload
+  pass-through, identifier escape hatch, nested composition, zero-scanning,
+  dialect-conversion purity).
+
+- **`guardian uninstall` command** — the surgical inverse of `guardian init`
+  that closes the merge-safety loop on the uninstall side. The symmetry
+  contract is `init && uninstall == no-op` on a well-formed project: a
+  project with custom content in every managed file (`CLAUDE.md`, `AGENTS.md`,
+  `GEMINI.md`, `STANDARDS.md`, `.gitignore`, `.env.example`, and
+  `.claude/settings.json` with a pre-existing non-Guardian hook) must be
+  byte-for-byte equal to its original state after running
+  `guardian init && guardian uninstall`. The command marker-strips merged
+  files (removing only the content between the `<!-- OTLC-GUARDIAN-START -->`
+  and `<!-- OTLC-GUARDIAN-END -->` markers, preserving every line the user
+  wrote), surgically removes Guardian's hook entries from
+  `.claude/settings.json` (using the same set-based matcher comparison
+  that `mergeClaudeSettings` uses on the init side), and byte-compares
+  pure-Guardian copied files in `security/`, `.claude/hooks/`, and `.github/`
+  against the source-of-truth at `ROOT` — deleting only files that are
+  byte-identical to the shipped template, and keeping user-modified copies
+  with a "customized" note. Never deletes a file whose marker is absent
+  (provenance can no longer be verified), never touches a file Guardian
+  did not create (e.g. a user's own `security/my-custom-rules.js` is
+  preserved), and refuses to modify a malformed `.claude/settings.json`
+  with the same "refuse to touch what we cannot reason about" contract
+  used by `mergeClaudeSettings`. A `--dry-run` flag previews the actions
+  without touching disk. Wired into `bin/guardian.js` as the `case "uninstall":`
+  router branch with a try/catch that converts the invalid-JSON throw into
+  a clean non-zero exit. Coverage lives in `tests/uninstall.test.js` —
+  11 tests covering the full contract: symmetry, idempotency, partial
+  state (manual marker removal), pre-existing AGENTS.md (Codex user
+  survival), custom hooks alongside Guardian's, invalid JSON refusal,
+  custom security files, customized Guardian files, dry-run, CLI wiring,
+  and the empty-project no-op. This fixes the known data-loss foot-gun
+  shipped in 1.1.1 where `SETUP.md` told users to
+  `rm -f CLAUDE.md AGENTS.md GEMINI.md STANDARDS.md` — an instruction that
+  would destroy any content the user wrote above Guardian's marker block.
+  PR #4 already shipped the merge-safe manual documentation in
+  `SETUP.md § Uninstalling`; 1.2.0 ships the automated command the docs
+  have been pointing at.
+
+### Changed
+
+- **README.md** — "The Six Commands" → "The Seven Commands" with a full
+  block for `guardian uninstall` including the `--dry-run` flag, the
+  marker-strip / byte-compare strategy, and the symmetry contract
+  reference. One-line mention of the SQL helper added to the
+  "What You Get" audit CLI section.
+- **`SETUP.md § Uninstalling`** — replaces the "command is on the roadmap"
+  line with "run `guardian uninstall` — it does every step below
+  automatically." The manual marker-based procedure is preserved as a
+  fallback for users who want to see exactly what the command does.
+- **`STANDARDS.md § Database (SQL)`** — adds a one-paragraph mention of
+  the `sql\`\`` helper as the zero-dep fallback for projects that cannot
+  adopt Prisma.
+- **`FAQ.md`** — adds "How do I uninstall Guardian from a project?" under
+  Installation, updates the "three security files" answer to "four"
+  with `04-sql-guard.js` in the list, and adds a new "Why doesn't
+  Guardian include a SQL injection runtime scanner?" Q explaining the
+  OWASP-aligned design decision.
+- **`package.json`** — `"./sql": "./security/04-sql-guard.js"` added to
+  `exports`. `npm test` script extended to include `tests/sql-guard.test.js`
+  and `tests/uninstall.test.js`. New `test:sql` and `test:uninstall`
+  shortcuts for running each suite in isolation.
+
+### Fixed
+
+- **Stale version string in `bin/guardian.js:121`** — the `showHelp()`
+  footer was still printing `Version 1.1.0` after the 1.1.1 bump.
+  Bumped to 1.2.0 as part of this release.
+
+---
+
 ## [1.1.1] — 2026-04-06
 
 Pre-ship security and correctness pass. Every item below was surfaced by an
