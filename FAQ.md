@@ -1,5 +1,5 @@
 # OTLC Guardian — FAQ
-<!-- onthelevelconcepts.com · Version 1.1.1 -->
+<!-- onthelevelconcepts.com · Version 1.2.0 -->
 
 ---
 
@@ -148,6 +148,23 @@ Yes — that is the primary use case. Run `guardian init` in your project root. 
 
 ---
 
+**How do I uninstall Guardian from a project?**
+
+Run `guardian uninstall` in the project root. Added in 1.2.0.
+
+It is the surgical inverse of `guardian init`:
+
+- **Merged files** (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `STANDARDS.md`, `.gitignore`, `.env.example`) — removes only the marker-delimited block Guardian added, preserving every line you wrote above and below the markers. Never blanket-deletes a merged file.
+- **`.claude/settings.json`** — removes only Guardian's two hook entries, leaving every other hook alone. Refuses to touch the file if the JSON is malformed.
+- **Pure-Guardian files** (`security/01-injection-guard.js`, `04-sql-guard.js`, the `.claude/hooks/` scripts, the `.github/` templates) — deletes only files that are byte-identical to what Guardian shipped. Files you modified are kept and reported as "customized".
+- **Your own files** — anything Guardian did not originally create is never touched. A custom `security/my-rules.js` you added after install survives uninstall.
+
+Use `guardian uninstall --dry-run` first if you want to preview the actions without touching disk. The symmetry contract is `init && uninstall == no-op` on any well-formed project — enforced by `tests/uninstall.test.js`.
+
+If you also want to remove the global CLI, run `npm uninstall -g otlc-guardian` after. The uninstall command only removes Guardian from the current project.
+
+---
+
 ## Prompt Injection
 
 **What is prompt injection?**
@@ -286,19 +303,67 @@ Because you may already have project-specific rules in your `CLAUDE.md`. Guardia
 
 ## Runtime Modules
 
-**What's the difference between the three security files?**
+**What's the difference between the four security files?**
 
 - `01-injection-guard.js` — scans user input and AI output for injection attacks and secret leaks
 - `02-code-security.js` — server utilities: secure headers, rate limiting, request ID threading, structured logging, consistent error/success responses, health check endpoint, environment variable validation, Windows env setup helper
 - `03-audit.js` — CLI tool that scans any codebase for security issues and quality violations
+- `04-sql-guard.js` — OWASP-aligned tagged template helper (``sql`SELECT ... WHERE id = ${id}` ``) that auto-parameterizes every interpolation. Zero dependencies. Added in 1.2.0.
 
 ---
 
-**Do I need all three files?**
+**Do I need all four files?**
 
 - `01-injection-guard.js` — needed if your app passes user input to an AI
 - `02-code-security.js` — needed if you have an HTTP server
 - `03-audit.js` — standalone tool, run it on demand, no runtime cost
+- `04-sql-guard.js` — needed if you write raw SQL and do not use an ORM like Prisma. Zero-dep and import-on-demand, so importing it when you do not need it is free.
+
+---
+
+**Why doesn't Guardian include a SQL injection runtime scanner?**
+
+Because OWASP explicitly warns that input filtering is **not** a primary defense against SQL injection. The [OWASP SQL Injection Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html) lists prepared statements / parameterized queries as the **#1 primary defense** and warns that blocklist-based scanning is bypassable by encoding tricks, comment injection, and second-order injection.
+
+Guardian's approach is two-pronged and follows the OWASP guidance:
+
+1. **Static audit** — `guardian audit` runs `INJ-004`, `INJ-005`, and `INJ-006` to flag raw SQL string concatenation and template-literal interpolation at CI time, so the bad pattern can't ship.
+2. **Safe runtime helper** — `security/04-sql-guard.js` exports a `sql` tagged template that auto-parameterizes every `${}` interpolation into a `{ text, values }` object for `pg`, `mysql2`, and `better-sqlite3`. Dynamic identifiers go through `sql.identifier(name, allowList)` with three layers of validation (non-empty allow-list, safe-identifier regex, membership check — the regex runs even when the name is on the allow-list as defense in depth).
+
+A runtime blocklist scanner would add complexity without adding real security and would contradict Guardian's own `STANDARDS.md`, which already mandates parameterized queries (Prisma for Node, SQLAlchemy for Python). The helper makes the safe pattern the path of least resistance; the audit is the static backstop.
+
+---
+
+**How do I use `04-sql-guard.js`?**
+
+Import the `sql` tag and use it as a tagged template literal. Every `${}` becomes a placeholder automatically.
+
+```js
+import { sql } from 'otlc-guardian/sql';
+
+// Postgres (default)
+const userId = req.params.id;
+const query = sql`SELECT * FROM users WHERE id = ${userId} AND tenant = ${tenantId}`;
+// { text: 'SELECT * FROM users WHERE id = $1 AND tenant = $2', values: [userId, tenantId], driver: 'postgres' }
+
+const row = await pgClient.query(query.text, query.values);
+
+// MySQL / SQLite — convert at the call site
+const mysqlQuery = query.toMysql();
+// { text: 'SELECT * FROM users WHERE id = ? AND tenant = ?', values: [userId, tenantId], driver: 'mysql' }
+
+await mysqlConn.query(mysqlQuery.text, mysqlQuery.values);
+```
+
+For dynamic column or table names, use the explicit allow-list escape hatch:
+
+```js
+const col = req.query.sort;
+const query = sql`SELECT * FROM users ORDER BY ${sql.identifier(col, ['name', 'created_at', 'id'])}`;
+// Throws if `col` is not in the allow-list, or if it doesn't match the safe-identifier regex.
+```
+
+Nested composition also works — one `sql` result can be interpolated into another and the placeholders are renumbered automatically. See `tests/sql-guard.test.js` for the full contract.
 
 ---
 
@@ -377,4 +442,4 @@ The security patterns and standards evolve as new attack vectors are discovered 
 
 ---
 
-*OTLC Guardian · [onthelevelconcepts.com](https://onthelevelconcepts.com) · Version 1.1.1*
+*OTLC Guardian · [onthelevelconcepts.com](https://onthelevelconcepts.com) · Version 1.2.0*
