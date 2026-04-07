@@ -1,5 +1,5 @@
 # OTLC Guardian — Setup Guide
-<!-- onthelevelconcepts.com · Version 1.2.0 -->
+<!-- onthelevelconcepts.com · Version 1.2.1 -->
 
 Step-by-step setup from zero to a fully protected, standards-enforced project.  
 Estimated time: **10 minutes** for a new project, **5 minutes** for an existing one.
@@ -571,35 +571,22 @@ update your global CLI install to 1.1.1 or newer.
 
 ## Uninstalling
 
-> **Prefer `guardian uninstall`** (added in 1.2.0). It does every step below
-> automatically and is the merge-safe inverse of `guardian init`:
+> **Read this entire section before running any commands.** Uninstalling
+> Guardian is deliberately a manual, step-by-step process. There is no
+> `guardian uninstall` command — the blast radius of any bug in an
+> automated file-mutation command that touches user content is too wide
+> for a security-forward template. You are in full control of every
+> delete and every edit.
 >
-> ```bash
-> guardian uninstall             # perform the uninstall
-> guardian uninstall --dry-run   # preview actions without touching disk
-> ```
->
-> The command marker-strips Guardian's content from merged files (preserving
-> every line you wrote), surgically removes Guardian's hook entries from
-> `.claude/settings.json` (leaving every other hook alone), and deletes
-> pure-Guardian copied files only when they are byte-identical to the shipped
-> template — user-modified copies are kept and reported as "customized". The
-> symmetry contract (`init && uninstall == no-op` on any well-formed project)
-> is enforced by `tests/uninstall.test.js`.
->
-> The manual instructions below are preserved as a fallback so you can see
-> exactly what the automated command does, and for anyone who wants to
-> perform the uninstall by hand. **Read them before running anything.**
-
-> **The merge-safety danger.** Guardian's `init` is merge-safe: it appends
-> Guardian content into existing files (CLAUDE.md, STANDARDS.md,
-> .gitignore, .env.example, .claude/settings.json) **below** an
-> `<!-- OTLC-GUARDIAN-START -->` marker, preserving every line you wrote
-> above it. Uninstalling cleanly therefore requires the inverse — surgically
-> remove only the content **between the markers**, never blanket-delete a
-> merged file. **A blanket `rm -f CLAUDE.md` would destroy any project-specific
-> rules you wrote before running `guardian init`.** If you don't want to use
-> `guardian uninstall` for whatever reason, follow the manual process below.
+> Guardian's `init` is merge-safe: it appends Guardian content into
+> existing files (CLAUDE.md, STANDARDS.md, .gitignore, .env.example,
+> .claude/settings.json) **below** an `<!-- OTLC-GUARDIAN-START -->`
+> marker, preserving every line you wrote above it. Uninstalling cleanly
+> therefore requires the inverse — surgically remove only the content
+> **between the markers**, never blanket-delete a merged file.
+> **A blanket `rm -f CLAUDE.md` would destroy any project-specific rules
+> you wrote before running `guardian init`.** This section walks you
+> through the safe manual process.
 
 ### Step 1 — Un-merge the files Guardian appended into (manual)
 
@@ -765,4 +752,4 @@ npm uninstall -g otlc-guardian
 
 ---
 
-*OTLC Guardian · [onthelevelconcepts.com](https://onthelevelconcepts.com) · Version 1.2.0*
+*OTLC Guardian · [onthelevelconcepts.com](https://onthelevelconcepts.com) · Version 1.2.1*

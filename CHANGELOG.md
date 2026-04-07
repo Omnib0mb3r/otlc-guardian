@@ -4,6 +4,79 @@ All notable changes to OTLC Guardian. The format follows [Keep a Changelog](http
 
 ---
 
+## [1.2.1] — 2026-04-07
+
+Hotfix that reverts one of the two features shipped in 1.2.0. The SQL
+injection defense helper (`security/04-sql-guard.js`) stays — it does
+not touch user files. The automated `guardian uninstall` command is
+removed — it does.
+
+### Removed
+
+- **`guardian uninstall` command** — reverted in full. Removed
+  `runUninstall()` and its helpers (`unmergeMarkerFile`,
+  `unmergeClaudeSettings`, `deleteCopiedTree`, `HTML_MARKER_RE`,
+  `HASH_MARKER_RE`) from `bin/guardian.js`, dropped the
+  `case "uninstall":` router branch, removed the help text block,
+  removed the mention from the file-header comment block, and dropped
+  the `rmSync` import that was only needed by the uninstall code.
+  Deleted `tests/uninstall.test.js` entirely and removed it from the
+  `npm test` script in `package.json`. README reverted from "Seven
+  Commands" back to "Six Commands" with a note explaining that
+  uninstalling is deliberately manual. SETUP.md uninstall section
+  restored to manual-only with the "no automated command by design"
+  rationale. FAQ.md uninstall answer rewritten to point at
+  `SETUP.md § Uninstalling`.
+
+### Why the revert
+
+The 1.2.0 uninstall command passed a full 11-test suite covering
+symmetry (byte-identical `init && uninstall`), idempotency, invalid
+JSON refusal, customized-file skip, dry-run, and the refuse-to-modify
+contract for `.claude/settings.json`. The implementation was careful:
+marker-strip for merged files with user content above the markers,
+set-based matcher comparison for `.claude/settings.json` hook removal,
+byte-compare-then-delete for pure-Guardian copied files, and never
+touching a file Guardian did not create.
+
+None of that changes the risk profile. An automated command that
+mutates user files has a blast radius that is proportional to the
+install base, not to the size of its test suite. A single bug in a
+marker regex, a single Windows line-ending edge case, a single
+interaction with a user-configured matcher block that is equivalent
+but not textually identical to the canonical form — any one of these
+could silently destroy a user's `CLAUDE.md` or `STANDARDS.md` after
+they have poured hours of project-specific rules into it. The tests
+prove the happy paths; they cannot prove the absence of corner cases.
+
+For a security-forward template whose tagline includes "safe on
+existing projects", the correct posture is: **do not automate the
+teardown of files that contain user content.** The manual
+marker-based procedure in `SETUP.md § Uninstalling` puts the user in
+full control of every delete and every edit. It is slower, and that
+is the point. The PR #4 documentation fix (2026-04-06) that replaced
+the original `rm -f CLAUDE.md AGENTS.md GEMINI.md STANDARDS.md`
+instructions with the marker-based procedure remains the
+authoritative uninstall path.
+
+### What is kept from 1.2.0
+
+- **`security/04-sql-guard.js`** — stays. The OWASP-aligned tagged
+  template helper does not touch user files; it returns a
+  `{ text, values }` object for the caller to pass to a database
+  driver. The 40-test suite remains, the `./sql` subpath export in
+  `package.json` remains, the STANDARDS.md and README.md mentions
+  remain, and the FAQ answers about the helper remain.
+
+### Fixed
+
+- **Stale `Version 1.2.0` in `bin/guardian.js:121`** — bumped to
+  1.2.1 alongside all the other version strings (package.json badge,
+  doc headers/footers for README, CLAUDE.md, STANDARDS.md, AGENTS.md,
+  GEMINI.md, FAQ.md, SETUP.md).
+
+---
+
 ## [1.2.0] — 2026-04-07
 
 Two new features land in this minor release — an OWASP-aligned SQL injection

@@ -1,5 +1,5 @@
 # OTLC Guardian — FAQ
-<!-- onthelevelconcepts.com · Version 1.2.0 -->
+<!-- onthelevelconcepts.com · Version 1.2.1 -->
 
 ---
 
@@ -150,18 +150,14 @@ Yes — that is the primary use case. Run `guardian init` in your project root. 
 
 **How do I uninstall Guardian from a project?**
 
-Run `guardian uninstall` in the project root. Added in 1.2.0.
+**Manually and deliberately** — there is no `guardian uninstall` command, by design. An automated command that touches user content has too wide a blast radius for a security-forward template. The authoritative procedure lives in [`SETUP.md` § Uninstalling](SETUP.md#uninstalling) and walks you through:
 
-It is the surgical inverse of `guardian init`:
+- **Merged files** — `CLAUDE.md`, `STANDARDS.md`, `.gitignore`, `.env.example`: open each one in your editor and remove only the block between `<!-- OTLC-GUARDIAN-START -->` and `<!-- OTLC-GUARDIAN-END -->` (or the `# OTLC-GUARDIAN-START` / `# OTLC-GUARDIAN-END` equivalent for `.gitignore` and `.env.example`). **Never blanket-delete a merged file** — it would destroy every line you wrote above the marker.
+- **`.claude/settings.json`** — open in your editor and remove only Guardian's two hook entries (the ones with `node .claude/hooks/injection-guard-hook.mjs` and `node .claude/hooks/web-content-guard.mjs`). Leave every other hook alone.
+- **Pure-Guardian files** — `security/01-injection-guard.js`, `security/02-code-security.js`, `security/03-audit.js`, `security/04-sql-guard.js`, `security/injection_guard.py`, the `.claude/hooks/` scripts, `.github/workflows/security-audit.yml`: safe to `rm` individually by name if you haven't customized them.
+- **Your own files** — anything Guardian did not create is not in any uninstall list. A custom `security/my-rules.js` you added after install is yours, untouched.
 
-- **Merged files** (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `STANDARDS.md`, `.gitignore`, `.env.example`) — removes only the marker-delimited block Guardian added, preserving every line you wrote above and below the markers. Never blanket-deletes a merged file.
-- **`.claude/settings.json`** — removes only Guardian's two hook entries, leaving every other hook alone. Refuses to touch the file if the JSON is malformed.
-- **Pure-Guardian files** (`security/01-injection-guard.js`, `04-sql-guard.js`, the `.claude/hooks/` scripts, the `.github/` templates) — deletes only files that are byte-identical to what Guardian shipped. Files you modified are kept and reported as "customized".
-- **Your own files** — anything Guardian did not originally create is never touched. A custom `security/my-rules.js` you added after install survives uninstall.
-
-Use `guardian uninstall --dry-run` first if you want to preview the actions without touching disk. The symmetry contract is `init && uninstall == no-op` on any well-formed project — enforced by `tests/uninstall.test.js`.
-
-If you also want to remove the global CLI, run `npm uninstall -g otlc-guardian` after. The uninstall command only removes Guardian from the current project.
+If you also want to remove the global CLI, run `npm uninstall -g otlc-guardian` after.
 
 ---
 
@@ -442,4 +438,4 @@ The security patterns and standards evolve as new attack vectors are discovered 
 
 ---
 
-*OTLC Guardian · [onthelevelconcepts.com](https://onthelevelconcepts.com) · Version 1.2.0*
+*OTLC Guardian · [onthelevelconcepts.com](https://onthelevelconcepts.com) · Version 1.2.1*

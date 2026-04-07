@@ -15,14 +15,18 @@
 //   guardian scan "text"     Scan a string for injection
 //   guardian check           Verify Guardian is set up correctly
 //   guardian init            Copy Guardian files into current project
-//   guardian uninstall       Surgically remove Guardian from current project
 //   guardian help            Show this help
+//
+// To remove Guardian from a project, follow the manual marker-based
+// procedure in SETUP.md § Uninstalling. There is deliberately no
+// `guardian uninstall` command — automated removal is too dangerous
+// for a tool that shares marker blocks with user content.
 //
 // ============================================================
 
 import { spawnSync } from "child_process";
 import { existsSync, mkdirSync, copyFileSync, readdirSync, statSync,
-         readFileSync, writeFileSync, rmSync } from "fs";
+         readFileSync, writeFileSync } from "fs";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 
@@ -93,16 +97,6 @@ ${c.bold}COMMANDS${c.reset}
     behavior as init — safe to re-run any time. Use this after pulling
     a new Guardian release to refresh patterns and standards.
 
-  ${c.cyan}guardian uninstall${c.reset} [--dry-run]
-    Surgically remove Guardian from the current project. Marker-strips
-    Guardian's content from merged files (CLAUDE.md, AGENTS.md,
-    GEMINI.md, STANDARDS.md, .gitignore, .env.example, .claude/settings.json)
-    while preserving every line the user wrote. Deletes pure-Guardian
-    files only when they are byte-identical to the shipped template —
-    user-modified copies are kept and reported as "customized".
-    Never removes a file Guardian did not create. Use --dry-run to
-    preview the actions without touching disk.
-
   ${c.cyan}guardian list-watched${c.reset}
     Print the effective hook watch list for this project. Shows the
     default directories and files plus any customizations from
@@ -118,7 +112,7 @@ ${c.bold}QUICK START${c.reset}
   3. In any project: guardian init
   4. guardian audit
 
-${c.dim}Version 1.2.0 · MIT License${c.reset}
+${c.dim}Version 1.2.1 · MIT License${c.reset}
 `);
 }
 
@@ -1123,338 +1117,23 @@ ${c.dim}Run ${c.reset}${c.cyan}guardian check${c.dim} at any time to verify your
 }
 
 // ---------------------------------------------------------------------------
-// UNINSTALL — surgically remove Guardian from the current project
+// NOTE — there is deliberately no `guardian uninstall` command.
 // ---------------------------------------------------------------------------
 //
-// The uninstall contract is the inverse of the init contract:
+// An earlier 1.2.0 branch shipped an automated `guardian uninstall`
+// that marker-stripped merged files, surgically edited
+// `.claude/settings.json`, and byte-compared pure-Guardian files
+// before deleting them. The command passed a full test suite
+// (symmetry, idempotency, invalid-JSON refusal, customized-file
+// skip, dry-run) — but the blast radius of any bug in an automated
+// file mutation command that touches user content is too wide for
+// a security-forward template. We reverted the command in 1.2.1 and
+// went back to manual, step-by-step instructions in
+// `SETUP.md § Uninstalling` that put the user in full control of
+// every delete, every edit, and every marker-block removal.
 //
-//   guardian init      appends Guardian content below a marker block
-//                      in merged files, copies pure-Guardian files into
-//                      security/, .claude/hooks/, and .github/, and
-//                      merges hook entries into .claude/settings.json.
-//
-//   guardian uninstall marker-strips the merged files (preserving user
-//                      content above and below the markers), deletes
-//                      pure-Guardian files only when they are byte-
-//                      identical to the shipped template, and
-//                      surgically removes Guardian's hook entries
-//                      from .claude/settings.json — leaving user
-//                      hooks and settings untouched.
-//
-// The symmetry invariant: for a project where every managed file is
-// trim-stable (ends with exactly one newline and JSON settings are
-// formatted as JSON.stringify(obj, null, 2) + "\n"), `init && uninstall`
-// produces a byte-identical project. tests/uninstall.test.js enforces
-// this across all seven managed files.
-//
-// Uninstall never:
-//   - Deletes a merged file (CLAUDE.md, AGENTS.md, GEMINI.md, etc.)
-//   - Touches a Guardian file the user customized
-//   - Removes files Guardian did not originally ship
-//   - Touches .claude/settings.json when the JSON is malformed
-//   - Reaches outside the paths Guardian copies
-
-// HTML comment markers for behavior files (CLAUDE.md, AGENTS.md, etc.)
-// and the # comment markers for .gitignore / .env.example. Both regexes
-// are non-greedy (`*?`) so they match the nearest END marker — any
-// accidental markers deeper in the file (e.g. in a doc-exempt example)
-// do not cause the strip to over-run.
-const HTML_MARKER_RE = /<!-- OTLC-GUARDIAN-START -->[\s\S]*?<!-- OTLC-GUARDIAN-END -->\n?/;
-const HASH_MARKER_RE = /# OTLC-GUARDIAN-START[\s\S]*?# OTLC-GUARDIAN-END\n?/;
-
-/**
- * Strip Guardian's marker block from a merged file.
- *
- * Behavior:
- *   - Missing file              → `skippedMissing` (silent)
- *   - File without marker       → `skippedNoMarker` (warn, never delete)
- *   - Marker present, remainder → unmerged (write back, trimEnd + "\n")
- *   - Marker present, nothing   → deleted (file was a fresh-install
- *     remaining                    Guardian creation with no user content)
- *
- * Trim-then-append-newline is the normalization that makes the symmetry
- * contract work: merge adds `\n\n` between user content and the marker,
- * and the strip leaves a `\n\n` tail behind. trimEnd + "\n" collapses
- * that to the conventional single-trailing-newline form.
- */
-function unmergeMarkerFile(filePath, label, markerRegex, state, dryRun) {
-  if (!existsSync(filePath)) {
-    state.skippedMissing.push(label);
-    return;
-  }
-
-  const content = readFile(filePath);
-  if (!markerRegex.test(content)) {
-    // User manually removed the marker, or the file was never Guardian-
-    // managed in the first place. Either way, hands off — we refuse to
-    // delete a file whose provenance we can no longer verify.
-    state.skippedNoMarker.push(label);
-    return;
-  }
-
-  const stripped = content.replace(markerRegex, "").trimEnd();
-
-  if (stripped.length === 0) {
-    // The file was a fresh-install Guardian creation — nothing the user
-    // wrote was there before init. Safe to delete the whole file.
-    if (!dryRun) rmSync(filePath, { force: true });
-    state.deletedManaged.push(label);
-    return;
-  }
-
-  const final = stripped + "\n";
-  if (!dryRun) writeFileSync(filePath, final, "utf8");
-  state.unmerged.push(label);
-}
-
-/**
- * Surgically remove Guardian's hook entries from .claude/settings.json.
- *
- * Safety contract mirrors mergeClaudeSettings:
- *   - NEVER overwrites the user's file. If the JSON is invalid, throws
- *     with a clear error and exits non-zero — refusing to write something
- *     we cannot reason about is the only correct behavior.
- *   - NEVER removes user hooks. Matcher comparison is set-based so the
- *     user's own Write|Edit block is found and surgically pared down,
- *     not clobbered.
- *   - If a Guardian hook was never registered (e.g. init was never run,
- *     or the user already pruned it), the file is left untouched.
- *   - When removing Guardian's hook empties a matcher block, the empty
- *     block is dropped; when the event array becomes empty, the event
- *     key is dropped; when the hooks object becomes empty, the hooks
- *     key is dropped. This is what makes the symmetry test round-trip.
- */
-function unmergeClaudeSettings(filePath, state, dryRun) {
-  if (!existsSync(filePath)) {
-    state.skippedMissing.push(".claude/settings.json");
-    return;
-  }
-
-  const raw = readFile(filePath);
-  let obj;
-  try {
-    obj = JSON.parse(raw || "{}");
-  } catch (parseErr) {
-    err(`.claude/settings.json — INVALID JSON, refusing to modify`);
-    err(`    ${parseErr.message}`);
-    err(`    Fix the JSON manually, then re-run guardian uninstall.`);
-    throw new Error(
-      ".claude/settings.json could not be parsed; aborting uninstall"
-    );
-  }
-
-  // Same hook manifest mergeClaudeSettings uses on the init side. Any
-  // change to one must change the other or init/uninstall stops being
-  // symmetric. The two are deliberately kept side-by-side in the file
-  // so a code review catches the drift.
-  const GUARDIAN_HOOKS = [
-    {
-      event: "PreToolUse",
-      matcher: "Write|Edit",
-      command: "node .claude/hooks/injection-guard-hook.mjs",
-    },
-    {
-      event: "PostToolUse",
-      matcher: "WebFetch|WebSearch",
-      command: "node .claude/hooks/web-content-guard.mjs",
-    },
-  ];
-
-  let removed = 0;
-
-  if (obj && typeof obj === "object" && obj.hooks && typeof obj.hooks === "object") {
-    for (const h of GUARDIAN_HOOKS) {
-      const eventArr = obj.hooks[h.event];
-      if (!Array.isArray(eventArr)) continue;
-
-      const block = findMatcherBlock(eventArr, h.matcher);
-      if (!block || !Array.isArray(block.hooks)) continue;
-
-      const before = block.hooks.length;
-      block.hooks = block.hooks.filter((hook) => hook.command !== h.command);
-      removed += before - block.hooks.length;
-
-      // Block empty → drop the block from the event array
-      if (block.hooks.length === 0) {
-        const idx = eventArr.indexOf(block);
-        if (idx >= 0) eventArr.splice(idx, 1);
-      }
-
-      // Event array empty → delete the event key (e.g. hooks.PostToolUse)
-      if (eventArr.length === 0) {
-        delete obj.hooks[h.event];
-      }
-    }
-
-    // Hooks object empty → delete the hooks key entirely. This is the
-    // step that makes the symmetry test round-trip when the user's
-    // original settings had no hooks key at all.
-    if (Object.keys(obj.hooks).length === 0) {
-      delete obj.hooks;
-    }
-  }
-
-  if (removed === 0) {
-    state.skippedNoMarker.push(".claude/settings.json (no Guardian hooks)");
-    return;
-  }
-
-  if (!dryRun) {
-    writeFileSync(filePath, JSON.stringify(obj, null, 2) + "\n", "utf8");
-  }
-  state.unmerged.push(
-    `.claude/settings.json (${removed} Guardian hook${removed === 1 ? "" : "s"} removed)`
-  );
-}
-
-/**
- * Walk a directory tree of Guardian-shipped files and delete each one
- * from the target project only when it is byte-identical to the file
- * Guardian currently ships. Any file the user customized is kept
- * untouched and reported as "customized".
- *
- * The byte-compare check is what makes uninstall safe for the case
- * where a user modified Guardian's audit rules or added their own
- * patterns to .audit-allowlist. The handoff spec calls this out
- * explicitly in the Phase 2 safety section.
- */
-function deleteCopiedTree(relDir, state, dryRun) {
-  const srcRoot = path.join(ROOT, relDir);
-  const dstRoot = path.join(CWD, relDir);
-  if (!existsSync(srcRoot) || !existsSync(dstRoot)) return;
-
-  function walk(srcCurrent, dstCurrent) {
-    for (const entry of readdirSync(srcCurrent)) {
-      if (COPY_IGNORE.has(entry)) continue;
-
-      const srcPath = path.join(srcCurrent, entry);
-      const dstPath = path.join(dstCurrent, entry);
-      if (!existsSync(dstPath)) continue;
-
-      const srcStat = statSync(srcPath);
-      if (srcStat.isDirectory()) {
-        walk(srcPath, dstPath);
-        continue;
-      }
-
-      // Byte-compare the source-of-truth with what is on disk. Buffer
-      // equality is strict — any user edit (even a single whitespace
-      // change) produces a different buffer and the file is kept.
-      const srcBuf = readFileSync(srcPath);
-      const dstBuf = readFileSync(dstPath);
-      const relLabel = path
-        .relative(CWD, dstPath)
-        .replaceAll("\\", "/");
-
-      if (srcBuf.equals(dstBuf)) {
-        if (!dryRun) rmSync(dstPath, { force: true });
-        state.deletedCopy.push(relLabel);
-      } else {
-        state.skippedCustomized.push(relLabel);
-      }
-    }
-  }
-
-  walk(srcRoot, dstRoot);
-}
-
-function runUninstall() {
-  const dryRun = args.includes("--dry-run");
-
-  log(`\n${c.bold}[OTLC GUARDIAN] UNINSTALL${dryRun ? " (dry run)" : ""}${c.reset}`);
-  log(`${c.dim}Target: ${CWD}${c.reset}`);
-  log(`${c.dim}Guardian source: ${ROOT}${c.reset}\n`);
-
-  // State collected by each step — printed as a structured summary at
-  // the end so the user can see exactly what happened (or, in dry-run
-  // mode, what WOULD happen). Every action the command takes lands in
-  // exactly one of these buckets.
-  const state = {
-    unmerged:          [],  // marker blocks stripped from merged files
-    deletedManaged:    [],  // merged files whose content became empty
-    deletedCopy:       [],  // pure-Guardian files matching ROOT byte-for-byte
-    skippedNoMarker:   [],  // merged files where no marker was found
-    skippedMissing:    [],  // expected files that don't exist on disk
-    skippedCustomized: [],  // Guardian-copied files the user modified
-  };
-
-  // ── Merged Markdown behavior files ──────────────────────────────────
-  unmergeMarkerFile(path.join(CWD, "CLAUDE.md"),    "CLAUDE.md",    HTML_MARKER_RE, state, dryRun);
-  unmergeMarkerFile(path.join(CWD, "AGENTS.md"),    "AGENTS.md",    HTML_MARKER_RE, state, dryRun);
-  unmergeMarkerFile(path.join(CWD, "GEMINI.md"),    "GEMINI.md",    HTML_MARKER_RE, state, dryRun);
-  unmergeMarkerFile(path.join(CWD, "STANDARDS.md"), "STANDARDS.md", HTML_MARKER_RE, state, dryRun);
-
-  // ── Merged hash-commented files ─────────────────────────────────────
-  unmergeMarkerFile(path.join(CWD, ".gitignore"),   ".gitignore",   HASH_MARKER_RE, state, dryRun);
-  unmergeMarkerFile(path.join(CWD, ".env.example"), ".env.example", HASH_MARKER_RE, state, dryRun);
-
-  // ── .claude/settings.json ───────────────────────────────────────────
-  unmergeClaudeSettings(
-    path.join(CWD, ".claude", "settings.json"),
-    state,
-    dryRun
-  );
-
-  // ── Pure-Guardian files (byte-compare then delete) ──────────────────
-  //
-  // Walk the three directories runInit populates via copyDirSafe:
-  // security/, .claude/hooks/, and .github/. Only delete files that
-  // match ROOT byte-for-byte — any user-modified file is kept and
-  // reported as "customized".
-  deleteCopiedTree("security",       state, dryRun);
-  deleteCopiedTree(".claude/hooks",  state, dryRun);
-  deleteCopiedTree(".github",        state, dryRun);
-
-  // ── Summary ─────────────────────────────────────────────────────────
-  const unmergeHeader       = dryRun ? "Files that would be un-merged"       : "Files un-merged";
-  const deleteManagedHeader = dryRun ? "Empty Guardian files that would be deleted" : "Empty Guardian files deleted";
-  const deleteCopyHeader    = dryRun ? "Pure-Guardian files that would be deleted"  : "Pure-Guardian files deleted";
-
-  if (state.unmerged.length > 0) {
-    log(`\n${c.bold}${unmergeHeader}${c.reset} ${c.dim}(user content preserved)${c.reset}`);
-    for (const f of state.unmerged) log(`  ${c.green}✓${c.reset} ${f}`);
-  }
-
-  if (state.deletedManaged.length > 0) {
-    log(`\n${c.bold}${deleteManagedHeader}${c.reset} ${c.dim}(Guardian creations with no user content)${c.reset}`);
-    for (const f of state.deletedManaged) log(`  ${c.green}✓${c.reset} ${f}`);
-  }
-
-  if (state.deletedCopy.length > 0) {
-    log(`\n${c.bold}${deleteCopyHeader}${c.reset} ${c.dim}(byte-identical to shipped template)${c.reset}`);
-    for (const f of state.deletedCopy) log(`  ${c.green}✓${c.reset} ${f}`);
-  }
-
-  if (state.skippedCustomized.length > 0) {
-    log(`\n${c.bold}Customized files — kept${c.reset} ${c.dim}(modified by the user since install)${c.reset}`);
-    for (const f of state.skippedCustomized) log(`  ${c.yellow}⚠${c.reset}  ${f}`);
-  }
-
-  if (state.skippedNoMarker.length > 0) {
-    log(`\n${c.bold}Not Guardian-managed — skipped${c.reset} ${c.dim}(no Guardian marker found)${c.reset}`);
-    for (const f of state.skippedNoMarker) log(`  ${c.dim}•${c.reset} ${f}`);
-  }
-
-  if (state.skippedMissing.length > 0) {
-    log(`\n${c.bold}Not present — skipped${c.reset}`);
-    for (const f of state.skippedMissing) log(`  ${c.dim}•${c.reset} ${f}`);
-  }
-
-  const totalActions =
-    state.unmerged.length +
-    state.deletedManaged.length +
-    state.deletedCopy.length;
-
-  if (totalActions === 0) {
-    log(`\n  ${c.dim}Nothing to do — Guardian is not installed in this project.${c.reset}\n`);
-  } else if (dryRun) {
-    log(`\n  ${c.yellow}Dry run — no changes were made.${c.reset}`);
-    log(`  ${c.dim}Run ${c.reset}${c.cyan}guardian uninstall${c.dim} without --dry-run to apply.${c.reset}\n`);
-  } else {
-    log(`\n  ${c.green}Guardian removed from this project.${c.reset}`);
-    log(`  ${c.dim}Run ${c.reset}${c.cyan}npm uninstall -g otlc-guardian${c.dim} if you also want to remove the CLI globally.${c.reset}\n`);
-  }
-}
+// If you are looking for "how do I uninstall?", read that section —
+// it is the authoritative path and is deliberately not automated.
 
 // ---------------------------------------------------------------------------
 // EXPORTS — helpers exposed for unit testing.
@@ -1505,21 +1184,6 @@ if (isMainModule) {
       // Provided as a separate command because "update" is the natural verb
       // when refreshing patterns after pulling a new Guardian release.
       runInit();
-      break;
-
-    case "uninstall":
-      // uninstall is the surgical inverse of init — marker-strip merged
-      // files, byte-compare-then-delete pure-Guardian files, and refuse
-      // to touch anything Guardian didn't create. The try/catch converts
-      // the "invalid settings.json" throw into a clean non-zero exit so
-      // tests/uninstall.test.js can assert the refuse-to-modify contract
-      // without the error spilling as an uncaught exception.
-      try {
-        runUninstall();
-      } catch (e) {
-        err(e.message);
-        process.exit(1);
-      }
       break;
 
     case "list-watched":

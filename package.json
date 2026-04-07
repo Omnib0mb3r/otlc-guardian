@@ -1,6 +1,6 @@
 {
   "name": "otlc-guardian",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Production-grade AI security guardrails. Prompt injection defense, senior developer standards, and Claude Code behavior enforcement.",
   "type": "module",
   "main": "security/01-injection-guard.js",
@@ -20,14 +20,13 @@
     "audit:json":   "node security/03-audit.js . --json",
     "scan":         "node bin/guardian.js scan",
     "check":        "node bin/guardian.js check",
-    "test":         "node tests/injection-guard.test.js && node tests/init.test.js && node tests/hook.test.js && node tests/agents-md.test.js && node tests/audit.test.js && node tests/sql-guard.test.js && node tests/uninstall.test.js",
+    "test":         "node tests/injection-guard.test.js && node tests/init.test.js && node tests/hook.test.js && node tests/agents-md.test.js && node tests/audit.test.js && node tests/sql-guard.test.js",
     "test:guard":   "node tests/injection-guard.test.js",
     "test:init":    "node tests/init.test.js",
     "test:hook":    "node tests/hook.test.js",
     "test:agents":  "node tests/agents-md.test.js",
     "test:audit":   "node tests/audit.test.js",
-    "test:sql":     "node tests/sql-guard.test.js",
-    "test:uninstall": "node tests/uninstall.test.js"
+    "test:sql":     "node tests/sql-guard.test.js"
   },
   "keywords": [
     "security",

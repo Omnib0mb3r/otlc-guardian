@@ -6,7 +6,7 @@ Free and open source · MIT License · Built by [onthelevelconcepts.com](https:/
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-cyan.svg)](LICENSE)
 [![Node: 22+](https://img.shields.io/badge/Node-22%2B-green.svg)](https://nodejs.org)
-[![Version: 1.2.0](https://img.shields.io/badge/version-1.2.0-blue.svg)](package.json)
+[![Version: 1.2.1](https://img.shields.io/badge/version-1.2.1-blue.svg)](package.json)
 
 ---
 
@@ -205,9 +205,9 @@ Then run `guardian check` to confirm the install and see which coverage tier you
 
 ---
 
-## The Seven Commands
+## The Six Commands
 
-Once installed, you have seven commands:
+Once installed, you have six commands:
 
 **`guardian init`** — Run once inside each project you want Guardian in. Merge-safe and
 idempotent.
@@ -250,17 +250,11 @@ project. Useful when debugging why a file is (or isn't) being scanned by the hoo
 guardian list-watched
 ```
 
-**`guardian uninstall`** — Surgically remove Guardian from a project. Marker-strips
-Guardian's content from merged files (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`,
-`STANDARDS.md`, `.gitignore`, `.env.example`, `.claude/settings.json`) while preserving
-every line the user wrote. Deletes pure-Guardian files only when they are byte-identical
-to the shipped template — user-modified copies are kept and reported as "customized".
-Never removes a file Guardian did not create. The symmetry contract is
-`init && uninstall == no-op` on a well-formed project, enforced by `tests/uninstall.test.js`.
-```bash
-guardian uninstall             # perform the uninstall
-guardian uninstall --dry-run   # preview actions without touching disk
-```
+> **Uninstalling is deliberately manual.** There is no `guardian uninstall` command
+> — the blast radius of any bug in an automated file-mutation command that touches
+> user content is too wide for a security-forward template. See
+> [SETUP.md § Uninstalling](SETUP.md#uninstalling) for the step-by-step marker-based
+> procedure, which gives you full control over every delete and every edit.
 
 ---
 
