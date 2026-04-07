@@ -285,17 +285,107 @@ function smokeTestHook(hookPath) {
   }
 }
 
+// Build a per-editor coverage summary based on which Guardian artifacts
+// exist in the current project. This is what tells a Codex / Cursor / Aider
+// user "yes, Guardian is working for you — here's what you get and what
+// you don't." Before commit 4 of the multi-agent fix, runCheck only reported
+// on Claude-Code-specific artifacts and had nothing to say to anyone else.
+//
+// Return shape: an ordered array of { editor, status, detail } so the
+// printer can align columns and colorize status tokens independently.
+function editorCoverage(root) {
+  const hasClaudeMd  = existsSync(path.join(root, "CLAUDE.md"));
+  const hasAgentsMd  = existsSync(path.join(root, "AGENTS.md"));
+  const hasSettings  = existsSync(path.join(root, ".claude", "settings.json"));
+  const hasPreHook   = existsSync(path.join(root, ".claude", "hooks", "injection-guard-hook.mjs"));
+  const hasPostHook  = existsSync(path.join(root, ".claude", "hooks", "web-content-guard.mjs"));
+  const claudeFull   = hasClaudeMd && hasSettings && hasPreHook && hasPostHook;
+
+  // Every non-Claude agent in the "behavior-only" tier reads AGENTS.md.
+  // Codex CLI, Cursor, Aider, Continue, and Windsurf are the mainstream
+  // ones as of early 2026 — keep the list short and honest. Anything not
+  // in this list is not-yet-integrated, not "quietly supported."
+  const behaviorOnlyEditors = ["Codex CLI", "Cursor", "Aider", "Continue", "Windsurf"];
+
+  const rows = [];
+
+  // Claude Code row
+  if (claudeFull) {
+    rows.push({
+      editor: "Claude Code",
+      status: "FULL",
+      detail: "CLAUDE.md + PreToolUse/PostToolUse hooks + smoke test",
+    });
+  } else if (hasClaudeMd) {
+    rows.push({
+      editor: "Claude Code",
+      status: "PARTIAL",
+      detail: "CLAUDE.md present; hooks missing (run guardian init)",
+    });
+  } else {
+    rows.push({
+      editor: "Claude Code",
+      status: "DISABLED",
+      detail: "CLAUDE.md not found — Claude Code will not load project rules",
+    });
+  }
+
+  // All the behavior-only editors that key off AGENTS.md
+  for (const editor of behaviorOnlyEditors) {
+    if (hasAgentsMd) {
+      rows.push({
+        editor,
+        status: "BEHAVIOR-ONLY",
+        detail: "AGENTS.md + runtime guard + audit CLI (no hook integration)",
+      });
+    } else {
+      rows.push({
+        editor,
+        status: "DISABLED",
+        detail: "AGENTS.md not found — this agent will load no project rules",
+      });
+    }
+  }
+
+  return rows;
+}
+
+// Colorize a status token so the terminal output makes the coverage
+// story obvious at a glance. FULL green, BEHAVIOR-ONLY cyan, PARTIAL
+// yellow, DISABLED red.
+function colorStatus(status) {
+  switch (status) {
+    case "FULL":          return `${c.green}${status}${c.reset}`;
+    case "BEHAVIOR-ONLY": return `${c.cyan}${status}${c.reset}`;
+    case "PARTIAL":       return `${c.yellow}${status}${c.reset}`;
+    case "DISABLED":      return `${c.red}${status}${c.reset}`;
+    default:              return status;
+  }
+}
+
 function runCheck() {
   log(`\n${c.bold}[OTLC GUARDIAN] SETUP CHECK${c.reset}`);
   log(`${c.dim}Checking: ${CWD}${c.reset}\n`);
 
   const pythonProject = isPythonProject(CWD);
 
+  // CLAUDE.md and AGENTS.md are individually optional — but at least one
+  // must be present or the project has no behavior rules at all, which is
+  // the one failure mode runCheck should refuse to let slide. The
+  // "behavior file present" gate below enforces that jointly.
+  const hasClaudeMd = existsSync(path.join(CWD, "CLAUDE.md"));
+  const hasAgentsMd = existsSync(path.join(CWD, "AGENTS.md"));
+
   const checks = [
     {
-      label: "CLAUDE.md in project root",
+      label: "CLAUDE.md in project root (Claude Code behavior rules)",
       path: path.join(CWD, "CLAUDE.md"),
-      required: true,
+      required: false,
+    },
+    {
+      label: "AGENTS.md in project root (universal agent behavior rules)",
+      path: path.join(CWD, "AGENTS.md"),
+      required: false,
     },
     {
       label: "STANDARDS.md in project root",
@@ -385,6 +475,19 @@ function runCheck() {
     }
   }
 
+  // ── Behavior-file gate ──────────────────────────────────────────────
+  // CLAUDE.md and AGENTS.md are individually optional, but at least one
+  // MUST be present — without either, Guardian has no behavior layer to
+  // enforce and the install is broken. This gate fails the check the same
+  // way a missing "required" file would, but with a targeted error that
+  // explains the multi-agent model instead of just saying "file missing."
+  if (!hasClaudeMd && !hasAgentsMd) {
+    err(`MISSING (required): behavior file — neither CLAUDE.md nor AGENTS.md found`);
+    log(`     ${c.dim}Guardian needs at least one behavior file so your coding agent can read the rules.${c.reset}`);
+    log(`     ${c.dim}Run ${c.reset}${c.cyan}guardian init${c.dim} to populate both.${c.reset}`);
+    failed++;
+  }
+
   // ── Hook smoke test — only when the hook file is present ───────────
   const hookPath = path.join(CWD, ".claude", "hooks", "injection-guard-hook.mjs");
   if (existsSync(hookPath)) {
@@ -397,6 +500,27 @@ function runCheck() {
       warn(`Hook smoke test failed: ${result.reason}`);
       warnings++;
     }
+  }
+
+  // ── Editor coverage — what this install means for each agent ───────
+  // This is the bit that was missing before commit 4 of the multi-agent
+  // fix: runCheck validated Claude-only artifacts and then said "Guardian
+  // is correctly installed" even if a Codex / Cursor / Aider user had no
+  // AGENTS.md at all. Now every agent gets a row.
+  log(`\n${c.bold}Editor coverage${c.reset}`);
+  const rows = editorCoverage(CWD);
+  const editorColWidth = Math.max(...rows.map((r) => r.editor.length));
+  const statusColWidth = Math.max(...rows.map((r) => r.status.length));
+  for (const row of rows) {
+    const editorCol = row.editor.padEnd(editorColWidth, " ");
+    // Compute visible padding on the raw status BEFORE colorizing.
+    // Colorizing first then padding would pad inside the ANSI reset and
+    // break alignment; padding first then colorizing would stop the
+    // switch from matching because the padded string is not the literal
+    // status token any more. So: color the token, then append spaces.
+    const pad = " ".repeat(statusColWidth - row.status.length);
+    const statusCol = colorStatus(row.status) + pad;
+    log(`  ${editorCol}  ${statusCol}  ${c.dim}${row.detail}${c.reset}`);
   }
 
   log(`\n${c.bold}Results:${c.reset} ${passed} passed · ${warnings} warnings · ${failed} missing required`);
