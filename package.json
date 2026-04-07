@@ -19,7 +19,10 @@
     "audit:json":   "node security/03-audit.js . --json",
     "scan":         "node bin/guardian.js scan",
     "check":        "node bin/guardian.js check",
-    "test":         "node tests/injection-guard.test.js"
+    "test":         "node tests/injection-guard.test.js && node tests/init.test.js && node tests/hook.test.js",
+    "test:guard":   "node tests/injection-guard.test.js",
+    "test:init":    "node tests/init.test.js",
+    "test:hook":    "node tests/hook.test.js"
   },
   "keywords": [
     "security",

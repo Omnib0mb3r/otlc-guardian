@@ -21,7 +21,10 @@ jobs:
 
       - name: Run Guardian unit tests
         if: hashFiles('tests/injection-guard.test.js') != ''
-        run: node tests/injection-guard.test.js
+        run: |
+          node tests/injection-guard.test.js
+          if [ -f tests/init.test.js ]; then node tests/init.test.js; fi
+          if [ -f tests/hook.test.js ]; then node tests/hook.test.js; fi
 
       - name: Run guardian check
         if: hashFiles('bin/guardian.js') != ''

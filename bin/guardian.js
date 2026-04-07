@@ -23,7 +23,7 @@ import { execSync } from "child_process";
 import { existsSync, mkdirSync, copyFileSync, readdirSync, statSync,
          readFileSync, writeFileSync } from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT      = path.join(__dirname, "..");
@@ -747,35 +747,58 @@ ${c.dim}Run guardian check at any time to verify your setup.${c.reset}
 }
 
 // ---------------------------------------------------------------------------
-// ROUTER
+// EXPORTS — helpers exposed for unit testing.
+// The CLI router below only runs when this file is invoked as a script,
+// so importing the module from a test does not trigger any commands.
 // ---------------------------------------------------------------------------
 
-switch (command) {
-  case "audit":
-    runAudit();
-    break;
+export {
+  mergeMd,
+  mergeClaudeSettings,
+  mergeGitignore,
+  mergeEnvExample,
+  copyIfNew,
+  copyDirSafe,
+  canonicalMatcher,
+  findMatcherBlock,
+  gitignorePathToken,
+};
 
-  case "scan":
-    runScan();
-    break;
+// ---------------------------------------------------------------------------
+// ROUTER — only when invoked as a script (node bin/guardian.js …)
+// Standard ESM "is this the main module?" check.
+// ---------------------------------------------------------------------------
 
-  case "check":
-    runCheck();
-    break;
+const isMainModule = import.meta.url === pathToFileURL(process.argv[1] ?? "").href;
 
-  case "init":
-    runInit();
-    break;
+if (isMainModule) {
+  switch (command) {
+    case "audit":
+      runAudit();
+      break;
 
-  case "help":
-  case "--help":
-  case "-h":
-  case undefined:
-    showHelp();
-    break;
+    case "scan":
+      runScan();
+      break;
 
-  default:
-    err(`Unknown command: "${command}"`);
-    log(`Run ${c.cyan}guardian help${c.reset} to see available commands.`);
-    process.exit(1);
+    case "check":
+      runCheck();
+      break;
+
+    case "init":
+      runInit();
+      break;
+
+    case "help":
+    case "--help":
+    case "-h":
+    case undefined:
+      showHelp();
+      break;
+
+    default:
+      err(`Unknown command: "${command}"`);
+      log(`Run ${c.cyan}guardian help${c.reset} to see available commands.`);
+      process.exit(1);
+  }
 }
