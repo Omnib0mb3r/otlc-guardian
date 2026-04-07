@@ -1,0 +1,32 @@
+# ============================================================
+# OTLC GUARDIAN — Audit Allowlist
+# // security · onthelevelconcepts.com
+# ============================================================
+#
+# Files listed here are exempted from `guardian audit` scanning.
+# Each line is one path relative to the project root, followed by
+# a required reason after a `#` character. Lines without a reason
+# are rejected. Empty lines and pure-comment lines are ignored.
+#
+# This file is the centralized, reviewable alternative to the
+# per-file `otlc-guardian:audit-exempt` marker. The marker is fine
+# for end-user projects where adding a header comment is the
+# easiest path. The Guardian repo itself uses this file because:
+#
+#   1. Every addition is a single visible diff line in PR review.
+#   2. The reason field forces the contributor to justify the
+#      exemption — no silent additions sneaking past review.
+#   3. CI counts the lines and fails if the count grows without
+#      a matching CHANGELOG.md entry (see .github/workflows).
+#   4. CODEOWNERS can require security-team review of any change
+#      to this file.
+#
+# Format:
+#   <relative-path>  # reason: <one-line justification>
+#
+# ============================================================
+
+bin/guardian.js                    # reason: CLI tool — console.* output is its primary purpose, ERR-003 false positive
+security/02-code-security.js       # reason: structured logger module — must call console.* directly to be the logger
+security/03-audit.js               # reason: audit script — its own pattern definitions match themselves (eval, dangerouslySetInnerHTML, console.log)
+tests/injection-guard.test.js      # reason: test fixtures contain deliberate fake secrets (sk-abcdef...) to prove guardOutput catches them

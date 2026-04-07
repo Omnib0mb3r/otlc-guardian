@@ -3,9 +3,10 @@
  * OTLC GUARDIAN — Code Security Standards
  * // security · onthelevelconcepts.com
  * Version: 1.0.0
- * otlc-guardian:audit-exempt
- * (Logger module — must call console.* directly to be the logger.)
  * ============================================================
+ * Note: this file is exempted from `guardian audit` via the
+ * central allowlist at security/.audit-allowlist (logger module —
+ * must call console.* directly to be the logger).
  *
  * Production security utilities for Node.js/Express projects.
  * Covers: secure headers, rate limiting, env validation,

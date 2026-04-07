@@ -31,6 +31,20 @@ jobs:
         run: node security/03-audit.js . --fail-on-error
         continue-on-error: false
 
+      - name: Audit exemption visibility
+        # Print the count of exempted files to the workflow summary so
+        # any unexplained growth in the exemption list is visible at a
+        # glance in the Actions tab. The audit's own output above also
+        # lists every exempted file by name on every run.
+        run: |
+          node security/03-audit.js . --json > /tmp/audit.json
+          EXEMPT=$(node -e "console.log(JSON.parse(require('fs').readFileSync('/tmp/audit.json','utf8')).exempt.total)")
+          echo "## OTLC Guardian audit summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Files exempted from scanning: **$EXEMPT**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "If this number is unexpected, review security/.audit-allowlist and any files containing the otlc-guardian:audit-exempt marker." >> $GITHUB_STEP_SUMMARY
+
       - name: Check for secrets with Gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:

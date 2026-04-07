@@ -2,9 +2,12 @@
 // ============================================================
 // OTLC Guardian — CLI
 // // onthelevelconcepts.com
-// otlc-guardian:audit-exempt
-// (CLI — console output is its purpose; safe to skip ERR-003)
 // ============================================================
+// Note: this file is exempted from `guardian audit` via the
+// central allowlist at security/.audit-allowlist (CLI — console
+// output is its purpose, ERR-003 false positive). The per-file
+// `otlc-guardian:audit-exempt` marker is also supported for
+// end-user projects that prefer that mechanism.
 //
 // Usage:
 //   guardian audit           Scan current project for issues

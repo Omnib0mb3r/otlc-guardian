@@ -3,8 +3,7 @@
  * ============================================================
  * OTLC GUARDIAN — Safety Audit Tool
  * // security · onthelevelconcepts.com
- * Version: 1.0.0
- * otlc-guardian:audit-exempt
+ * Version: 1.1.0
  * ============================================================
  *
  * Scans an existing codebase for security and quality violations.
@@ -16,10 +15,11 @@
  *   node security/03-audit.js --json           # output as JSON
  *   node security/03-audit.js --fail-on-error  # exit code 1 if issues found
  *
- * Note: this file is marked otlc-guardian:audit-exempt because its
- * pattern definitions (e.g. /eval\s*\(/) would otherwise match
- * themselves when the audit is run against the Guardian repo. The
- * exemption is opt-in per file — see scanFile() for the mechanism.
+ * Note: this file is exempted from auditing via the central allowlist
+ * at security/.audit-allowlist because its pattern definitions
+ * (e.g. /eval\s*\(/) would otherwise match themselves when the audit
+ * is run against the Guardian repo. End-user projects can use either
+ * the allowlist or the per-file `otlc-guardian:audit-exempt` marker.
  *
  * ============================================================
  */
@@ -201,24 +201,105 @@ function collectFiles(rootDir, extensions) {
   return results;
 }
 
-// Files containing this marker (in their first 4 KB) are exempt from
-// audit scanning. Used for the CLI and logger files that legitimately
-// use console methods, the test fixtures that contain deliberate fake
-// secrets, and the audit script itself which defines patterns that
-// would otherwise match its own source. The marker is opt-in per file —
-// there is no global escape, and reviewers can grep for it.
+// ---------------------------------------------------------------------------
+// EXEMPTION MECHANISMS
+// ---------------------------------------------------------------------------
+//
+// Two ways to exempt a file from audit scanning, both visible to reviewers:
+//
+//   1. PER-FILE MARKER (otlc-guardian:audit-exempt)
+//      A file containing this string in its first 4 KB is skipped. Easy
+//      for end users — drop the marker into a file header comment and
+//      you're done. Greppable in any code review.
+//
+//   2. CENTRAL ALLOWLIST (security/.audit-allowlist)
+//      A single file listing each exempted path with a required reason.
+//      Used by the Guardian repo itself. Every addition is a one-line
+//      diff in PR review, and the reason field forces the contributor
+//      to justify the exemption. CODEOWNERS can require security-team
+//      approval for any change to the allowlist file.
+//
+// Both mechanisms are tracked separately in the audit summary so you
+// always know how many files were skipped and via which mechanism.
+// Visibility is the strongest defense against the exemption being abused.
+
 const AUDIT_EXEMPT_MARKER = "otlc-guardian:audit-exempt";
 
-function scanFile(filePath, rule) {
+/**
+ * Load the central allowlist from security/.audit-allowlist if present.
+ * Returns a Map of normalized-path -> reason. Lines without a reason are
+ * rejected loudly so silent additions cannot slip past CI.
+ */
+function loadAllowlist(rootDir) {
+  const allowlistPath = path.join(rootDir, "security", ".audit-allowlist");
+  const allowlist = new Map();
+
+  if (!fs.existsSync(allowlistPath)) return allowlist;
+
+  let content;
+  try { content = fs.readFileSync(allowlistPath, "utf8"); }
+  catch { return allowlist; }
+
+  const lines = content.split("\n");
+  lines.forEach((raw, idx) => {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) return;
+
+    // Format:  <path>  # reason: <text>
+    const hashIdx = line.indexOf("#");
+    if (hashIdx === -1) {
+      console.warn(`⚠️  [OTLC GUARDIAN] .audit-allowlist:${idx + 1} — missing reason, line ignored`);
+      return;
+    }
+
+    const filePart   = line.slice(0, hashIdx).trim();
+    const reasonPart = line.slice(hashIdx + 1).trim();
+
+    if (!filePart) return;
+    if (!/^reason:/i.test(reasonPart)) {
+      console.warn(`⚠️  [OTLC GUARDIAN] .audit-allowlist:${idx + 1} — reason must start with "reason:", line ignored`);
+      return;
+    }
+
+    // Normalize path separators so Windows backslashes match Unix forward slashes
+    const normalized = filePart.replace(/\\/g, "/");
+    allowlist.set(normalized, reasonPart.replace(/^reason:\s*/i, ""));
+  });
+
+  return allowlist;
+}
+
+/**
+ * Check whether a file is exempted by either mechanism. Returns the
+ * mechanism name ("marker" | "allowlist") or null. We expose this so
+ * the audit summary can report counts and the list of skipped files.
+ *
+ * Allowlist is checked FIRST so a file that appears in both
+ * security/.audit-allowlist and contains the marker string in its
+ * source (e.g. documentation about how the marker works) is reported
+ * via the more-reviewable mechanism.
+ */
+function exemptionMechanism(filePath, content, allowlist, rootDir) {
+  // Allowlist check first — more reviewable, takes precedence
+  const rel = path.relative(rootDir, filePath).replace(/\\/g, "/");
+  if (allowlist.has(rel)) return "allowlist";
+
+  // Marker fallback — for end-user projects that prefer per-file headers
+  if (content.slice(0, 4096).includes(AUDIT_EXEMPT_MARKER)) return "marker";
+
+  return null;
+}
+
+function scanFile(filePath, rule, exemptionState) {
   if (!rule.pattern) return [];
 
   let content;
   try { content = fs.readFileSync(filePath, "utf8"); }
   catch { return []; }
 
-  // Whole-file exemption — first 4 KB is enough to surface a marker
-  // that should live in a file header comment.
-  if (content.slice(0, 4096).includes(AUDIT_EXEMPT_MARKER)) return [];
+  // Whole-file exemption — handled outside per-rule logic so the same
+  // file isn't checked once per rule. State is precomputed in runAudit.
+  if (exemptionState?.exemptPaths?.has(filePath)) return [];
 
   // Per-rule exclude patterns (e.g. ERR-003 already excludes *.test.*)
   if (rule.excludePatterns?.some((ep) => ep.test(filePath))) return [];
@@ -246,17 +327,57 @@ function scanFile(filePath, rule) {
 
 function runAudit(targetDir, options = {}) {
   const { outputJson = false, failOnError = false } = options;
+  const rootDir = path.resolve(targetDir);
 
   console.info(`\n🔍 [OTLC GUARDIAN] SAFETY AUDIT STARTING`);
-  console.info(`    Target  : ${path.resolve(targetDir)}`);
+  console.info(`    Target  : ${rootDir}`);
   console.info(`    Rules   : ${AUDIT_RULES.filter((r) => r.pattern).length} pattern rules`);
-  console.info("");
+
+  // ── Load exemption state once, up front ──────────────────────────────
+  const allowlist = loadAllowlist(rootDir);
 
   // Collect all relevant files
   const allExtensions = [...new Set(AUDIT_RULES.flatMap((r) => r.fileTypes))];
-  const files         = collectFiles(targetDir, allExtensions);
+  const files         = collectFiles(rootDir, allExtensions);
 
-  console.info(`    Files   : ${files.length} scanned\n`);
+  // Precompute which files are exempt and via which mechanism. We do
+  // this once here instead of inside scanFile so the same file isn't
+  // re-checked once per rule, and so the audit summary can report
+  // exemption counts up front.
+  const exemptPaths     = new Set();
+  const exemptByMarker  = [];
+  const exemptByList    = [];
+
+  for (const file of files) {
+    let head;
+    try { head = fs.readFileSync(file, "utf8"); }
+    catch { continue; }
+    const mech = exemptionMechanism(file, head, allowlist, rootDir);
+    if (mech === "marker") {
+      exemptPaths.add(file);
+      exemptByMarker.push(path.relative(rootDir, file).replace(/\\/g, "/"));
+    } else if (mech === "allowlist") {
+      exemptPaths.add(file);
+      exemptByList.push(path.relative(rootDir, file).replace(/\\/g, "/"));
+    }
+  }
+
+  const exemptionState = { exemptPaths };
+
+  console.info(`    Files   : ${files.length} scanned`);
+  console.info(`    Exempt  : ${exemptPaths.size} (${exemptByMarker.length} marker, ${exemptByList.length} allowlist)`);
+
+  // Visibility: print the exempt list every run, not just on issues.
+  // If this list grows unexpectedly, you see it immediately.
+  if (exemptPaths.size > 0 && !outputJson) {
+    if (exemptByMarker.length > 0) {
+      console.info(`    [marker] ${exemptByMarker.join(", ")}`);
+    }
+    if (exemptByList.length > 0) {
+      console.info(`    [allowlist] ${exemptByList.join(", ")}`);
+    }
+  }
+  console.info("");
 
   const allFindings = [];
 
@@ -269,7 +390,7 @@ function runAudit(targetDir, options = {}) {
     );
 
     for (const file of relevantFiles) {
-      const findings = scanFile(file, rule);
+      const findings = scanFile(file, rule, exemptionState);
       allFindings.push(...findings);
     }
   }
@@ -288,7 +409,15 @@ function runAudit(targetDir, options = {}) {
   // ---------------------------------------------------------------------------
 
   if (outputJson) {
-    console.log(JSON.stringify({ findings: allFindings, total: allFindings.length }, null, 2));
+    console.log(JSON.stringify({
+      findings: allFindings,
+      total:    allFindings.length,
+      exempt:   {
+        total:     exemptPaths.size,
+        marker:    exemptByMarker,
+        allowlist: exemptByList,
+      },
+    }, null, 2));
   } else {
     const bySeverity = {
       CRITICAL: allFindings.filter((f) => f.rule.severity === "CRITICAL"),
