@@ -524,15 +524,7 @@ function runInit() {
     "security"
   );
 
-  // ── 6. python/ ────────────────────────────────────────────────────────────
-  log(`\n${c.bold}── python/${c.reset}`);
-  copyDirSafe(
-    path.join(ROOT, "python"),
-    path.join(CWD, "python"),
-    "python"
-  );
-
-  // ── 7. tests/ ─────────────────────────────────────────────────────────────
+  // ── 6. tests/ ─────────────────────────────────────────────────────────────
   log(`\n${c.bold}── tests/${c.reset}`);
   copyDirSafe(
     path.join(ROOT, "tests"),
@@ -540,7 +532,7 @@ function runInit() {
     "tests"
   );
 
-  // ── 8. .claude/settings.json — smart JSON merge ───────────────────────────
+  // ── 7. .claude/settings.json — smart JSON merge ───────────────────────────
   log(`\n${c.bold}── .claude/settings.json${c.reset}`);
   const claudeSettingsDest = path.join(CWD, ".claude", "settings.json");
   const claudeSettingsSrc  = path.join(ROOT, ".claude", "settings.json");
@@ -553,7 +545,7 @@ function runInit() {
     ok(".claude/settings.json — copied (new file)");
   }
 
-  // ── 9. .claude/hooks/ — copy only, never overwrite ────────────────────────
+  // ── 8. .claude/hooks/ — copy only, never overwrite ────────────────────────
   log(`\n${c.bold}── .claude/hooks/${c.reset}`);
   copyDirSafe(
     path.join(ROOT, ".claude", "hooks"),
@@ -561,7 +553,7 @@ function runInit() {
     ".claude/hooks"
   );
 
-  // ── 10. .github/ — copy only, never overwrite ─────────────────────────────
+  // ── 9. .github/ — copy only, never overwrite ──────────────────────────────
   log(`\n${c.bold}── .github/${c.reset}`);
   copyDirSafe(
     path.join(ROOT, ".github"),
