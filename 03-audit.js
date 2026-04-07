@@ -1,0 +1,325 @@
+#!/usr/bin/env node
+/**
+ * ============================================================
+ * OTLC GUARDIAN — Safety Audit Tool
+ * // security · onthelevelconcepts.com
+ * Version: 1.0.0
+ * ============================================================
+ *
+ * Scans an existing codebase for security and quality violations.
+ * Run against any project before go-live or during code review.
+ *
+ * Usage:
+ *   node security/03-audit.js                  # audit current directory
+ *   node security/03-audit.js ./src            # audit specific path
+ *   node security/03-audit.js --json           # output as JSON
+ *   node security/03-audit.js --fail-on-error  # exit code 1 if issues found
+ *
+ * ============================================================
+ */
+
+import fs   from "fs";
+import path from "path";
+
+// ---------------------------------------------------------------------------
+// AUDIT RULES
+// Each rule: { id, category, severity, description, pattern, fileTypes }
+// ---------------------------------------------------------------------------
+
+const AUDIT_RULES = [
+  // --- SECRETS ---
+  {
+    id: "SEC-001", category: "Secrets", severity: "CRITICAL",
+    description: "Hardcoded OpenAI API key",
+    pattern: /sk-[a-zA-Z0-9]{20,}/,
+    fileTypes: [".js", ".ts", ".py", ".env", ".json", ".yaml", ".yml"],
+  },
+  {
+    id: "SEC-002", category: "Secrets", severity: "CRITICAL",
+    description: "Hardcoded AWS access key",
+    pattern: /AKIA[0-9A-Z]{16}/,
+    fileTypes: [".js", ".ts", ".py", ".env", ".json", ".yaml", ".yml"],
+  },
+  {
+    id: "SEC-003", category: "Secrets", severity: "CRITICAL",
+    description: "Hardcoded GitHub token",
+    pattern: /ghp_[a-zA-Z0-9]{36}/,
+    fileTypes: [".js", ".ts", ".py", ".env", ".json"],
+  },
+  {
+    id: "SEC-004", category: "Secrets", severity: "CRITICAL",
+    description: "Private key embedded in code",
+    pattern: /-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----/,
+    fileTypes: [".js", ".ts", ".py", ".json", ".env"],
+  },
+  {
+    id: "SEC-005", category: "Secrets", severity: "HIGH",
+    description: "Inline password assignment",
+    pattern: /password\s*[:=]\s*["'][^"']{6,}["']/i,
+    fileTypes: [".js", ".ts", ".py", ".json", ".yaml", ".yml"],
+  },
+  {
+    id: "SEC-006", category: "Secrets", severity: "HIGH",
+    description: "Hardcoded API key assignment",
+    pattern: /api[_-]?key\s*[:=]\s*["'][^"']{8,}["']/i,
+    fileTypes: [".js", ".ts", ".py", ".json", ".yaml", ".yml"],
+  },
+
+  // --- HARDCODED CONFIG ---
+  {
+    id: "CFG-001", category: "Configuration", severity: "HIGH",
+    description: "Hardcoded localhost URL",
+    pattern: /["'`]https?:\/\/localhost:\d+/,
+    fileTypes: [".js", ".ts", ".jsx", ".tsx", ".py"],
+  },
+  {
+    id: "CFG-002", category: "Configuration", severity: "HIGH",
+    description: "Hardcoded 127.0.0.1 address",
+    pattern: /["'`]https?:\/\/127\.0\.0\.1/,
+    fileTypes: [".js", ".ts", ".jsx", ".tsx", ".py"],
+  },
+  {
+    id: "CFG-003", category: "Configuration", severity: "MEDIUM",
+    description: "Hardcoded IP address (potential config leak)",
+    pattern: /["'`]\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}["'`]/,
+    fileTypes: [".js", ".ts", ".jsx", ".tsx", ".py"],
+  },
+
+  // --- ERROR HANDLING ---
+  {
+    id: "ERR-001", category: "Error Handling", severity: "HIGH",
+    description: "Silent catch block — swallows errors with no handling",
+    pattern: /catch\s*\([^)]*\)\s*\{\s*\}/,
+    fileTypes: [".js", ".ts", ".jsx", ".tsx"],
+  },
+  {
+    id: "ERR-002", category: "Error Handling", severity: "HIGH",
+    description: "catch block with only console.log — not structured logging",
+    pattern: /catch\s*\([^)]*\)\s*\{\s*console\.log/,
+    fileTypes: [".js", ".ts", ".jsx", ".tsx"],
+  },
+  {
+    id: "ERR-003", category: "Error Handling", severity: "MEDIUM",
+    description: "console.log() in non-test code — use structured logger",
+    pattern: /console\.log\(/,
+    fileTypes: [".js", ".ts", ".jsx", ".tsx"],
+    excludePatterns: [/\.test\./, /\.spec\./, /test\//, /spec\//],
+  },
+
+  // --- API DESIGN ---
+  {
+    id: "API-001", category: "API Design", severity: "MEDIUM",
+    description: "API route without version prefix (/api/v1/...)",
+    pattern: /(?:app|router)\.(?:get|post|put|patch|delete)\s*\(\s*["'`]\/api\/(?!v\d)/,
+    fileTypes: [".js", ".ts"],
+  },
+
+  // --- SECURITY PATTERNS ---
+  {
+    id: "INJ-001", category: "Injection Risk", severity: "CRITICAL",
+    description: "Direct user input passed to eval()",
+    pattern: /eval\s*\(/,
+    fileTypes: [".js", ".ts", ".jsx", ".tsx"],
+  },
+  {
+    id: "INJ-002", category: "Injection Risk", severity: "HIGH",
+    description: "innerHTML assignment — potential XSS",
+    pattern: /\.innerHTML\s*=/,
+    fileTypes: [".js", ".ts", ".jsx", ".tsx"],
+  },
+  {
+    id: "INJ-003", category: "Injection Risk", severity: "HIGH",
+    description: "dangerouslySetInnerHTML — potential XSS (ensure sanitized)",
+    pattern: /dangerouslySetInnerHTML/,
+    fileTypes: [".js", ".ts", ".jsx", ".tsx"],
+  },
+
+  // --- DEPLOYMENT ---
+  {
+    id: "DEP-001", category: "Deployment", severity: "MEDIUM",
+    description: "No health check endpoint found",
+    pattern: null, // checked separately
+    fileTypes: [],
+    checkFn: (files) => !files.some((f) => /health/.test(fs.readFileSync(f, "utf8").toLowerCase())),
+  },
+  {
+    id: "DEP-002", category: "Deployment", severity: "LOW",
+    description: ".env file present — should not be committed",
+    pattern: null,
+    fileTypes: [],
+    checkFn: (files) => files.some((f) => path.basename(f) === ".env"),
+  },
+
+  // --- TYPESCRIPT ---
+  {
+    id: "TS-001", category: "TypeScript", severity: "LOW",
+    description: "Use of 'any' type — reduces type safety",
+    pattern: /:\s*any(?:\s|;|,|\)|\[)/,
+    fileTypes: [".ts", ".tsx"],
+  },
+];
+
+// ---------------------------------------------------------------------------
+// FILE SCANNER
+// ---------------------------------------------------------------------------
+
+const SKIP_DIRS = new Set([
+  "node_modules", ".git", "dist", "build", ".next", "__pycache__",
+  ".venv", "venv", "coverage", ".cache",
+]);
+
+function collectFiles(rootDir, extensions) {
+  const results = [];
+
+  function walk(dir) {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+    catch { return; }
+
+    for (const entry of entries) {
+      if (SKIP_DIRS.has(entry.name)) continue;
+
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+      } else if (entry.isFile()) {
+        const ext = path.extname(entry.name).toLowerCase();
+        if (extensions.length === 0 || extensions.includes(ext)) {
+          results.push(fullPath);
+        }
+      }
+    }
+  }
+
+  walk(rootDir);
+  return results;
+}
+
+function scanFile(filePath, rule) {
+  if (!rule.pattern) return [];
+
+  let content;
+  try { content = fs.readFileSync(filePath, "utf8"); }
+  catch { return []; }
+
+  // Check exclude patterns
+  if (rule.excludePatterns?.some((ep) => ep.test(filePath))) return [];
+
+  const findings = [];
+  const lines    = content.split("\n");
+
+  lines.forEach((line, index) => {
+    if (rule.pattern.test(line)) {
+      findings.push({
+        file:    filePath,
+        line:    index + 1,
+        content: line.trim().slice(0, 120), // truncate long lines
+        rule,
+      });
+    }
+  });
+
+  return findings;
+}
+
+// ---------------------------------------------------------------------------
+// MAIN AUDIT RUNNER
+// ---------------------------------------------------------------------------
+
+function runAudit(targetDir, options = {}) {
+  const { outputJson = false, failOnError = false } = options;
+
+  console.info(`\n🔍 [OTLC GUARDIAN] SAFETY AUDIT STARTING`);
+  console.info(`    Target  : ${path.resolve(targetDir)}`);
+  console.info(`    Rules   : ${AUDIT_RULES.filter((r) => r.pattern).length} pattern rules`);
+  console.info("");
+
+  // Collect all relevant files
+  const allExtensions = [...new Set(AUDIT_RULES.flatMap((r) => r.fileTypes))];
+  const files         = collectFiles(targetDir, allExtensions);
+
+  console.info(`    Files   : ${files.length} scanned\n`);
+
+  const allFindings = [];
+
+  // Pattern-based rules
+  for (const rule of AUDIT_RULES) {
+    if (!rule.pattern) continue;
+
+    const relevantFiles = files.filter((f) =>
+      rule.fileTypes.length === 0 || rule.fileTypes.includes(path.extname(f).toLowerCase())
+    );
+
+    for (const file of relevantFiles) {
+      const findings = scanFile(file, rule);
+      allFindings.push(...findings);
+    }
+  }
+
+  // Function-based rules
+  for (const rule of AUDIT_RULES) {
+    if (!rule.checkFn) continue;
+    const triggered = rule.checkFn(files);
+    if (triggered) {
+      allFindings.push({ file: targetDir, line: null, content: null, rule });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // REPORT OUTPUT
+  // ---------------------------------------------------------------------------
+
+  if (outputJson) {
+    console.log(JSON.stringify({ findings: allFindings, total: allFindings.length }, null, 2));
+  } else {
+    const bySeverity = {
+      CRITICAL: allFindings.filter((f) => f.rule.severity === "CRITICAL"),
+      HIGH:     allFindings.filter((f) => f.rule.severity === "HIGH"),
+      MEDIUM:   allFindings.filter((f) => f.rule.severity === "MEDIUM"),
+      LOW:      allFindings.filter((f) => f.rule.severity === "LOW"),
+    };
+
+    if (allFindings.length === 0) {
+      console.info(`✅ [OTLC GUARDIAN] AUDIT COMPLETE — No issues found.\n`);
+    } else {
+      console.warn(`⚠️  [OTLC GUARDIAN] AUDIT COMPLETE — ${allFindings.length} issue(s) found\n`);
+
+      for (const [severity, findings] of Object.entries(bySeverity)) {
+        if (findings.length === 0) continue;
+        const icon = severity === "CRITICAL" ? "🚨" : severity === "HIGH" ? "⚠️ " : severity === "MEDIUM" ? "🔶" : "🔵";
+        console.warn(`${icon} ${severity} (${findings.length})`);
+        findings.forEach((f) => {
+          const loc = f.line ? `${f.file}:${f.line}` : f.file;
+          console.warn(`   [${f.rule.id}] ${f.rule.description}`);
+          console.warn(`   → ${loc}`);
+          if (f.content) console.warn(`   → ${f.content}\n`);
+        });
+      }
+
+      console.warn(`\n   Summary:`);
+      console.warn(`   CRITICAL : ${bySeverity.CRITICAL.length}`);
+      console.warn(`   HIGH     : ${bySeverity.HIGH.length}`);
+      console.warn(`   MEDIUM   : ${bySeverity.MEDIUM.length}`);
+      console.warn(`   LOW      : ${bySeverity.LOW.length}\n`);
+    }
+  }
+
+  if (failOnError && allFindings.some((f) => ["CRITICAL", "HIGH"].includes(f.rule.severity))) {
+    process.exit(1);
+  }
+
+  return allFindings;
+}
+
+// ---------------------------------------------------------------------------
+// CLI ENTRY POINT
+// ---------------------------------------------------------------------------
+
+const args        = process.argv.slice(2);
+const targetDir   = args.find((a) => !a.startsWith("--")) ?? ".";
+const outputJson  = args.includes("--json");
+const failOnError = args.includes("--fail-on-error");
+
+runAudit(targetDir, { outputJson, failOnError });
+
+export { runAudit, AUDIT_RULES };

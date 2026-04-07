@@ -1,0 +1,50 @@
+{
+  "name": "otlc-guardian",
+  "version": "1.1.0",
+  "description": "Production-grade AI security guardrails. Prompt injection defense, senior developer standards, and Claude Code behavior enforcement.",
+  "type": "module",
+  "main": "security/01-injection-guard.js",
+  "exports": {
+    ".":          "./security/01-injection-guard.js",
+    "./security": "./security/02-code-security.js",
+    "./audit":    "./security/03-audit.js"
+  },
+  "bin": {
+    "guardian":       "./bin/guardian.js",
+    "guardian-audit": "./security/03-audit.js"
+  },
+  "scripts": {
+    "audit":        "node security/03-audit.js .",
+    "audit:fail":   "node security/03-audit.js . --fail-on-error",
+    "audit:json":   "node security/03-audit.js . --json",
+    "scan":         "node bin/guardian.js scan",
+    "check":        "node bin/guardian.js check",
+    "test":         "node tests/injection-guard.test.js"
+  },
+  "keywords": [
+    "security",
+    "prompt-injection",
+    "ai-safety",
+    "claude",
+    "guardrails",
+    "otlc",
+    "llm-security",
+    "ai-guardrails",
+    "developer-tools"
+  ],
+  "author": "onthelevelconcepts.com",
+  "license": "MIT",
+  "homepage": "https://github.com/Omnib0mb3r/otlc-guardian#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Omnib0mb3r/otlc-guardian.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Omnib0mb3r/otlc-guardian/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

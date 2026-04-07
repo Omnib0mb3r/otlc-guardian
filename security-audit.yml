@@ -1,0 +1,42 @@
+name: OTLC Guardian — Security Audit
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+jobs:
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run OTLC Guardian Safety Audit
+        run: node security/03-audit.js . --fail-on-error
+        continue-on-error: false
+
+      - name: Check for secrets with Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Dependency vulnerability scan (Node)
+        if: hashFiles('package.json') != ''
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+      - name: Dependency vulnerability scan (Python)
+        if: hashFiles('requirements.txt') != ''
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt
+        continue-on-error: true
