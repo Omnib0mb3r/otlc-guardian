@@ -714,6 +714,11 @@ function runInit() {
   log(`${c.dim}Guardian source: ${ROOT}${c.reset}\n`);
 
   // ── 1. CLAUDE.md ─────────────────────────────────────────────────────────
+  // CLAUDE.md is the Claude-Code-specific behavior file. It is still shipped
+  // as a first-class artifact because Claude Code reads it natively on every
+  // session; AGENTS.md (below) is the universal equivalent for every other
+  // agent. Both files coexist by design — see the project intent note in
+  // AGENTS.md and the README value-section for the honest split.
   log(`${c.bold}── CLAUDE.md${c.reset}`);
   const claudeDest = path.join(CWD, "CLAUDE.md");
   const claudeSrc  = path.join(ROOT, "CLAUDE.md");
@@ -722,6 +727,21 @@ function runInit() {
   } else {
     copyFileSync(claudeSrc, claudeDest);
     ok("CLAUDE.md — copied (new file)");
+  }
+
+  // ── 1b. AGENTS.md ────────────────────────────────────────────────────────
+  // Universal entry point for Codex CLI, Cursor, Aider, Continue, Windsurf
+  // and any other agent that honors the AGENTS.md convention. Mirrors the
+  // CLAUDE.md merge-pattern exactly: idempotent, user content preserved at
+  // the top, Guardian content appended below the OTLC-GUARDIAN-START marker.
+  log(`\n${c.bold}── AGENTS.md${c.reset}`);
+  const agentsDest = path.join(CWD, "AGENTS.md");
+  const agentsSrc  = path.join(ROOT, "AGENTS.md");
+  if (existsSync(agentsDest)) {
+    mergeMd(agentsDest, agentsSrc, "AGENTS.md");
+  } else {
+    copyFileSync(agentsSrc, agentsDest);
+    ok("AGENTS.md — copied (new file)");
   }
 
   // ── 2. STANDARDS.md ──────────────────────────────────────────────────────
@@ -803,16 +823,22 @@ function runInit() {
   );
 
   // ── DONE ──────────────────────────────────────────────────────────────────
+  // The "next steps" block is written to be editor-neutral. The only
+  // Claude-specific line (step 4) is phrased as "your agent reads…" with
+  // Claude Code called out explicitly as one concrete example rather than
+  // the only option. Users on Codex, Cursor, Aider, Continue, or Windsurf
+  // should feel addressed by this output, not ignored by it.
   log(`
 ${c.green}${c.bold}✅ Guardian initialized successfully.${c.reset}
 
 ${c.bold}What was merged / added:${c.reset}
-  • CLAUDE.md        — Guardian rules appended (your content preserved above)
+  • CLAUDE.md        — Claude-specific rules appended (your content preserved)
+  • AGENTS.md        — Universal agent rules appended (your content preserved)
   • STANDARDS.md     — Guardian stack appended (your content preserved above)
   • .gitignore       — Guardian entries appended (your entries untouched)
   • .env.example     — Guardian variables appended (yours untouched)
   • security/        — Files copied (existing files skipped)
-  • .claude/         — Hook merged into settings.json (your hooks untouched)
+  • .claude/         — Claude Code hooks merged into settings.json (Claude-only)
   • .github/         — Workflow files added (existing files skipped)
 
 ${c.bold}Next steps:${c.reset}
@@ -826,10 +852,13 @@ ${c.bold}Next steps:${c.reset}
 
   3. ${c.cyan}guardian audit${c.reset}  — scan your project for existing issues
 
-  4. Start a Claude Code session — CLAUDE.md and STANDARDS.md
-     activate automatically on the next session
+  4. Start (or restart) your coding agent session. Behavior files are
+     re-read at session start:
+       • Claude Code reads ${c.cyan}CLAUDE.md${c.reset} and ${c.cyan}STANDARDS.md${c.reset}
+       • Codex CLI / Cursor / Aider / Continue / Windsurf read ${c.cyan}AGENTS.md${c.reset}
+         (which points at ${c.cyan}STANDARDS.md${c.reset} + ${c.cyan}CLAUDE.md${c.reset} for the full rules)
 
-${c.dim}Run guardian check at any time to verify your setup.${c.reset}
+${c.dim}Run ${c.reset}${c.cyan}guardian check${c.dim} at any time to verify your setup.${c.reset}
 `);
 }
 
