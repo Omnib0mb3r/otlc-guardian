@@ -1,5 +1,5 @@
 # OTLC Guardian — Setup Guide
-<!-- onthelevelconcepts.com · Version 1.1.0 -->
+<!-- onthelevelconcepts.com · Version 1.1.1 -->
 
 Step-by-step setup from zero to a fully protected, standards-enforced project.  
 Estimated time: **10 minutes** for a new project, **5 minutes** for an existing one.
@@ -548,6 +548,60 @@ Close and reopen your Claude Code session. Claude reads `CLAUDE.md` at session s
 You are likely mixing CommonJS `require()` with ESM files.  
 Add `"type": "module"` to your `package.json` to use ESM imports throughout.
 
+**`guardian scan` crashes with `ERR_UNSUPPORTED_ESM_URL_SCHEME` on Windows**
+
+This was a real bug in 1.1.0 — a raw Windows path (`C:\...`) was passed to
+dynamic `import()`, which requires a `file://` URL on Windows. **Fixed in
+1.1.1.** If you're seeing this, you're on an older build — update with:
+```bash
+cd /path/to/otlc-guardian
+git pull
+npm install -g .
+```
+
+**`guardian audit "something with spaces or ; or &&"` runs extra shell commands**
+
+This was a real shell-injection vulnerability in 1.1.0 — arguments to
+`guardian audit` were spliced into an `execSync` template string. **Fixed
+in 1.1.1** by switching to `spawnSync` with an argv array so the shell
+never parses the arguments at all. Again, if you see this on your machine,
+update your global CLI install to 1.1.1 or newer.
+
 ---
 
-*OTLC Guardian · [onthelevelconcepts.com](https://onthelevelconcepts.com) · Version 1.1.0*
+## Uninstalling
+
+To remove Guardian from a project (keeping your own code intact):
+
+**1. Delete the Guardian-added files:**
+```bash
+rm -f CLAUDE.md AGENTS.md GEMINI.md STANDARDS.md
+rm -rf security/
+rm -rf .claude/hooks/
+```
+
+**2. Revert files Guardian appended to, if you want the pre-Guardian state back:**
+```bash
+git checkout .gitignore .env.example
+```
+
+**3. Clean `.claude/settings.json`** — open the file and remove only the
+entries Guardian added:
+- `PreToolUse` matcher `Write|Edit` running `node .claude/hooks/injection-guard-hook.mjs`
+- `PostToolUse` matcher `WebFetch|WebSearch` running `node .claude/hooks/web-content-guard.mjs`
+
+Leave every other hook alone.
+
+**4. Uninstall the global CLI (optional — only if you want it off the machine entirely):**
+```bash
+npm uninstall -g otlc-guardian
+```
+
+You do **not** need to uninstall the global CLI to stop using Guardian in a
+project. Deleting the project files is enough — the CLI does nothing on its
+own until you run `guardian init` again. Keeping it installed lets you add
+Guardian to other projects without reinstalling.
+
+---
+
+*OTLC Guardian · [onthelevelconcepts.com](https://onthelevelconcepts.com) · Version 1.1.1*

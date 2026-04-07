@@ -139,13 +139,28 @@ function loadSettings(projectRoot) {
 function isWatchedPath(filePath, settings) {
   const normalized = filePath.replace(/\\/g, "/");
 
-  // Custom watchPaths (always checked)
+  // Custom watchPaths (always checked).
+  //
+  // Both `normalized` and `normP` have already had Windows backslashes
+  // converted to forward slashes, so testing `normP.endsWith("\\")`
+  // after normalization can never be true and was dead code in prior
+  // releases. On Windows this meant a user who set
+  //   watchPaths: [".myplanning\\"]
+  // would have their trailing slash stripped to `.myplanning` and fall
+  // into the "file basename" branch below instead of the "directory
+  // prefix" branch — so the custom directory was silently not watched.
+  // Fixed in 1.1.1: strip any trailing separator before classification
+  // and key off whether the user wrote a slash/backslash at all.
   const customDirs = Array.isArray(settings.watchPaths) ? settings.watchPaths : [];
-  for (const p of customDirs) {
-    const normP = p.replace(/\\/g, "/");
-    if (normP.endsWith("/") || normP.endsWith("\\")) {
-      if (normalized.includes(normP)) return true;
+  for (const raw of customDirs) {
+    const trimmed = raw.replace(/[\\/]+$/, "");
+    const isDirStyle = /[\\/]/.test(raw); // user intended a directory if they wrote any separator
+    const normP = trimmed.replace(/\\/g, "/");
+    if (isDirStyle) {
+      // Directory match: watch anything containing this path segment.
+      if (normalized.includes(`${normP}/`) || normalized.endsWith(normP)) return true;
     } else if (normalized.endsWith(normP) || normalized.includes(`/${normP}/`) || normalized.includes(`/${normP}`)) {
+      // File-basename match.
       return true;
     }
   }

@@ -2,7 +2,7 @@
 ============================================================
 OTLC GUARDIAN — Prompt Injection Guard (Python)
 // security · onthelevelconcepts.com
-Version: 1.0.0
+Version: 1.1.1
 ============================================================
 
 Runtime input sanitizer for Python AI-powered applications.
@@ -79,10 +79,24 @@ INJECTION_PATTERNS: list[InjectionPattern] = [
     InjectionPattern("INJ-024", re.compile(r"jailbreak",                                  re.I), "HIGH",     "Jailbreak keyword"),
     InjectionPattern("INJ-025", re.compile(r"without\s+(?:any\s+)?restrictions",          re.I), "HIGH",     "Restriction bypass"),
     InjectionPattern("INJ-026", re.compile(r"bypass\s+(?:your\s+)?(?:safety|filter|guideline)", re.I), "HIGH", "Safety bypass"),
+    # Context poisoning via markup — lazy quantifiers + DOTALL so the
+    # pattern can span lines and does not ReDoS on long inputs without
+    # a closing delimiter. Mirrors the JS module's INJ-027 / INJ-028.
+    InjectionPattern("INJ-027", re.compile(r"<!--.*?(?:ignore|override|system).*?-->",    re.I | re.S), "MEDIUM", "HTML-comment context poisoning"),
+    InjectionPattern("INJ-028", re.compile(r"/\*.*?(?:ignore|override|system).*?\*/",     re.I | re.S), "MEDIUM", "Block-comment context poisoning"),
 ]
 
 # Invisible unicode used in steganographic attacks
 INVISIBLE_UNICODE_PATTERN = re.compile(r"[\u200B-\u200F\u2028-\u202F\uFEFF\u00AD]")
+
+# Hard cap on raw input to `scan()`. `guard_input()` enforces its own
+# `max_length` (default 4000), but `scan()` is imported and used directly
+# by test code and third-party callers. Without a cap, a huge payload
+# through a direct caller can burn CPU inside the normalizer (which
+# appends URL-decoded + base64-decoded copies onto the original). 100 KB
+# is well above any legitimate injection payload and stays in the
+# millisecond range on modern hardware.
+MAX_SCAN_LENGTH = 100_000
 
 # ---------------------------------------------------------------------------
 # SECRET LEAK PATTERNS — Python parity with security/01-injection-guard.js
@@ -95,16 +109,35 @@ class SecretPattern:
     pattern: re.Pattern
     label: str
 
+# SEC-001 / SEC-001b / SEC-010 / SEC-011 rationale:
+# The pre-1.1.1 SEC-001 pattern was `sk-[a-zA-Z0-9]{20,}`, which broke on
+# the two provider formats users are actually leaking today:
+#   - OpenAI project keys  : sk-proj-...     (mid-2024 onward)
+#   - Anthropic Claude keys: sk-ant-api03-...
+# The hyphen after `sk-proj`/`sk-ant` falls outside [a-zA-Z0-9], so the
+# regex halted at 4 chars and reported the input clean. A leaked current
+# key would sail through guard_output() unnoticed.
+#
+# Fix: split into provider-specific rules so the label names the provider
+# (operationally useful when triaging an incident), plus a legacy fallback
+# for historical `sk-...` keys still in circulation. SEC-011 adds coverage
+# for connection strings with embedded credentials — the common protocol
+# schemes (postgres, mysql, mongodb, redis, amqp) whose URLs pin a
+# user:pass@host authority into source. See tests/audit.test.js for the
+# full matrix of examples the rule must and must not fire on.
 SECRET_PATTERNS: list[SecretPattern] = [
-    SecretPattern("SEC-001", re.compile(r"sk-[a-zA-Z0-9]{20,}"),                  "OpenAI API Key"),
-    SecretPattern("SEC-002", re.compile(r"AIza[0-9A-Za-z\-_]{35}"),               "Google API Key"),
-    SecretPattern("SEC-003", re.compile(r"ghp_[a-zA-Z0-9]{36}"),                  "GitHub Token"),
-    SecretPattern("SEC-004", re.compile(r"gho_[a-zA-Z0-9]{36}"),                  "GitHub OAuth Token"),
-    SecretPattern("SEC-005", re.compile(r"AKIA[0-9A-Z]{16}"),                     "AWS Access Key"),
-    SecretPattern("SEC-006", re.compile(r"(?:secret|token|key|password|auth)\s*[:=]\s*[\"']?[A-Za-z0-9+/]{40,}[\"']?", re.I), "Context-Adjacent Base64 Secret"),
-    SecretPattern("SEC-007", re.compile(r"-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----"), "Private Key"),
-    SecretPattern("SEC-008", re.compile(r"password\s*[:=]\s*[\"']?[^\s\"']{8,}",  re.I), "Inline Password"),
-    SecretPattern("SEC-009", re.compile(r"api[_-]?key\s*[:=]\s*[\"']?[^\s\"']{8,}", re.I), "Inline API Key"),
+    SecretPattern("SEC-001",  re.compile(r"sk-proj-[a-zA-Z0-9_-]{20,}"),          "OpenAI Project API Key"),
+    SecretPattern("SEC-010",  re.compile(r"sk-ant-api\d{2}-[a-zA-Z0-9_-]{20,}"),  "Anthropic API Key"),
+    SecretPattern("SEC-001b", re.compile(r"sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}"), "OpenAI API Key (legacy)"),
+    SecretPattern("SEC-002",  re.compile(r"AIza[0-9A-Za-z\-_]{35}"),              "Google API Key"),
+    SecretPattern("SEC-003",  re.compile(r"ghp_[a-zA-Z0-9]{36}"),                 "GitHub Token"),
+    SecretPattern("SEC-004",  re.compile(r"gho_[a-zA-Z0-9]{36}"),                 "GitHub OAuth Token"),
+    SecretPattern("SEC-005",  re.compile(r"AKIA[0-9A-Z]{16}"),                    "AWS Access Key"),
+    SecretPattern("SEC-006",  re.compile(r"(?:secret|token|key|password|auth)\s*[:=]\s*[\"']?[A-Za-z0-9+/]{40,}[\"']?", re.I), "Context-Adjacent Base64 Secret"),
+    SecretPattern("SEC-007",  re.compile(r"-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----"), "Private Key"),
+    SecretPattern("SEC-008",  re.compile(r"password\s*[:=]\s*[\"']?[^\s\"']{8,}",  re.I), "Inline Password"),
+    SecretPattern("SEC-009",  re.compile(r"api[_-]?key\s*[:=]\s*[\"']?[^\s\"']{8,}", re.I), "Inline API Key"),
+    SecretPattern("SEC-011",  re.compile(r"(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqps?)://[^:@/\s\"'`]*:[^@\s\"'`]+@", re.I), "Connection String with Embedded Credentials"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -164,6 +197,10 @@ def scan(text: str, mode: str = "all") -> list[Violation]:
     """
     Scans text for injection patterns and (optionally) secret leaks.
 
+    v1.1.1: caps input at MAX_SCAN_LENGTH before work so direct callers
+    (audit CLI, hooks, third-party) get the same DoS protection that
+    guard_input() provides.
+
     Args:
         text: input text
         mode: 'injection' | 'secrets' | 'all'
@@ -173,6 +210,12 @@ def scan(text: str, mode: str = "all") -> list[Violation]:
     """
     if not isinstance(text, str):
         return []
+
+    if len(text) > MAX_SCAN_LENGTH:
+        logger.warning(
+            f"⚠️  [OTLC GUARDIAN] scan() input truncated: {len(text)} chars > {MAX_SCAN_LENGTH} limit"
+        )
+        text = text[:MAX_SCAN_LENGTH]
 
     normalized = _normalize_for_scan(text)
     violations: list[Violation] = []

@@ -3,7 +3,7 @@
  * ============================================================
  * OTLC GUARDIAN — Safety Audit Tool
  * // security · onthelevelconcepts.com
- * Version: 1.1.0
+ * Version: 1.1.1
  * ============================================================
  *
  * Scans an existing codebase for security and quality violations.
@@ -34,10 +34,36 @@ import path from "path";
 
 const AUDIT_RULES = [
   // --- SECRETS ---
+  //
+  // SEC-001 (and the other sk-* rules): the pre-1.1.1 pattern was
+  // `/sk-[a-zA-Z0-9]{20,}/` which silently missed both current-format
+  // OpenAI project keys (`sk-proj-...`) and Anthropic Claude keys
+  // (`sk-ant-api03-...`) because the hyphen after the provider tag is
+  // outside [a-zA-Z0-9]. The regex stopped matching at 4 chars — far
+  // below the {20,} threshold — and reported files as clean. A leaked
+  // current-format key would pass the audit with no finding.
+  //
+  // Fix: split into provider-labelled rules so the violation report
+  // names the provider the operator just leaked, and keep a legacy
+  // fallback for historical `sk-` tokens still in circulation. Kept in
+  // lockstep with the runtime SECRET_PATTERNS in 01-injection-guard.js
+  // and security/injection_guard.py.
   {
     id: "SEC-001", category: "Secrets", severity: "CRITICAL",
-    description: "Hardcoded OpenAI API key",
-    pattern: /sk-[a-zA-Z0-9]{20,}/,
+    description: "Hardcoded OpenAI Project API key (sk-proj-...)",
+    pattern: /sk-proj-[a-zA-Z0-9_-]{20,}/,
+    fileTypes: [".js", ".ts", ".py", ".env", ".json", ".yaml", ".yml"],
+  },
+  {
+    id: "SEC-010", category: "Secrets", severity: "CRITICAL",
+    description: "Hardcoded Anthropic API key (sk-ant-api...)",
+    pattern: /sk-ant-api\d{2}-[a-zA-Z0-9_-]{20,}/,
+    fileTypes: [".js", ".ts", ".py", ".env", ".json", ".yaml", ".yml"],
+  },
+  {
+    id: "SEC-001b", category: "Secrets", severity: "CRITICAL",
+    description: "Hardcoded OpenAI API key (legacy sk- format)",
+    pattern: /sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}/,
     fileTypes: [".js", ".ts", ".py", ".env", ".json", ".yaml", ".yml"],
   },
   {
@@ -70,6 +96,23 @@ const AUDIT_RULES = [
     pattern: /api[_-]?key\s*[:=]\s*["'][^"']{8,}["']/i,
     fileTypes: [".js", ".ts", ".py", ".json", ".yaml", ".yml"],
   },
+  {
+    // SEC-011: connection strings with embedded credentials.
+    // Previously nothing in the audit flagged something like
+    //   "postgresql://admin:hunter2@db.internal:5432/prod"
+    // even though every part of the Guardian philosophy treats that as
+    // a hardcoded secret. Covers the common protocols developers pin
+    // into source without thinking: postgres, mysql, mongodb
+    // (including mongodb+srv SRV records), redis/rediss, and amqp/amqps.
+    // User part uses `*` so the redis "password only" variant
+    // (`redis://:mypass@host`) also matches. Character classes
+    // exclude `@` and `/` so the regex cannot walk past the credential
+    // boundary into the host portion.
+    id: "SEC-011", category: "Secrets", severity: "HIGH",
+    description: "Connection string with embedded credentials (user:pass@host)",
+    pattern: /(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqps?):\/\/[^:@\/\s"'`]*:[^@\s"'`]+@/i,
+    fileTypes: [".js", ".ts", ".py", ".env", ".json", ".yaml", ".yml"],
+  },
 
   // --- HARDCODED CONFIG ---
   {
@@ -92,11 +135,27 @@ const AUDIT_RULES = [
   },
 
   // --- ERROR HANDLING ---
+  //
+  // ERR-001: a catch block whose body contains only whitespace and/or
+  // comments. The pre-1.1.1 pattern was `catch (...) { }` — literal empty
+  // braces only — which missed the most common lazy-dev variant:
+  //   try { ... } catch (e) { /* silent failure */ }
+  // The comment makes the body non-empty to a character counter but
+  // identically harmful to error handling: exceptions are swallowed,
+  // recovery paths never execute, and the operator sees no log line
+  // when production breaks. The updated pattern accepts any sequence
+  // of whitespace, `//` line comments, and `/* ... */` block comments
+  // inside the braces and treats that as "silent" for audit purposes.
+  //
+  // Multiline is required because a multi-line catch body spans lines;
+  // the scanner passes whole-file content in so the dotall class works
+  // end-to-end.
   {
     id: "ERR-001", category: "Error Handling", severity: "HIGH",
-    description: "Silent catch block — swallows errors with no handling",
-    pattern: /catch\s*\([^)]*\)\s*\{\s*\}/,
+    description: "Silent catch block — swallows errors (empty or comments-only body)",
+    pattern: /catch\s*\([^)]*\)\s*\{\s*(?:\/\/[^\n]*\n\s*|\/\*[\s\S]*?\*\/\s*)*\}/,
     fileTypes: [".js", ".ts", ".jsx", ".tsx"],
+    wholeFile: true,
   },
   {
     id: "ERR-002", category: "Error Handling", severity: "HIGH",
@@ -138,6 +197,66 @@ const AUDIT_RULES = [
     description: "dangerouslySetInnerHTML — potential XSS (ensure sanitized)",
     pattern: /dangerouslySetInnerHTML/,
     fileTypes: [".js", ".ts", ".jsx", ".tsx"],
+  },
+  //
+  // INJ-004 / INJ-005: raw SQL detection. The README has claimed "raw SQL"
+  // detection for a long time, but prior to 1.1.1 no rule implemented it.
+  // A planted test file with `db.raw("SELECT * FROM users WHERE id = " + id)`
+  // received zero findings and sailed past the audit. Fixed here.
+  //
+  // INJ-004 catches the concatenation form: a query keyword followed by
+  // a string concatenation in the same query. Matches both single and
+  // double quotes, both template literals (backticks), and covers the
+  // common DB driver entry points (query, execute, raw, run, all).
+  //
+  // INJ-005 catches interpolation inside a template literal containing
+  // SQL — `db.query(\`SELECT * FROM users WHERE id = ${userId}\`)`.
+  // Template strings with ${} are just as dangerous as + concatenation;
+  // many junior devs think the backticks make them "different" but the
+  // value still lands in the query string unescaped.
+  //
+  // Both rules are wholeFile: true because SQL queries frequently span
+  // multiple lines and the string concat or interpolation may not sit
+  // on the same physical line as the query verb.
+  {
+    id: "INJ-004", category: "Injection Risk", severity: "CRITICAL",
+    description: "Raw SQL built with string concatenation — SQL injection risk",
+    // Verbs deliberately limited to the ones that are unambiguously
+    // "pass this string to the database": `query`, `execute`, `exec`,
+    // `raw`, `prepare`. Looser verbs like `get`/`run`/`all` are common
+    // in HTTP clients (axios.get), array methods, and build tools —
+    // including them would produce too many false positives to be
+    // worth it. If your ORM uses one of those verbs, add a custom rule
+    // in your own fork rather than loosening the default.
+    //
+    // Bounded lazy spans (`{0,300}?`) around the SQL keyword so queries
+    // whose content contains a nested apostrophe like
+    //   db.raw("DELETE FROM sessions WHERE id = '" + sid + "'")
+    // still match. A prior [^`'"]* form tried to skip the inner quote
+    // and either matched at the wrong boundary or not at all. The
+    // quantifier bound prevents catastrophic backtracking on pathological
+    // inputs — 300 chars is long enough for a realistic query and short
+    // enough that worst-case work is millisecond-scale.
+    pattern: /\b(?:query|execute|exec|raw|prepare)\s*\(\s*['"`][\s\S]{0,300}?(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[\s\S]{0,300}?['"`]\s*\+/i,
+    fileTypes: [".js", ".ts", ".py", ".jsx", ".tsx"],
+    wholeFile: true,
+  },
+  {
+    id: "INJ-005", category: "Injection Risk", severity: "CRITICAL",
+    description: "Raw SQL in template literal with ${} interpolation — SQL injection risk",
+    pattern: /\b(?:query|execute|exec|raw|prepare)\s*\(\s*`[^`]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[^`]*\$\{[^`]*`/i,
+    fileTypes: [".js", ".ts", ".jsx", ".tsx"],
+    wholeFile: true,
+  },
+  {
+    id: "INJ-006", category: "Injection Risk", severity: "CRITICAL",
+    description: "Python SQL with f-string or % formatting — SQL injection risk",
+    // Python equivalents: f"SELECT ... {user}" and "SELECT ... %s" % (user,).
+    // cursor.execute is the standard entry point; sqlalchemy's
+    // session.execute(text(...)) with f-strings is also caught here.
+    pattern: /\bexecute\s*\(\s*(?:f["'][^"']*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[^"']*\{[^"']*["']|["'][^"']*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[^"']*%[sd][^"']*["']\s*%)/i,
+    fileTypes: [".py"],
+    wholeFile: true,
   },
 
   // --- DEPLOYMENT ---
@@ -305,7 +424,44 @@ function scanFile(filePath, rule, exemptionState) {
   if (rule.excludePatterns?.some((ep) => ep.test(filePath))) return [];
 
   const findings = [];
-  const lines    = content.split("\n");
+
+  // `wholeFile: true` rules need to see the file as one string. This
+  // is required for any pattern that legitimately spans multiple lines
+  // (e.g. a silent catch block whose comment body wraps, a raw SQL
+  // query built from a template literal that runs across lines). For
+  // those, we match against the full content and compute the line
+  // number from the match offset so the reporter still points at a
+  // specific line.
+  //
+  // Line-by-line scanning is kept as the default because it's faster,
+  // more cache-friendly, and correct for the majority of single-line
+  // patterns (hardcoded secrets, console.log, innerHTML, any-type).
+  if (rule.wholeFile) {
+    let match;
+    // Clone the regex with the global flag so `.exec` advances through
+    // the string. Rules are written without `g` to keep
+    // `.test(line)` semantics clean in the default line-by-line path;
+    // we add it here only for whole-file scanning.
+    const globalRe = new RegExp(rule.pattern.source, rule.pattern.flags.includes("g") ? rule.pattern.flags : rule.pattern.flags + "g");
+    while ((match = globalRe.exec(content)) !== null) {
+      const before = content.slice(0, match.index);
+      const lineNo = before.split("\n").length;
+      // Best-effort one-line snippet for the report: the matched text
+      // collapsed to a single line and truncated to 120 chars.
+      const snippet = match[0].replace(/\s+/g, " ").trim().slice(0, 120);
+      findings.push({
+        file:    filePath,
+        line:    lineNo,
+        content: snippet,
+        rule,
+      });
+      // Prevent zero-width infinite loops on oddly anchored patterns.
+      if (match.index === globalRe.lastIndex) globalRe.lastIndex++;
+    }
+    return findings;
+  }
+
+  const lines = content.split("\n");
 
   lines.forEach((line, index) => {
     if (rule.pattern.test(line)) {

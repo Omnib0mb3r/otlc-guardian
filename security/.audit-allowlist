@@ -30,3 +30,4 @@ bin/guardian.js                    # reason: CLI tool — console.* output is it
 security/02-code-security.js       # reason: structured logger module — must call console.* directly to be the logger
 security/03-audit.js               # reason: audit script — its own pattern definitions match themselves (eval, dangerouslySetInnerHTML, console.log)
 tests/injection-guard.test.js      # reason: test fixtures contain deliberate fake secrets (sk-abcdef...) to prove guardOutput catches them
+tests/audit.test.js                # reason: 1.1.1 regression suite — fixtures deliberately contain sk-proj-/sk-ant-/SQL-concat/ERR-001 to prove the new rules fire

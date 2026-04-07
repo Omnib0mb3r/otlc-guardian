@@ -2,7 +2,7 @@
  * ============================================================
  * OTLC GUARDIAN — Prompt Injection Guard
  * // security · onthelevelconcepts.com
- * Version: 1.0.1
+ * Version: 1.1.1
  * ============================================================
  *
  * Runtime input sanitizer for AI-powered applications.
@@ -59,9 +59,13 @@ export const INJECTION_PATTERNS = [
   { pattern: /without\s+(?:any\s+)?restrictions/i,                   severity: "HIGH",     id: "INJ-025" },
   { pattern: /bypass\s+(?:your\s+)?(?:safety|filter|guideline)/i,   severity: "HIGH",     id: "INJ-026" },
 
-  // Context poisoning via markup
-  { pattern: /<!--.*(?:ignore|override|system).*-->/i,               severity: "MEDIUM",   id: "INJ-027" },
-  { pattern: /\/\*.*(?:ignore|override|system).*\*\//i,              severity: "MEDIUM",   id: "INJ-028" },
+  // Context poisoning via markup.
+  // Lazy quantifiers + explicit newline class — the previous greedy
+  // `.*` form was ReDoS-vulnerable on long inputs without a closing
+  // delimiter. `[\s\S]*?` also lets the pattern span lines so a
+  // multi-line comment doesn't slip past the scan.
+  { pattern: /<!--[\s\S]*?(?:ignore|override|system)[\s\S]*?-->/i,    severity: "MEDIUM",   id: "INJ-027" },
+  { pattern: /\/\*[\s\S]*?(?:ignore|override|system)[\s\S]*?\*\//i,   severity: "MEDIUM",   id: "INJ-028" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -126,8 +130,31 @@ function normalizeForScan(text) {
 // SEC-006 scoped to context-adjacent matches to reduce false positives (v1.0.1)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// SEC-001 / SEC-010 — OpenAI + Anthropic key formats
+// ---------------------------------------------------------------------------
+// The original SEC-001 pattern was /sk-[a-zA-Z0-9]{20,}/ which silently
+// broke on current-generation API keys:
+//   - OpenAI projects keys are `sk-proj-...`  (introduced mid-2024)
+//   - Anthropic / Claude keys are `sk-ant-api03-...`
+// The hyphen after `sk-proj` or `sk-ant` is outside [a-zA-Z0-9], so the
+// regex engine stopped at 4 characters — far below the {20,} threshold —
+// and reported the input as clean. A leaked key of either format would
+// sail through guardOutput() unseen.
+//
+// Fix: allow hyphen and underscore inside the key body and require the
+// full minimum length across the whole token. Split into two rules so
+// the label in the violation report tells the operator which provider
+// they just leaked (operational clarity matters when you're triaging).
+// Test coverage in tests/injection-guard.test.js.
 const SECRET_PATTERNS = [
-  { pattern: /sk-[a-zA-Z0-9]{20,}/,                    label: "OpenAI API Key",     id: "SEC-001" },
+  { pattern: /sk-proj-[a-zA-Z0-9_-]{20,}/,               label: "OpenAI Project API Key",    id: "SEC-001" },
+  { pattern: /sk-ant-api\d{2}-[a-zA-Z0-9_-]{20,}/,       label: "Anthropic API Key",         id: "SEC-010" },
+  // Legacy OpenAI format (`sk-...` without a provider tag) — kept for
+  // historical keys still in circulation. Negative lookahead excludes
+  // the provider-tagged variants so they're reported under their
+  // specific label above rather than this generic one.
+  { pattern: /sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}/, label: "OpenAI API Key (legacy)", id: "SEC-001b" },
   { pattern: /AIza[0-9A-Za-z\-_]{35}/,                 label: "Google API Key",     id: "SEC-002" },
   { pattern: /ghp_[a-zA-Z0-9]{36}/,                    label: "GitHub Token",       id: "SEC-003" },
   { pattern: /gho_[a-zA-Z0-9]{36}/,                    label: "GitHub OAuth Token", id: "SEC-004" },
@@ -137,6 +164,16 @@ const SECRET_PATTERNS = [
   { pattern: /-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----/, label: "Private Key",   id: "SEC-007" },
   { pattern: /password\s*[:=]\s*["']?[^\s"']{8,}/i,    label: "Inline Password",   id: "SEC-008" },
   { pattern: /api[_-]?key\s*[:=]\s*["']?[^\s"']{8,}/i, label: "Inline API Key",    id: "SEC-009" },
+  // SEC-011: connection strings with embedded credentials.
+  // Covers the common protocol schemes (postgres/postgresql, mysql,
+  // mongodb and mongodb+srv SRV records, redis/rediss, amqp/amqps)
+  // when they contain a `user:pass@host` authority. The user part
+  // uses `*` (not `+`) so the "password-only, no user" variant still
+  // matches. Character classes explicitly exclude `@`, `/`, and `:`
+  // so the regex cannot walk past the credential boundary into the
+  // host portion. See tests/injection-guard.test.js for the full set
+  // of examples the rule must and must not match.
+  { pattern: /(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqps?):\/\/[^:@\/\s"'`]*:[^@\s"'`]+@/i, label: "Connection String with Embedded Credentials", id: "SEC-011" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -144,14 +181,45 @@ const SECRET_PATTERNS = [
 // ---------------------------------------------------------------------------
 
 /**
+ * Hard cap on raw input size before `scan()` does any work. Protects
+ * direct callers of `scan()` from:
+ *   - accidental mega-inputs (a user dumping a megabyte log file)
+ *   - deliberate DoS via crafted comment patterns (see INJ-027/028)
+ *   - the normalizer's own amplification (URL + base64 decode concat)
+ *
+ * `guardInput()` already enforces its own `maxLength` (default 4000),
+ * but `scan()` is exported and used directly by the audit CLI, the
+ * hooks, and third-party callers. Without a cap, a bad actor who gets
+ * a huge string into any of those paths can burn CPU without blocking.
+ * 100 KB is well above any legitimate injection payload and still fast
+ * to scan in the millisecond range.
+ *
+ * This does not silently corrupt the text — if truncation happens we
+ * still scan the first 100 KB (where any injection would realistically
+ * sit) and the caller's protection is unchanged. The console note
+ * mirrors `guardInput()`'s existing truncation log so operators see it.
+ */
+const MAX_SCAN_LENGTH = 100_000;
+
+/**
  * Scans text for injection patterns and secret leaks.
  * v1.0.1: normalizes text before scanning to defeat Unicode/encoding bypasses.
+ * v1.1.1: caps input at MAX_SCAN_LENGTH before scan for DoS protection.
  * @param {string} text
  * @param {'injection'|'secrets'|'all'} mode
  * @returns {{ violations: Array, hasSecrets: boolean, hasCritical: boolean }}
  */
 export function scan(text, mode = "all") {
   if (typeof text !== "string") return { violations: [], hasSecrets: false, hasCritical: false };
+
+  // Hard cap BEFORE normalization — the normalizer concatenates
+  // URL-decoded and base64-decoded copies onto the original, so a
+  // large input could double or triple in size inside normalizeForScan.
+  // Capping upstream makes the downstream work bounded.
+  if (text.length > MAX_SCAN_LENGTH) {
+    console.warn(`⚠️  [OTLC GUARDIAN] scan() input truncated: ${text.length} chars > ${MAX_SCAN_LENGTH} limit`);
+    text = text.slice(0, MAX_SCAN_LENGTH);
+  }
 
   // Normalize before scanning — defeats fullwidth, homoglyph, encoded payloads
   const normalized = normalizeForScan(text);
