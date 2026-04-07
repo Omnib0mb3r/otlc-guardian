@@ -188,8 +188,13 @@ function runCheck() {
       required: false,
     },
     {
-      label: ".claude/hooks/injection-guard-hook.js",
-      path: path.join(CWD, ".claude", "hooks", "injection-guard-hook.js"),
+      label: ".claude/hooks/injection-guard-hook.mjs",
+      path: path.join(CWD, ".claude", "hooks", "injection-guard-hook.mjs"),
+      required: false,
+    },
+    {
+      label: ".claude/hooks/web-content-guard.mjs",
+      path: path.join(CWD, ".claude", "hooks", "web-content-guard.mjs"),
       required: false,
     },
     {

@@ -6,10 +6,26 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node .claude/hooks/injection-guard-hook.js"
+            "command": "node .claude/hooks/injection-guard-hook.mjs"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "WebFetch|WebSearch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/web-content-guard.mjs"
           }
         ]
       }
     ]
+  },
+  "otlcGuardian": {
+    "extendDefaults": true,
+    "watchPaths": [],
+    "ignorePaths": []
   }
 }
