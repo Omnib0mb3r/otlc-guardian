@@ -571,36 +571,180 @@ update your global CLI install to 1.1.1 or newer.
 
 ## Uninstalling
 
-To remove Guardian from a project (keeping your own code intact):
+> **Read this entire section before running any commands.** Guardian's `init`
+> is merge-safe: it appends Guardian content into existing files (CLAUDE.md,
+> STANDARDS.md, .gitignore, .env.example, .claude/settings.json) **below** an
+> `<!-- OTLC-GUARDIAN-START -->` marker, preserving every line you wrote
+> above it. Uninstalling cleanly therefore requires the inverse — surgically
+> remove only the content **between the markers**, never blanket-delete a
+> merged file. **A blanket `rm -f CLAUDE.md` would destroy any project-specific
+> rules you wrote before running `guardian init`.** This section walks you
+> through the safe manual process.
 
-**1. Delete the Guardian-added files:**
-```bash
-rm -f CLAUDE.md AGENTS.md GEMINI.md STANDARDS.md
-rm -rf security/
-rm -rf .claude/hooks/
+A `guardian uninstall` command is on the roadmap to do all of the steps below
+automatically. Until it ships, follow the manual instructions here.
+
+### Step 1 — Un-merge the files Guardian appended into (manual)
+
+These files contain **your content above** Guardian's markers. Open each one
+in your editor and delete only the marker-delimited block. **Do not delete
+the file itself.**
+
+The marker syntax to look for in Markdown files (`CLAUDE.md`, `STANDARDS.md`):
+
+```markdown
+<your original content stays above this line, untouched>
+
+<!-- OTLC-GUARDIAN-START -->
+---
+
+<!-- The section below was added by OTLC Guardian (guardian init)     -->
+<!-- ... -->
+
+<everything between the markers — delete this whole block and the markers themselves>
+
+<!-- OTLC-GUARDIAN-END -->
 ```
 
-**2. Revert files Guardian appended to, if you want the pre-Guardian state back:**
-```bash
-git checkout .gitignore .env.example
+The marker syntax for `.gitignore` and `.env.example`:
+
+```
+<your original content stays above, untouched>
+
+# OTLC-GUARDIAN-START
+# Added by OTLC Guardian (guardian init) — safe to keep
+<entries between the markers — delete this whole block and the markers themselves>
+# OTLC-GUARDIAN-END
 ```
 
-**3. Clean `.claude/settings.json`** — open the file and remove only the
-entries Guardian added:
-- `PreToolUse` matcher `Write|Edit` running `node .claude/hooks/injection-guard-hook.mjs`
-- `PostToolUse` matcher `WebFetch|WebSearch` running `node .claude/hooks/web-content-guard.mjs`
+Files to un-merge this way:
 
-Leave every other hook alone.
+- `CLAUDE.md` — remove the `<!-- OTLC-GUARDIAN-START -->` ... `<!-- OTLC-GUARDIAN-END -->` block
+- `STANDARDS.md` — same marker pair
+- `.gitignore` — remove the `# OTLC-GUARDIAN-START` ... `# OTLC-GUARDIAN-END` block
+- `.env.example` — same marker pair
 
-**4. Uninstall the global CLI (optional — only if you want it off the machine entirely):**
+If a file you ran `guardian init` against does **not** contain Guardian's
+markers, that means Guardian created the file from scratch (you didn't have
+your own version). In that case, the entire file is Guardian content and is
+safe to delete:
+
+```bash
+# Only delete the file if you had no pre-existing version when you ran guardian init.
+# If you're not sure, open it in your editor first and look for the marker.
+```
+
+### Step 2 — Clean `.claude/settings.json` (manual)
+
+Open `.claude/settings.json` in your editor and remove only the two hook
+entries Guardian added. Leave every other hook alone.
+
+Remove from `hooks.PreToolUse`:
+
+```json
+{
+  "matcher": "Write|Edit",
+  "hooks": [
+    { "type": "command", "command": "node .claude/hooks/injection-guard-hook.mjs" }
+  ]
+}
+```
+
+Remove from `hooks.PostToolUse`:
+
+```json
+{
+  "matcher": "WebFetch|WebSearch",
+  "hooks": [
+    { "type": "command", "command": "node .claude/hooks/web-content-guard.mjs" }
+  ]
+}
+```
+
+If your existing matcher block (`Write|Edit` / `Edit|Write`) had other hooks
+in it, **leave those other hooks in place** and remove only Guardian's
+command entry from the `hooks` array. If the matcher block becomes empty after
+removing Guardian's entry, you can drop the empty block.
+
+### Step 3 — Delete the pure-Guardian files (safe)
+
+These files are copied whole by `guardian init` and are never merged into.
+They contain only Guardian content and are always safe to delete:
+
+```bash
+rm -f security/01-injection-guard.js
+rm -f security/02-code-security.js
+rm -f security/03-audit.js
+rm -f security/injection_guard.py
+rm -f .claude/hooks/injection-guard-hook.mjs
+rm -f .claude/hooks/web-content-guard.mjs
+```
+
+**Do NOT use `rm -rf security/` or `rm -rf .claude/hooks/`** — those commands
+would also delete any custom files you added to those directories. Delete
+files individually, by name, as shown above.
+
+After deleting Guardian's files from `security/`, if the directory is now
+empty and you have no other use for it, you can remove it:
+
+```bash
+# Only if security/ is now empty
+rmdir security/
+```
+
+Same for `.claude/hooks/`:
+
+```bash
+# Only if .claude/hooks/ is now empty
+rmdir .claude/hooks/
+```
+
+### Step 4 — Optional: remove the GitHub workflow
+
+If `.github/workflows/security-audit.yml` was added by Guardian and you don't
+use it for anything else:
+
+```bash
+rm -f .github/workflows/security-audit.yml
+```
+
+If you customized the workflow after Guardian copied it, leave it in place
+or merge your customizations into a new workflow file under a different name.
+
+### Step 5 — Files Guardian never creates (do NOT touch)
+
+Guardian does **not** create any of these files. If they exist in your
+project, they belong to other tools (or to you) and must be left alone:
+
+- `AGENTS.md` — used by OpenAI Codex, Cursor, and other agents
+- `GEMINI.md` — used by Google Gemini
+- `.cursorrules` — used by Cursor
+- `.windsurfrules` — used by Windsurf
+- `.aider.conf.yml` — used by Aider
+- `copilot-instructions.md` — used by GitHub Copilot
+
+Guardian's hooks **scan** these files for prompt-injection attempts during
+Claude Code sessions, but Guardian never **writes** to them. Removing
+Guardian must never delete them.
+
+> **Note:** A future Guardian release will populate `AGENTS.md` (the
+> universal cross-agent entry point) using the same merge-marker pattern as
+> `CLAUDE.md`. After that release ships, `AGENTS.md` will join the list of
+> files in Step 1 — un-merge by removing only the marker block, never
+> blanket-delete.
+
+### Step 6 — Optional: uninstall the global CLI
+
+You do **not** need to uninstall the global CLI to stop using Guardian in a
+project. Deleting the project files (steps 1-3) is enough — the CLI does
+nothing on its own until you run `guardian init` again. Keeping it installed
+lets you add Guardian to other projects without reinstalling.
+
+If you do want to remove the CLI from your machine entirely:
+
 ```bash
 npm uninstall -g otlc-guardian
 ```
-
-You do **not** need to uninstall the global CLI to stop using Guardian in a
-project. Deleting the project files is enough — the CLI does nothing on its
-own until you run `guardian init` again. Keeping it installed lets you add
-Guardian to other projects without reinstalling.
 
 ---
 
