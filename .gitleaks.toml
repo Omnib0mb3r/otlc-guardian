@@ -1,0 +1,65 @@
+# ============================================================
+# OTLC GUARDIAN — Gitleaks configuration
+# // security · onthelevelconcepts.com
+# ============================================================
+#
+# Extends the gitleaks default ruleset and adds an allowlist for
+# this repository's test fixtures. The test files deliberately
+# contain realistic-looking fake API keys and connection strings
+# because that is the only way to prove the Guardian scanner
+# actually catches them — a fake key that's obviously fake (e.g.
+# sk-fake-fake-fake) does not exercise the regex boundary
+# conditions the tests need to lock in.
+#
+# This file is the gitleaks equivalent of `security/.audit-allowlist`
+# for Guardian's own audit. Every entry is a reviewable diff and
+# the reasoning lives next to the path. The allowlist is narrow —
+# it lists specific test files, not entire directories — so a real
+# secret accidentally committed to any other path will still be
+# caught on the next PR.
+#
+# Format reference: https://github.com/gitleaks/gitleaks#configuration
+# ============================================================
+
+title = "OTLC Guardian gitleaks config"
+
+# Inherit every rule from gitleaks' built-in default config.
+# We only want to ADD an allowlist, not replace any rules.
+[extend]
+useDefault = true
+
+# ------------------------------------------------------------
+# ALLOWLIST — test fixtures that deliberately contain fake
+# secret-shaped strings to exercise the Guardian scanner.
+# ------------------------------------------------------------
+#
+# `paths` is a list of regex patterns. A finding whose file path
+# matches any of these patterns is suppressed. We list each test
+# file explicitly rather than a broad `tests/.*` pattern so that
+# a new test file added later must be consciously added here too
+# — no "silent drift into an all-tests exemption" behavior.
+
+[allowlist]
+description = "Test fixtures deliberately contain fake secret-shaped strings"
+paths = [
+  # tests/injection-guard.test.js — fixtures for SEC-001 (sk-proj-),
+  # SEC-010 (sk-ant-api03-), SEC-001b (legacy sk-), SEC-011 (connection
+  # strings with embedded credentials), and the guardOutput secret-leak
+  # assertion. The fake keys are high-entropy on purpose so they
+  # actually exercise the scanner's pattern-matching logic.
+  '''tests/injection-guard\.test\.js''',
+
+  # tests/audit.test.js — the 1.1.1 subprocess-based audit rule tests.
+  # Contains the same class of fake fixtures as injection-guard.test.js
+  # (sk-proj-, sk-ant-api03-, postgres://admin:password@host, raw SQL
+  # with concat) to prove the new audit rules fire on them.
+  '''tests/audit\.test\.js''',
+
+  # tests/init.test.js and tests/hook.test.js — exercised as subprocesses
+  # and contain inline hostile payloads ("ignore all previous
+  # instructions") as test input. Not secrets, but included here in
+  # case gitleaks' generic-api-key heuristic ever mis-fires on them.
+  '''tests/init\.test\.js''',
+  '''tests/hook\.test\.js''',
+  '''tests/agents-md\.test\.js''',
+]

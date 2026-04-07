@@ -1,6 +1,6 @@
 # OTLC Guardian — Technology Standards
 # // stack standards · onthelevelconcepts.com
-# Version: 1.2.0
+# Version: 1.1.1
 #
 # READ THIS FILE ALONGSIDE CLAUDE.md
 #
@@ -773,12 +773,13 @@ chore(deps): update Prisma to 5.8.0
 ```json
 {
   "status": "ok",
-  "timestamp": "2025-01-01T00:00:00Z",
+  "timestamp": "2026-01-01T00:00:00Z",
   "uptime": 3600,
-  "version": "1.2.0",
+  "version": "1.0.0",
   "dependencies": { "database": "ok", "redis": "ok" }
 }
 ```
+(Example payload — the `version` field is your application's version, not Guardian's.)
 
 ### Minimum Metrics (Every Production Service)
 - Request rate per endpoint

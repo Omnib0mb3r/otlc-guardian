@@ -4,44 +4,148 @@ All notable changes to OTLC Guardian. The format follows [Keep a Changelog](http
 
 ---
 
-## [Unreleased]
+## [1.1.1] — 2026-04-06
 
-### Added
-- **Centralized audit allowlist** at `security/.audit-allowlist` with required reason field. Per-file `otlc-guardian:audit-exempt` marker still supported as an end-user opt-in. Allowlist is checked first so it takes precedence.
-- **Audit exemption visibility** — every `guardian audit` run prints the count and full list of exempted files. CI now writes the exemption count to the GitHub Actions step summary.
-- **52 new automated tests** across `tests/init.test.js` (26 — covers all merge functions, idempotency, JSON safety, matcher set comparison, inline-comment dedupe) and `tests/hook.test.js` (26 — both Claude Code hooks tested as subprocesses with full watch list and web content guard coverage). Total: 90/90 passing.
-- **`guardian list-watched`** — debug command that prints the effective hook watch list for the current project, including custom paths and ignores from `.claude/settings.json`.
-- **`guardian update`** — alias for `guardian init`. Both are merge-safe and idempotent; `update` is the natural verb after pulling a new Guardian release.
-- **`web-content-guard.mjs`** — PostToolUse hook on `WebFetch`/`WebSearch` that scans fetched content before Claude reasons about it. Catches indirect prompt injection at the entry point.
-- **Configurable hook watch list** via `otlcGuardian.watchPaths` / `ignorePaths` / `extendDefaults` block in `.claude/settings.json`.
-- **Doc-exempt marker** (`otlc-guardian:doc`) for security spec files that legitimately discuss injection patterns.
-- **Python parity**: `SECRET_PATTERNS` (9 entries), v1.0.1 normalizer (NFKC + invisible-strip + URL/base64 decode), and `guard_output()` added to `security/injection_guard.py`.
-- **`GuardianConfigError`** — new error class thrown by `validateEnv()` when required env vars are missing.
-- **CONTRIBUTING.md, SECURITY.md, CHANGELOG.md, CODEOWNERS, .github/ISSUE_TEMPLATE, PULL_REQUEST_TEMPLATE.md, .editorconfig, .gitattributes**.
-
-### Changed
-- **Restructured** all source files from a flat root layout into the `bin/`, `security/`, `tests/`, `.claude/hooks/`, `.github/workflows/` directories that the code, docs, and `package.json` were already referencing. Without this, `npm install -g .` and every `guardian` subcommand failed to resolve their source files.
-- **Default hook watch list dramatically broader** — now covers `.planning/`, `.gsd/`, `.plans/`, `.claude/`, `.cursor/`, `.continue/`, `.aider/`, `.windsurf/`, every `*/memory/` directory, plus `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursorrules`, `.windsurfrules`, `.aider.conf.yml`, `copilot-instructions.md`, `MEMORY.md`, and `.env*`. Previously only watched `.planning/`, `.claude/`, `CLAUDE.md`, and `.env`.
-- **Hook patterns sourced from main module** — `.claude/hooks/injection-guard-hook.mjs` (renamed from `.js`) now imports `INJECTION_PATTERNS` directly from `security/01-injection-guard.js` instead of inlining a stale 17-pattern subset. Drift is now impossible.
-- **`mergeClaudeSettings` no longer overwrites invalid JSON** — aborts with a clear error and points the user to the reference copy. Previously a stray trailing comma during a mid-edit save would silently replace the user's file with Guardian defaults.
-- **`mergeClaudeSettings` matcher comparison is set-based** — `Edit|Write` and `Write|Edit` are recognized as the same block. Guardian no longer creates a parallel `Write|Edit` block alongside a user's existing `Edit|Write`.
-- **`mergeClaudeSettings` handles multiple events** — registers PreToolUse and PostToolUse hooks in one pass.
-- **`mergeGitignore` strips inline comments** before deduping — a user line like `.env # local secrets` correctly suppresses Guardian's own `.env` entry instead of producing a duplicate.
-- **`validateEnv` throws instead of `process.exit(1)`** — library code never terminates the process. Callers catch `GuardianConfigError` and decide how to fail.
-- **Rate limiter Redis swap point documented** in `security/02-code-security.js`.
-- **`guardian check` now smoke-tests the hook** — pipes a known-bad payload through and asserts it fires. Also detects Python projects and conditionally requires `security/injection_guard.py`.
-
-### Fixed
-- **Audit `--json` mode contaminated stdout** — `runAudit()` called `console.info` for the status header (`SAFETY AUDIT STARTING`, target, file count, exempt list) before writing the JSON. `console.info` writes to stdout, so the captured file in CI was `[status text] + [JSON object]` and `JSON.parse` choked on the leading emoji. Fixed by routing status to stderr in JSON mode (standard Unix convention — diagnostic stream vs result stream). The CI `Audit exemption visibility` step now produces clean parseable JSON.
-- **`make_fastapi_guard` in `injection_guard.py`** had a bug where the inner dependency function's `request` parameter had no type hint, so FastAPI's dependency injection could not provide it. Adding the Request type hint resolves the issue.
-- **Audit script self-detection false positives** — the audit's own pattern definitions matched themselves (`/eval\s*\(/`, `dangerouslySetInnerHTML`, `console.log` in CLI/logger). Resolved via the new exemption mechanisms.
-- **CI workflow had no test step** — only the audit ran. Now runs `injection-guard.test.js`, `init.test.js`, `hook.test.js`, and `guardian check` before the audit.
-
-### Removed
-- **`devneural.jsonc`** from the public repo (project-owner metadata for an unrelated tool). Kept locally via `.git/info/exclude`.
+Pre-ship security and correctness pass. Every item below was surfaced by an
+adversarial review of the 1.1.0 code and docs on 2026-04-06, verified with live
+proofs-of-concept in an isolated sandbox, and fixed with tests that lock in the
+regression so it cannot slip back.
 
 ### Security
-- The audit-exempt mechanism is now reviewable by design. See `security/.audit-allowlist` (required reason field, one-line diffs in PR review) and the new audit summary (counts and full list printed every run). The per-file marker remains as an end-user convenience.
+
+- **Shell-injection fix in `guardian audit`** — `bin/guardian.js:128` (pre-1.1.1)
+  spliced `args.slice(1).join(" ")` into an `execSync` template literal. Any
+  argument containing `;`, `&&`, `|`, backticks, or `$()` was executed by the
+  shell. Live PoC: `guardian audit ". && echo INJECTED > pwned.txt"` created
+  the file. **Replaced** with `spawnSync("node", [auditScript, ...args.slice(1)], { shell: false })`
+  so the shell never parses arguments at all. The same fix was applied to
+  `smokeTestHook()`, which used the same anti-pattern.
+- **Outdated OpenAI / Anthropic key regex across all three modules** — the
+  pre-1.1.1 SEC-001 pattern was `/sk-[a-zA-Z0-9]{20,}/`, which silently missed
+  both current-format OpenAI project keys (`sk-proj-...`) and Anthropic Claude
+  keys (`sk-ant-api03-...`) because the hyphen after the provider tag is
+  outside `[a-zA-Z0-9]`. A leaked current-generation key would sail through
+  `guardOutput()` with zero findings and through `guardian audit` with zero
+  findings. **Replaced** with provider-specific rules (`SEC-001` for
+  `sk-proj-`, `SEC-010` for `sk-ant-api`, `SEC-001b` as a negative-lookahead
+  legacy fallback). Mirrored across `security/01-injection-guard.js`,
+  `security/03-audit.js`, and `security/injection_guard.py`. Regression tests
+  live in `tests/injection-guard.test.js` and `tests/audit.test.js`.
+- **Missing raw SQL detection rule** — README claimed "raw SQL" detection in
+  two places but `security/03-audit.js` had no SQL rule at all. **Added**
+  `INJ-004` (string-concat SQL), `INJ-005` (template-literal SQL with `${}`
+  interpolation), and `INJ-006` (Python f-string and `%` formatting SQL).
+  Scanner extended with a `wholeFile: true` flag because multi-line SQL
+  queries don't fit the line-by-line scanner. Tests in `tests/audit.test.js`.
+- **`ERR-001` silent-catch false negatives** — the pre-1.1.1 regex required
+  literal empty braces, so `catch (e) { /* silent */ }` and multi-line
+  comment-only catch bodies passed the audit clean. **Rewritten** to accept
+  any sequence of whitespace, `//` line comments, and `/* ... */` block
+  comments inside the catch body, running in `wholeFile` mode so multi-line
+  cases match.
+- **`SEC-011` — new rule for connection strings with embedded credentials**
+  — `postgres://user:pass@host`, `mongodb+srv://...`, `redis://:pw@...`,
+  `amqp://...`. The pre-1.1.1 audit ignored these even though they are
+  hardcoded secrets in every meaningful sense. Mirrored across all three
+  modules. User part is `*` so the redis "password-only, no user" variant
+  matches.
+- **ReDoS hardening on `INJ-027` / `INJ-028`** — the pre-1.1.1 patterns
+  (`<!--.*(?:ignore|override|system).*-->` and the block-comment equivalent)
+  used greedy `.*` before and after the alternation — the classic
+  catastrophic-backtracking shape. Long inputs without a closing delimiter
+  could burn seconds of CPU. **Rewritten** with `[\s\S]*?` (lazy, line-
+  spanning) so the engine fails fast. Regression test asserts a 20 KB
+  pathological payload completes in under 1 second.
+- **`scan()` input length cap** — `guardInput()` has always enforced its own
+  `maxLength` (default 4000), but `scan()` is exported and used directly by
+  the audit CLI, the hooks, and third-party callers. Without a cap, a huge
+  string passed to any direct caller could burn CPU inside the normalizer
+  (which appends URL-decoded and base64-decoded copies onto the original).
+  **Added** `MAX_SCAN_LENGTH = 100_000` to both the JS and Python `scan()`
+  functions with a visible truncation warning. Tests cover the
+  mega-input-doesn't-hang and injection-still-detected-in-first-100KB cases.
+
+### Fixed
+
+- **`guardian scan` crashed on Windows with `ERR_UNSUPPORTED_ESM_URL_SCHEME`**
+  — `bin/guardian.js:148` passed a raw Windows path (`C:\...`) to dynamic
+  `import()`, which requires a `file://` URL on Windows. Ironically
+  `pathToFileURL` was already imported at the top of the file but never used
+  here. **Fixed** by wrapping the path with `pathToFileURL(...).href`. This
+  was a 100% reproducible crash on every `guardian scan` invocation on
+  Windows — the single most customer-visible bug of the 1.1.0 release.
+- **`guardian init` shipped Guardian's internal files into user projects** —
+  prior releases copied `security/__pycache__/injection_guard.cpython-*.pyc`
+  (Python bytecode cache, version-mismatched against any interpreter other
+  than the one used to build the cache) and the entire Guardian-internal
+  `tests/` directory (four test files that exercise Guardian internals and
+  are useless to end users). **Fixed** by (a) adding a `COPY_IGNORE` set in
+  `copyDirSafe()` for `__pycache__`, `.pytest_cache`, `.mypy_cache`,
+  `.ruff_cache`, `.DS_Store`, `Thumbs.db`, and `node_modules`, and (b)
+  removing the `runInit()` call that copied `tests/` at all.
+- **`STANDARDS.md` advertised the wrong version** — the file header claimed
+  `Version: 1.2.0` while every other file in the repo agreed on `1.1.0`. The
+  JSON health-check example at line 778 also used `1.2.0`. **Fixed** by
+  updating the header to `1.1.1` and replacing the JSON example version with
+  a generic `1.0.0` placeholder plus a note clarifying the field is the
+  reader's application version, not Guardian's.
+- **Windows path normalization bug in PreToolUse hook** — the hook normalized
+  `\` to `/` at the top of `isWatchedPath()` and then checked
+  `normP.endsWith("\\")` a few lines later — dead code that could never be
+  true after normalization. On Windows, a user who set
+  `watchPaths: [".myplanning\\"]` in `.claude/settings.json` would have the
+  trailing slash silently stripped and fall into the file-basename branch
+  instead of the directory-prefix branch. **Fixed** by detecting the user's
+  intent from the raw (pre-normalization) string and always stripping
+  trailing separators consistently.
+- **`GEMINI.md` was watched but never provisioned** — the hook watch list
+  (and the old `list-watched` command) included `GEMINI.md`, but
+  `guardian init` never created one. The template defended an ecosystem it
+  did not seed. **Fixed** by adding `GEMINI.md` to the repo root, wiring it
+  into `runInit()` as a `mergeMd` call (same idempotent marker-sealed merge
+  pattern as `CLAUDE.md` and `AGENTS.md`), and reporting it in the
+  `editorCoverage` table and `guardian check` output.
+- **README underplayed `STANDARDS.md`** — the approved technology stack file
+  is 80% of Guardian's day-to-day value but was mentioned only in passing.
+  **Rewrote** README to give `STANDARDS.md` a dedicated section with a
+  one-screen preview of the stack table (Node/TS + Python, frontend + auth
+  + testing + observability), and expanded the "What Guardian Actually Is"
+  section to cover every file in the package — the four behavior files and
+  the four runtime-security files — not just the audit CLI.
+
+### Added
+
+- **`tests/audit.test.js`** — 16 new subprocess-based tests for the audit
+  rule set. Verifies every new rule fires on the fixtures it should fire on,
+  does not fire on legitimate code, and that the end-to-end regression
+  fixture from the 1.1.1 pre-ship review (hardcoded key + connection string
+  + SQL concat + silent catch + console.log) now produces five findings
+  instead of the one it produced before the fixes.
+- **Scanner `wholeFile: true` flag** — extends `scanFile()` in
+  `03-audit.js` to run a rule against the entire file content as one string
+  rather than line-by-line. Required for any pattern that legitimately spans
+  multiple lines (the new silent-catch rule, the new SQL rules). Match line
+  numbers are computed from the match offset so reports still point at a
+  specific line.
+- **Uninstall documentation** in `SETUP.md` and `README.md` — previously
+  nothing in the docs told users how to remove Guardian from a project.
+- **Privacy statement** in `README.md` — explicit confirmation that Guardian
+  does not collect data, does not phone home, and has zero runtime
+  dependencies. Users can verify by grepping the source tree.
+- **Defense-in-depth disclaimer** at the top of `README.md` — honest framing
+  of what Guardian is (a strong baseline) and what it is not (a comprehensive
+  security solution). Points at `SECURITY.md` for the full threat model.
+
+### Changed
+
+- **Version bump** from `1.1.0` to `1.1.1` across `package.json`, `README.md`
+  badge, `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `STANDARDS.md`, `FAQ.md`,
+  `SETUP.md`, `security/01-injection-guard.js`, `security/03-audit.js`, and
+  `security/injection_guard.py`. This is a security patch release.
+- **`editorCoverage()` reports Gemini CLI** — the table now has a row for
+  Gemini CLI keyed off the presence of `GEMINI.md`, mirroring the
+  `AGENTS.md`-keyed rows for the other non-Claude agents.
+- **`copyDirSafe()` skip list** — see "Fixed" above for the `COPY_IGNORE` set.
 
 ---
 
@@ -56,3 +160,25 @@ First public release. Core capabilities:
 - `guardian init` merge-safe installer
 - Python parity module
 - GitHub Actions CI workflow
+- **Centralized audit allowlist** at `security/.audit-allowlist` with required reason field. Per-file `otlc-guardian:audit-exempt` marker still supported as an end-user opt-in. Allowlist is checked first so it takes precedence.
+- **Audit exemption visibility** — every `guardian audit` run prints the count and full list of exempted files. CI writes the exemption count to the GitHub Actions step summary.
+- **`guardian list-watched`** — debug command that prints the effective hook watch list for the current project, including custom paths and ignores from `.claude/settings.json`.
+- **`guardian update`** — alias for `guardian init`. Both are merge-safe and idempotent; `update` is the natural verb after pulling a new Guardian release.
+- **`web-content-guard.mjs`** — PostToolUse hook on `WebFetch`/`WebSearch` that scans fetched content before Claude reasons about it. Catches indirect prompt injection at the entry point.
+- **Configurable hook watch list** via `otlcGuardian.watchPaths` / `ignorePaths` / `extendDefaults` block in `.claude/settings.json`.
+- **Doc-exempt marker** (`otlc-guardian:doc`) for security spec files that legitimately discuss injection patterns.
+- **Python parity**: `SECRET_PATTERNS` (9 entries), v1.0.1 normalizer (NFKC + invisible-strip + URL/base64 decode), and `guard_output()` added to `security/injection_guard.py`.
+- **`GuardianConfigError`** — error class thrown by `validateEnv()` when required env vars are missing.
+- **Restructured source tree** from a flat root layout into `bin/`, `security/`, `tests/`, `.claude/hooks/`, `.github/workflows/`.
+- **Hook patterns sourced from main module** — `.claude/hooks/injection-guard-hook.mjs` imports `INJECTION_PATTERNS` directly from `security/01-injection-guard.js` instead of inlining a stale subset. Drift is now impossible.
+- **`mergeClaudeSettings` no longer overwrites invalid JSON** — aborts with a clear error and points the user to the reference copy.
+- **`mergeClaudeSettings` matcher comparison is set-based** — `Edit|Write` and `Write|Edit` are recognized as the same block.
+- **`mergeClaudeSettings` handles multiple events** — registers PreToolUse and PostToolUse hooks in one pass.
+- **`mergeGitignore` strips inline comments** before deduping — a user line like `.env # local secrets` correctly suppresses Guardian's own `.env` entry.
+- **`validateEnv` throws instead of `process.exit(1)`** — library code never terminates the process. Callers catch `GuardianConfigError` and decide how to fail.
+- **`guardian check` smoke-tests the hook** — pipes a known-bad payload through and asserts it fires. Detects Python projects and conditionally requires `security/injection_guard.py`.
+- **Audit `--json` mode no longer contaminates stdout** — status lines go to stderr in `--json` mode (standard Unix convention). CI now produces clean parseable JSON.
+- **`make_fastapi_guard` in `injection_guard.py`** — fixed a bug where the dependency's `request` parameter had no type hint so FastAPI couldn't provide it.
+- **Audit script self-detection false positives** — the audit's own pattern definitions matched themselves. Resolved via the exemption mechanisms.
+- **CI workflow runs the full test suite** before the audit.
+- **CONTRIBUTING.md, SECURITY.md, CHANGELOG.md, CODEOWNERS, .github/ISSUE_TEMPLATE, PULL_REQUEST_TEMPLATE.md, .editorconfig, .gitattributes** added.
