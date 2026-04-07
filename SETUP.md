@@ -258,7 +258,89 @@ async def chat(body: ChatRequest, request: Request):
 
 ---
 
-## Step 6 — Run Your First Audit
+## Step 6 — Understand the Two Hooks
+
+Guardian installs two Claude Code hooks. They are advisory only — they
+**never block** a tool call, only surface a warning. Both are wired up
+automatically by `guardian init` and registered in `.claude/settings.json`.
+
+### Hook 1 — `injection-guard-hook.mjs` (PreToolUse on Write/Edit)
+
+Fires every time Claude writes or edits a file in a watched location and
+scans the content for the same 28 injection patterns the runtime guard
+uses (single source of truth — the hook imports them directly from
+`security/01-injection-guard.js`, so they cannot drift).
+
+**Default watched paths** — anything that ends up loaded into a future
+Claude session as instructions, memory, or research:
+
+- `.planning/`, `.gsd/`, `.plans/` — phase plans, research, roadmaps
+- `.claude/`, `.cursor/`, `.continue/`, `.aider/`, `.windsurf/` — coding-agent state
+- Any `*/memory/` directory — auto-memory and persistent context stores
+- `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` — cross-agent instruction files
+- `.cursorrules`, `.windsurfrules`, `.aider.conf.yml`, `copilot-instructions.md`
+- `MEMORY.md` — auto-memory index
+- `.env*` — environment files (sometimes contain embedded payloads)
+
+### Hook 2 — `web-content-guard.mjs` (PostToolUse on WebFetch/WebSearch)
+
+Fires every time Claude fetches a URL or runs a web search, and scans the
+returned content **before Claude reasons about it**. This is the entry
+point for indirect prompt injection — hostile instructions hidden in a
+web page or search result. Catching it here is dramatically higher
+leverage than waiting until Claude has laundered the content into a plan
+file.
+
+The warning includes the source URL so you can decide whether to trust
+the fetched content.
+
+### Customizing the watch list
+
+Both hooks honor an `otlcGuardian` config block in `.claude/settings.json`:
+
+```json
+{
+  "otlcGuardian": {
+    "extendDefaults": true,
+    "watchPaths":  ["src/prompts/", ".myplanning/"],
+    "ignorePaths": ["docs/security-spec.md"]
+  }
+}
+```
+
+- `watchPaths` — extra paths to scan (added to defaults)
+- `ignorePaths` — paths to exclude from scanning
+- `extendDefaults: false` — replace the default list entirely with your own
+
+### Exempting a doc file
+
+If you keep prompt-injection documentation in a watched directory (e.g.
+a security spec in `.planning/specs/injection-defense.md`), add the
+marker `otlc-guardian:doc` anywhere in the file and the hook will skip
+it. No more false-positive warnings on your own security docs.
+
+```markdown
+<!-- otlc-guardian:doc -->
+# Injection Defense Spec
+
+This document discusses "ignore all previous instructions" as a
+known attack vector...
+```
+
+### Verifying the hooks work
+
+```bash
+guardian check
+```
+
+This runs a smoke test that pipes a known-bad payload through the
+PreToolUse hook and confirms it fires. If the hook is broken (wrong
+shebang, missing import, etc.) you'll see it here instead of discovering
+it during a real Claude session.
+
+---
+
+## Step 7 — Run Your First Audit
 
 Scan your project for existing security and quality issues:
 
@@ -290,7 +372,7 @@ Fix all **CRITICAL** and **HIGH** findings before pushing to production.
 
 ---
 
-## Step 7 — Verify Claude Code is Reading the Standards
+## Step 8 — Verify Claude Code is Reading the Standards
 
 Open a Claude Code session in your project directory:
 
@@ -324,7 +406,7 @@ I need to store the user's auth token.
 
 ---
 
-## Step 8 — Confirm CI/CD is Active
+## Step 9 — Confirm CI/CD is Active
 
 The workflow at `.github/workflows/security-audit.yml` activates automatically when you push to GitHub. No configuration needed.
 

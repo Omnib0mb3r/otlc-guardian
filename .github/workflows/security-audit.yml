@@ -4,7 +4,6 @@ on:
   push:
     branches: [main, master, develop]
   pull_request:
-    branches: [main, master, develop]
 
 jobs:
   security-audit:
@@ -19,6 +18,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+
+      - name: Run Guardian unit tests
+        if: hashFiles('tests/injection-guard.test.js') != ''
+        run: node tests/injection-guard.test.js
+
+      - name: Run guardian check
+        if: hashFiles('bin/guardian.js') != ''
+        run: node bin/guardian.js check
 
       - name: Run OTLC Guardian Safety Audit
         run: node security/03-audit.js . --fail-on-error

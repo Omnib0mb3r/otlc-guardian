@@ -4,6 +4,7 @@
  * OTLC GUARDIAN — Safety Audit Tool
  * // security · onthelevelconcepts.com
  * Version: 1.0.0
+ * otlc-guardian:audit-exempt
  * ============================================================
  *
  * Scans an existing codebase for security and quality violations.
@@ -14,6 +15,11 @@
  *   node security/03-audit.js ./src            # audit specific path
  *   node security/03-audit.js --json           # output as JSON
  *   node security/03-audit.js --fail-on-error  # exit code 1 if issues found
+ *
+ * Note: this file is marked otlc-guardian:audit-exempt because its
+ * pattern definitions (e.g. /eval\s*\(/) would otherwise match
+ * themselves when the audit is run against the Guardian repo. The
+ * exemption is opt-in per file — see scanFile() for the mechanism.
  *
  * ============================================================
  */
@@ -195,6 +201,14 @@ function collectFiles(rootDir, extensions) {
   return results;
 }
 
+// Files containing this marker (in their first 4 KB) are exempt from
+// audit scanning. Used for the CLI and logger files that legitimately
+// use console methods, the test fixtures that contain deliberate fake
+// secrets, and the audit script itself which defines patterns that
+// would otherwise match its own source. The marker is opt-in per file —
+// there is no global escape, and reviewers can grep for it.
+const AUDIT_EXEMPT_MARKER = "otlc-guardian:audit-exempt";
+
 function scanFile(filePath, rule) {
   if (!rule.pattern) return [];
 
@@ -202,7 +216,11 @@ function scanFile(filePath, rule) {
   try { content = fs.readFileSync(filePath, "utf8"); }
   catch { return []; }
 
-  // Check exclude patterns
+  // Whole-file exemption — first 4 KB is enough to surface a marker
+  // that should live in a file header comment.
+  if (content.slice(0, 4096).includes(AUDIT_EXEMPT_MARKER)) return [];
+
+  // Per-rule exclude patterns (e.g. ERR-003 already excludes *.test.*)
   if (rule.excludePatterns?.some((ep) => ep.test(filePath))) return [];
 
   const findings = [];

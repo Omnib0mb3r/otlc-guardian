@@ -3,6 +3,9 @@
  * OTLC GUARDIAN — Test Suite
  * // tests · onthelevelconcepts.com
  * Version: 1.0.1
+ * otlc-guardian:audit-exempt
+ * (Test fixtures deliberately contain fake secrets like
+ *  sk-abcdefghijklmnop12345678 to prove guardOutput catches them.)
  * ============================================================
  *
  * Run: node --experimental-vm-modules node_modules/.bin/jest
