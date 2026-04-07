@@ -32,6 +32,7 @@ All notable changes to OTLC Guardian. The format follows [Keep a Changelog](http
 - **`guardian check` now smoke-tests the hook** — pipes a known-bad payload through and asserts it fires. Also detects Python projects and conditionally requires `security/injection_guard.py`.
 
 ### Fixed
+- **Audit `--json` mode contaminated stdout** — `runAudit()` called `console.info` for the status header (`SAFETY AUDIT STARTING`, target, file count, exempt list) before writing the JSON. `console.info` writes to stdout, so the captured file in CI was `[status text] + [JSON object]` and `JSON.parse` choked on the leading emoji. Fixed by routing status to stderr in JSON mode (standard Unix convention — diagnostic stream vs result stream). The CI `Audit exemption visibility` step now produces clean parseable JSON.
 - **`make_fastapi_guard` in `injection_guard.py`** had a bug where the inner dependency function's `request` parameter had no type hint, so FastAPI's dependency injection could not provide it. Adding the Request type hint resolves the issue.
 - **Audit script self-detection false positives** — the audit's own pattern definitions matched themselves (`/eval\s*\(/`, `dangerouslySetInnerHTML`, `console.log` in CLI/logger). Resolved via the new exemption mechanisms.
 - **CI workflow had no test step** — only the audit ran. Now runs `injection-guard.test.js`, `init.test.js`, `hook.test.js`, and `guardian check` before the audit.
