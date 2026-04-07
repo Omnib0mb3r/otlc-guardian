@@ -549,13 +549,33 @@ function writeFile(p, content) {
 }
 
 /**
- * Merge two Markdown files.
- * Guardian content is appended under a clearly labelled section header
- * so the user's existing content is 100% preserved above it.
- * Idempotent — won't append again if the Guardian section already exists.
+ * Merge (or create) a Markdown behavior file with Guardian content wrapped
+ * in an OTLC-GUARDIAN-START / OTLC-GUARDIAN-END marker block.
+ *
+ * Three cases, all idempotent:
+ *
+ *   1. Destination missing entirely           → write a fresh file with
+ *                                                Guardian content inside
+ *                                                the marker block
+ *   2. Destination exists, no marker yet      → preserve user content at
+ *                                                the top, append marker
+ *                                                block with Guardian
+ *                                                content below
+ *   3. Destination exists, marker present     → no-op (already sealed)
+ *
+ * Case 1 is the fix for a latent double-init bug: before this function
+ * handled missing destinations, runInit used copyFileSync for fresh
+ * files (which produced a marker-less copy) and then mergeMd on the
+ * next run would fail the marker check and append Guardian content a
+ * second time. Routing every behavior-file write through this single
+ * function means every call site gets idempotency for free.
+ *
+ * The Guardian content below the marker is byte-identical across cases
+ * 1 and 2 — the only difference is whether user content precedes it.
+ * That invariant is what makes double-init safe.
  */
 function mergeMd(existingPath, guardianSrcPath, label) {
-  const existing = readFile(existingPath);
+  const existing = readFile(existingPath);  // '' if file missing — readFile swallows ENOENT
   const incoming = readFile(guardianSrcPath);
   const marker   = `<!-- OTLC-GUARDIAN-START -->`;
 
@@ -564,9 +584,17 @@ function mergeMd(existingPath, guardianSrcPath, label) {
     return;
   }
 
+  const userContent    = existing.trimEnd();
+  const hasUserContent = userContent.length > 0;
+
+  // When there's no user content (fresh install), the marker block sits
+  // at the top of the file with no leading whitespace. When there IS
+  // user content, the marker is separated from it by one blank line.
+  // Either way the marker is guaranteed present on disk after this call,
+  // so the next mergeMd will take the early-return branch above.
   const merged =
-    existing.trimEnd() +
-    `\n\n${marker}\n` +
+    (hasUserContent ? userContent + `\n\n` : ``) +
+    `${marker}\n` +
     `---\n\n` +
     `<!-- The section below was added by OTLC Guardian (guardian init)     -->\n` +
     `<!-- Do not edit between the OTLC-GUARDIAN-START and END markers.      -->\n` +
@@ -575,7 +603,9 @@ function mergeMd(existingPath, guardianSrcPath, label) {
     `\n\n<!-- OTLC-GUARDIAN-END -->\n`;
 
   writeFile(existingPath, merged);
-  ok(`${label} — merged Guardian content into existing file`);
+  ok(hasUserContent
+    ? `${label} — merged Guardian content into existing file`
+    : `${label} — created with Guardian content (new file, marker-sealed)`);
 }
 
 /**
@@ -838,46 +868,43 @@ function runInit() {
   log(`${c.dim}Guardian source: ${ROOT}${c.reset}\n`);
 
   // ── 1. CLAUDE.md ─────────────────────────────────────────────────────────
-  // CLAUDE.md is the Claude-Code-specific behavior file. It is still shipped
-  // as a first-class artifact because Claude Code reads it natively on every
-  // session; AGENTS.md (below) is the universal equivalent for every other
-  // agent. Both files coexist by design — see the project intent note in
-  // AGENTS.md and the README value-section for the honest split.
+  // CLAUDE.md is the Claude-Code-specific behavior file. Claude Code reads
+  // it natively on every session. AGENTS.md (below) is the universal
+  // equivalent for every other agent. Both files coexist by design — see
+  // AGENTS.md's project intent note and the README value section for the
+  // honest multi-agent split.
+  //
+  // All three behavior files (CLAUDE.md, AGENTS.md, STANDARDS.md) go
+  // through mergeMd unconditionally. mergeMd handles the missing-file
+  // case by creating a marker-sealed fresh file, so a second init into
+  // the same directory is a guaranteed no-op. Routing every write
+  // through one function is what makes double-init idempotent — the
+  // prior "if existsSync then merge else copy" pattern silently broke
+  // that invariant for fresh installs.
   log(`${c.bold}── CLAUDE.md${c.reset}`);
-  const claudeDest = path.join(CWD, "CLAUDE.md");
-  const claudeSrc  = path.join(ROOT, "CLAUDE.md");
-  if (existsSync(claudeDest)) {
-    mergeMd(claudeDest, claudeSrc, "CLAUDE.md");
-  } else {
-    copyFileSync(claudeSrc, claudeDest);
-    ok("CLAUDE.md — copied (new file)");
-  }
+  mergeMd(
+    path.join(CWD, "CLAUDE.md"),
+    path.join(ROOT, "CLAUDE.md"),
+    "CLAUDE.md",
+  );
 
   // ── 1b. AGENTS.md ────────────────────────────────────────────────────────
   // Universal entry point for Codex CLI, Cursor, Aider, Continue, Windsurf
-  // and any other agent that honors the AGENTS.md convention. Mirrors the
-  // CLAUDE.md merge-pattern exactly: idempotent, user content preserved at
-  // the top, Guardian content appended below the OTLC-GUARDIAN-START marker.
+  // and any other agent that honors the AGENTS.md convention.
   log(`\n${c.bold}── AGENTS.md${c.reset}`);
-  const agentsDest = path.join(CWD, "AGENTS.md");
-  const agentsSrc  = path.join(ROOT, "AGENTS.md");
-  if (existsSync(agentsDest)) {
-    mergeMd(agentsDest, agentsSrc, "AGENTS.md");
-  } else {
-    copyFileSync(agentsSrc, agentsDest);
-    ok("AGENTS.md — copied (new file)");
-  }
+  mergeMd(
+    path.join(CWD, "AGENTS.md"),
+    path.join(ROOT, "AGENTS.md"),
+    "AGENTS.md",
+  );
 
   // ── 2. STANDARDS.md ──────────────────────────────────────────────────────
   log(`\n${c.bold}── STANDARDS.md${c.reset}`);
-  const standardsDest = path.join(CWD, "STANDARDS.md");
-  const standardsSrc  = path.join(ROOT, "STANDARDS.md");
-  if (existsSync(standardsDest)) {
-    mergeMd(standardsDest, standardsSrc, "STANDARDS.md");
-  } else {
-    copyFileSync(standardsSrc, standardsDest);
-    ok("STANDARDS.md — copied (new file)");
-  }
+  mergeMd(
+    path.join(CWD, "STANDARDS.md"),
+    path.join(ROOT, "STANDARDS.md"),
+    "STANDARDS.md",
+  );
 
   // ── 3. .gitignore ─────────────────────────────────────────────────────────
   log(`\n${c.bold}── .gitignore${c.reset}`);

@@ -14,10 +14,13 @@
  *   - `guardian init` merges Guardian content into an existing user
  *     AGENTS.md under the OTLC-GUARDIAN-START marker without clobbering
  *     the user's content
- *   - A follow-up `guardian init` on a marker-sealed AGENTS.md is a
- *     no-op (idempotency via the mergeMd path — this is the path that
- *     the README promises and that matters for users re-running init
- *     to refresh patterns)
+ *   - `guardian init` is idempotent on a truly-fresh project — running
+ *     it twice in a row produces byte-identical CLAUDE.md / AGENTS.md /
+ *     STANDARDS.md. This test guards the mergeMd fresh-install path
+ *     that replaced the old copyFileSync branch, which silently
+ *     double-wrote behavior files on second init.
+ *   - mergeMd handles a missing destination file (creates marker-sealed
+ *     content from scratch; second call is a no-op)
  *   - editorCoverage() reports the right status for each of the four
  *     install scenarios (Claude full / Claude partial / behavior-only /
  *     disabled)
@@ -174,38 +177,39 @@ describe("guardian init — AGENTS.md provisioning (subprocess)", () => {
     });
   });
 
-  test("second init on a marker-sealed AGENTS.md is a no-op (mergeMd idempotency)", () => {
-    // This test covers the code path the README promises: "Running
-    // guardian init a second time is safe — it detects everything
-    // already in place and skips it." We exercise the path through
-    // mergeMd explicitly (user AGENTS.md → first init adds marker →
-    // second init detects marker → no-op) because that path is
-    // provably idempotent.
-    //
-    // NOTE: there is a separate pre-existing issue in runInit() where
-    // copyFileSync-on-fresh-file produces a marker-less copy that will
-    // get merged again on the next init. That bug affects CLAUDE.md,
-    // STANDARDS.md, and AGENTS.md equally, was not introduced by this
-    // branch, and is out of scope for the multi-agent fix. It should
-    // be addressed as a separate commit with its own tests.
+  test("double init on a TRULY fresh project is byte-for-byte idempotent across all three behavior files", () => {
+    // This is the test the README's idempotency claim depends on.
+    // Before the mergeMd fresh-install fix, runInit's copyFileSync
+    // branch produced a marker-less copy on run 1, which mergeMd then
+    // appended to a second time on run 2 — silently doubling CLAUDE.md,
+    // AGENTS.md, and STANDARDS.md. The fix routes all three writes
+    // through mergeMd, which now handles the missing-destination case
+    // by creating a marker-sealed file. Any regression that reintroduces
+    // the copyFileSync branch (or otherwise produces a marker-less
+    // fresh file) will fail this test on the second assertEqual.
     withTempDir((dir) => {
-      const userPath = path.join(dir, "AGENTS.md");
-      writeFileSync(userPath, "# Mine\n");
+      runInit(dir);
+      const agents1    = readFileSync(path.join(dir, "AGENTS.md"),    "utf8");
+      const claude1    = readFileSync(path.join(dir, "CLAUDE.md"),    "utf8");
+      const standards1 = readFileSync(path.join(dir, "STANDARDS.md"), "utf8");
+
+      // All three files must contain the marker after run 1. Without
+      // it the copyFileSync bug is back.
+      assert.ok(agents1.includes("OTLC-GUARDIAN-START"),
+        "Run 1: AGENTS.md must contain OTLC-GUARDIAN-START marker");
+      assert.ok(claude1.includes("OTLC-GUARDIAN-START"),
+        "Run 1: CLAUDE.md must contain OTLC-GUARDIAN-START marker");
+      assert.ok(standards1.includes("OTLC-GUARDIAN-START"),
+        "Run 1: STANDARDS.md must contain OTLC-GUARDIAN-START marker");
 
       runInit(dir);
-      const afterFirst = readFileSync(userPath, "utf8");
-      assert.ok(
-        afterFirst.includes("OTLC-GUARDIAN-START"),
-        "First init must add the Guardian marker",
-      );
+      const agents2    = readFileSync(path.join(dir, "AGENTS.md"),    "utf8");
+      const claude2    = readFileSync(path.join(dir, "CLAUDE.md"),    "utf8");
+      const standards2 = readFileSync(path.join(dir, "STANDARDS.md"), "utf8");
 
-      runInit(dir);
-      const afterSecond = readFileSync(userPath, "utf8");
-      assert.equal(
-        afterSecond,
-        afterFirst,
-        "Second init on marker-sealed AGENTS.md must be a byte-for-byte no-op",
-      );
+      assert.equal(agents2,    agents1,    "AGENTS.md must be byte-for-byte unchanged on second init");
+      assert.equal(claude2,    claude1,    "CLAUDE.md must be byte-for-byte unchanged on second init");
+      assert.equal(standards2, standards1, "STANDARDS.md must be byte-for-byte unchanged on second init");
     });
   });
 });
@@ -235,6 +239,48 @@ describe("mergeMd — AGENTS.md content shape", () => {
       assert.ok(!userSection.includes("Guardian paragraph"),  "Guardian content NOT above the marker");
       assert.ok(guardianSection.includes("Guardian paragraph"), "Guardian content inside the marker block");
       assert.ok(!guardianSection.includes("User paragraph"),    "User content NOT inside the marker block");
+    });
+  });
+
+  test("creates a marker-sealed file when destination is missing (fresh-install path)", () => {
+    // This is the codepath that replaced runInit's old copyFileSync
+    // branch. It must: (a) create the file, (b) include the Guardian
+    // marker so the next call is idempotent, (c) contain the source
+    // content, and (d) not attempt to prepend any stale or invented
+    // user content.
+    withTempDir((dir) => {
+      const freshPath = path.join(dir, "AGENTS.md");  // does NOT exist
+      const srcPath   = path.join(dir, "guardian-AGENTS.md");
+      writeFileSync(srcPath, "# Guardian rules\n\nGuardian paragraph.\n");
+
+      assert.ok(!existsSync(freshPath), "sanity: destination must not exist before mergeMd");
+      mergeMd(freshPath, srcPath, "AGENTS.md");
+
+      assert.ok(existsSync(freshPath), "mergeMd must create the destination file when missing");
+      const content = readFileSync(freshPath, "utf8");
+      assert.ok(content.includes("<!-- OTLC-GUARDIAN-START -->"), "Fresh file must contain START marker");
+      assert.ok(content.includes("<!-- OTLC-GUARDIAN-END -->"),   "Fresh file must contain END marker");
+      assert.ok(content.includes("Guardian paragraph"),            "Fresh file must contain Guardian content");
+      // Marker should be at the top (no user prefix to invent)
+      assert.ok(content.startsWith("<!-- OTLC-GUARDIAN-START -->"),
+        "Marker must start at byte 0 on a fresh file — no leading whitespace or phantom content");
+    });
+  });
+
+  test("second mergeMd call on a fresh-created file is a no-op (guards double-init idempotency)", () => {
+    withTempDir((dir) => {
+      const freshPath = path.join(dir, "AGENTS.md");
+      const srcPath   = path.join(dir, "guardian-AGENTS.md");
+      writeFileSync(srcPath, "# Guardian rules\n\nGuardian paragraph.\n");
+
+      mergeMd(freshPath, srcPath, "AGENTS.md");
+      const afterFirst = readFileSync(freshPath, "utf8");
+
+      mergeMd(freshPath, srcPath, "AGENTS.md");
+      const afterSecond = readFileSync(freshPath, "utf8");
+
+      assert.equal(afterSecond, afterFirst,
+        "Second mergeMd on a marker-sealed fresh file must be a byte-for-byte no-op");
     });
   });
 });
