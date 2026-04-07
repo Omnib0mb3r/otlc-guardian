@@ -1,0 +1,25 @@
+# EditorConfig — keep line endings consistent across editors and OSes.
+# https://editorconfig.org
+#
+# Without this, Windows checkouts of files Guardian wrote on Linux/Mac
+# get rewritten to CRLF on the next save and produce noisy git diffs.
+# This file fixes the LF→CRLF warnings emitted by `git add` on Windows.
+
+root = true
+
+[*]
+end_of_line       = lf
+insert_final_newline = true
+charset           = utf-8
+trim_trailing_whitespace = true
+indent_style      = space
+indent_size       = 2
+
+[*.{py}]
+indent_size       = 4
+
+[*.{md,markdown}]
+trim_trailing_whitespace = false
+
+[Makefile]
+indent_style      = tab

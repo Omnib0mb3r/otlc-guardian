@@ -1,0 +1,19 @@
+# Force LF line endings on every text file in the repo. Pairs with
+# .editorconfig to silence the LF→CRLF warnings on Windows checkouts
+# and to keep diffs noise-free across platforms.
+
+* text=auto eol=lf
+
+# Shell scripts must always be LF — Windows CRLF in a .sh file breaks
+# the interpreter on Linux runners (CI).
+*.sh        text eol=lf
+*.mjs       text eol=lf
+*.js        text eol=lf
+
+# Treat lockfiles and binary blobs as binary so git doesn't try to
+# auto-convert them.
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary

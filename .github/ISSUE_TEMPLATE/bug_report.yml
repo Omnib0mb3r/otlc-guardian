@@ -1,0 +1,88 @@
+name: Bug report
+description: Something in OTLC Guardian is broken
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug.
+        For **security vulnerabilities**, please use [SECURITY.md](../SECURITY.md) instead — do not open a public issue.
+
+  - type: input
+    id: version
+    attributes:
+      label: Guardian version
+      description: From `package.json` or `guardian help` footer
+      placeholder: "1.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      description: From `node --version`
+      placeholder: "v20.11.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Other (specify in description)
+    validations:
+      required: true
+
+  - type: textarea
+    id: describe
+    attributes:
+      label: What happened
+      description: A clear description of the bug
+      placeholder: "When I run `guardian init` in a project that has an existing CLAUDE.md, ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      placeholder: "I expected the existing CLAUDE.md to be preserved with Guardian's content appended below."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The smallest set of steps that produces the bug
+      placeholder: |
+        1. `git clone ...`
+        2. `cd ...`
+        3. `guardian init`
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output / logs
+      description: Paste any relevant terminal output. Wrap with triple backticks.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I've read [CONTRIBUTING.md](../CONTRIBUTING.md)
+          required: true
+        - label: This is not a security vulnerability (see [SECURITY.md](../SECURITY.md))
+          required: true
+        - label: I've searched existing issues for duplicates
+          required: true

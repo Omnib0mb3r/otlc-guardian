@@ -1,0 +1,34 @@
+# OTLC Guardian — Code Owners
+#
+# These paths require an explicit review from the listed owners before
+# they can be merged. The intent is to make changes to security-critical
+# files (the audit allowlist, the hook source, the pattern registry,
+# the CI workflow) impossible to slip in without a second pair of eyes.
+#
+# Format documented at: https://docs.github.com/en/repositories/managing-your-repositories-settings-and-features/customizing-your-repository/about-code-owners
+#
+# Forkers: replace @Omnib0mb3r with your own GitHub handle or team.
+
+# Default fallback — anything not matched below
+* @Omnib0mb3r
+
+# Pattern registry and runtime guards
+/security/01-injection-guard.js  @Omnib0mb3r
+/security/02-code-security.js    @Omnib0mb3r
+/security/03-audit.js            @Omnib0mb3r
+/security/injection_guard.py     @Omnib0mb3r
+
+# Audit allowlist — every change needs explicit security review
+/security/.audit-allowlist       @Omnib0mb3r
+
+# Claude Code hooks (advisory only, but still security-relevant)
+/.claude/hooks/                  @Omnib0mb3r
+/.claude/settings.json           @Omnib0mb3r
+
+# CI workflows — bypassing tests or audit gates is a security event
+/.github/workflows/              @Omnib0mb3r
+
+# Behavior rules and approved stack
+/CLAUDE.md                       @Omnib0mb3r
+/STANDARDS.md                    @Omnib0mb3r
+/SECURITY.md                     @Omnib0mb3r

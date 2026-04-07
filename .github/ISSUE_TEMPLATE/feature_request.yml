@@ -1,0 +1,55 @@
+name: Feature request
+description: Suggest a new injection pattern, audit rule, or capability
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For new injection patterns, please include the source where you observed
+        the attack variant if possible (CTF write-up, paper, blog post, etc.).
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Type of feature
+      options:
+        - New injection pattern
+        - New secret pattern
+        - New audit rule
+        - New default hook watch path
+        - New CLI command
+        - Documentation improvement
+        - Other (specify below)
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: What problem does this solve
+      placeholder: "I keep seeing variants of '...' in the wild that Guardian doesn't catch."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What would you add or change? If you have code, paste it.
+      render: javascript
+
+  - type: textarea
+    id: tests
+    attributes:
+      label: Test cases
+      description: For new patterns, please provide BOTH a "must block" and a "must not fire" example.
+      placeholder: |
+        Must block: "your example here"
+        Must not fire: "legitimate phrase that contains some of the same words"
+
+  - type: input
+    id: source
+    attributes:
+      label: Source / reference
+      description: Where did you encounter this? (Optional but helpful)
+      placeholder: "https://example.com/ctf-2026-writeup"
