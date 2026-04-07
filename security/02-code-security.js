@@ -20,6 +20,19 @@
 import crypto from "crypto";
 
 // ---------------------------------------------------------------------------
+// CUSTOM ERROR — thrown by validateEnv when required vars are missing.
+// Library code never calls process.exit; the caller decides how to handle it.
+// ---------------------------------------------------------------------------
+
+export class GuardianConfigError extends Error {
+  constructor(message, missing = []) {
+    super(message);
+    this.name    = "GuardianConfigError";
+    this.missing = missing;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // ENVIRONMENT VALIDATION
 // Call at app startup. Fails fast before any server starts.
 // ---------------------------------------------------------------------------
@@ -28,8 +41,14 @@ import crypto from "crypto";
  * Validates required environment variables exist.
  * Fails loudly — never silently start with missing config.
  *
+ * Throws GuardianConfigError when required vars are missing. The caller is
+ * expected to catch and exit if appropriate. This keeps the library safe to
+ * use from tests, scripts, and harnesses that cannot tolerate process.exit
+ * being called from inside a dependency.
+ *
  * @param {string[]} required - env var names that must exist
  * @param {string[]} recommended - env var names that should exist (warn only)
+ * @throws {GuardianConfigError} when one or more required vars are missing
  */
 export function validateEnv(required = [], recommended = []) {
   const missing = required.filter((key) => !process.env[key]);
@@ -39,7 +58,10 @@ export function validateEnv(required = [], recommended = []) {
     missing.forEach((key) => console.error(`    → ${key}`));
     console.error(`\n    Copy .env.example to .env and fill in all required values.`);
     console.error(`    On Windows: set ${missing[0]}=your_value_here\n`);
-    process.exit(1);
+    throw new GuardianConfigError(
+      `Missing required environment variables: ${missing.join(", ")}`,
+      missing,
+    );
   }
 
   const missingRecommended = recommended.filter((key) => !process.env[key]);
@@ -132,7 +154,21 @@ export const logger = {
 
 // ---------------------------------------------------------------------------
 // RATE LIMITER
-// In-memory token bucket. For multi-server: swap Map for Redis.
+// In-memory store. Per-process only — counters reset on restart and are
+// NOT shared across PM2 cluster workers, Kubernetes pods, or multiple hosts.
+//
+// ⚠️  PRODUCTION SWAP POINT: replace `rateLimitStore` below with a Redis
+//     client (or another shared store) when running more than one process.
+//     Suggested swap:
+//
+//       import Redis from 'ioredis';
+//       const redis = new Redis(process.env.REDIS_URL);
+//       // then in checkRateLimit, INCR + EXPIRE on a key like
+//       //   `rl:${key}` with PX=windowMs and read the counter back.
+//
+//     Everything else in this module stays the same — only the store needs
+//     to change. Keep the same { count, resetAt } shape and the rest of the
+//     code path is identical.
 // ---------------------------------------------------------------------------
 
 const rateLimitStore = new Map();

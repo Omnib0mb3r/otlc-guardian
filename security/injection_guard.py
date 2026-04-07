@@ -85,6 +85,29 @@ INJECTION_PATTERNS: list[InjectionPattern] = [
 INVISIBLE_UNICODE_PATTERN = re.compile(r"[\u200B-\u200F\u2028-\u202F\uFEFF\u00AD]")
 
 # ---------------------------------------------------------------------------
+# SECRET LEAK PATTERNS — Python parity with security/01-injection-guard.js
+# Catches secrets that leak into AI input or output.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SecretPattern:
+    id: str
+    pattern: re.Pattern
+    label: str
+
+SECRET_PATTERNS: list[SecretPattern] = [
+    SecretPattern("SEC-001", re.compile(r"sk-[a-zA-Z0-9]{20,}"),                  "OpenAI API Key"),
+    SecretPattern("SEC-002", re.compile(r"AIza[0-9A-Za-z\-_]{35}"),               "Google API Key"),
+    SecretPattern("SEC-003", re.compile(r"ghp_[a-zA-Z0-9]{36}"),                  "GitHub Token"),
+    SecretPattern("SEC-004", re.compile(r"gho_[a-zA-Z0-9]{36}"),                  "GitHub OAuth Token"),
+    SecretPattern("SEC-005", re.compile(r"AKIA[0-9A-Z]{16}"),                     "AWS Access Key"),
+    SecretPattern("SEC-006", re.compile(r"(?:secret|token|key|password|auth)\s*[:=]\s*[\"']?[A-Za-z0-9+/]{40,}[\"']?", re.I), "Context-Adjacent Base64 Secret"),
+    SecretPattern("SEC-007", re.compile(r"-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----"), "Private Key"),
+    SecretPattern("SEC-008", re.compile(r"password\s*[:=]\s*[\"']?[^\s\"']{8,}",  re.I), "Inline Password"),
+    SecretPattern("SEC-009", re.compile(r"api[_-]?key\s*[:=]\s*[\"']?[^\s\"']{8,}", re.I), "Inline API Key"),
+]
+
+# ---------------------------------------------------------------------------
 # VIOLATION DATACLASS
 # ---------------------------------------------------------------------------
 
@@ -99,35 +122,93 @@ class Violation:
 
 
 # ---------------------------------------------------------------------------
+# PRE-SCAN NORMALIZER — Python parity with JS version (v1.0.1 patches)
+# - NFKC: fullwidth/homoglyph Unicode → ASCII (defeats ｉｇｎｏｒｅ bypass)
+# - Strip invisible Unicode (defeats zero-width-space bypass)
+# - URL-decode and base64-decode candidates so encoded payloads are scanned
+# ---------------------------------------------------------------------------
+
+def _normalize_for_scan(text: str) -> str:
+    """Normalize before scanning. Returns text ready for pattern matching."""
+    import unicodedata, base64, urllib.parse
+
+    normalized = unicodedata.normalize("NFKC", text)
+    normalized = INVISIBLE_UNICODE_PATTERN.sub("", normalized)
+
+    # URL-decode — catches %69%67%6E%6F%72%65 style payloads
+    try:
+        url_decoded = urllib.parse.unquote(normalized)
+        if url_decoded != normalized:
+            normalized = f"{normalized}\n{url_decoded}"
+    except Exception:
+        pass
+
+    # Base64 decode — only on strings that look like valid base64
+    candidate = re.sub(r"\s", "", text)
+    if re.match(r"^[A-Za-z0-9+/]{20,}={0,2}$", candidate):
+        try:
+            decoded = base64.b64decode(candidate, validate=True).decode("utf-8", errors="ignore")
+            if re.match(r"^[\x20-\x7E\s]{10,}$", decoded):
+                normalized = f"{normalized}\n{decoded}"
+        except Exception:
+            pass
+
+    return normalized
+
+
+# ---------------------------------------------------------------------------
 # SCAN FUNCTION
 # ---------------------------------------------------------------------------
 
-def scan(text: str) -> list[Violation]:
-    """Scans text for injection patterns. Returns list of violations."""
+def scan(text: str, mode: str = "all") -> list[Violation]:
+    """
+    Scans text for injection patterns and (optionally) secret leaks.
+
+    Args:
+        text: input text
+        mode: 'injection' | 'secrets' | 'all'
+
+    Returns:
+        list of Violation objects (empty if clean)
+    """
     if not isinstance(text, str):
         return []
 
+    normalized = _normalize_for_scan(text)
     violations: list[Violation] = []
 
-    for rule in INJECTION_PATTERNS:
-        match = rule.pattern.search(text)
-        if match:
+    if mode in ("injection", "all"):
+        for rule in INJECTION_PATTERNS:
+            match = rule.pattern.search(normalized)
+            if match:
+                violations.append(Violation(
+                    type="injection",
+                    id=rule.id,
+                    severity=rule.severity,
+                    matched=match.group(0),
+                    description=rule.description,
+                ))
+
+        # Scan original text for invisible unicode (normalizer strips it)
+        if INVISIBLE_UNICODE_PATTERN.search(text):
             violations.append(Violation(
                 type="injection",
-                id=rule.id,
-                severity=rule.severity,
-                matched=match.group(0),
-                description=rule.description,
+                id="INJ-UNICODE",
+                severity="HIGH",
+                matched="invisible unicode characters",
+                description="Invisible Unicode detected — potential steganographic injection",
             ))
 
-    if INVISIBLE_UNICODE_PATTERN.search(text):
-        violations.append(Violation(
-            type="injection",
-            id="INJ-UNICODE",
-            severity="HIGH",
-            matched="invisible unicode characters",
-            description="Invisible Unicode detected — potential steganographic injection",
-        ))
+    if mode in ("secrets", "all"):
+        for rule in SECRET_PATTERNS:
+            if rule.pattern.search(normalized):
+                violations.append(Violation(
+                    type="secret",
+                    id=rule.id,
+                    severity="CRITICAL",
+                    matched=f"[REDACTED — {rule.label}]",
+                    description=rule.label,
+                ))
 
     return violations
 
@@ -199,16 +280,18 @@ def guard_input(
     text: str,
     max_length: int = 4000,
     block_on_critical: bool = True,
+    block_on_secrets:  bool = True,
     context: str = "user input",
     on_violation: Optional[Callable[[Violation], None]] = None,
 ) -> str:
     """
-    One-call guard. Validates length, scans for injection, reports visibly.
+    One-call guard. Validates length, scans for injection + secrets, reports visibly.
 
     Args:
         text:               Raw user input
         max_length:         Maximum allowed input length
-        block_on_critical:  Raise GuardianError on CRITICAL findings
+        block_on_critical:  Raise GuardianError on CRITICAL injection findings
+        block_on_secrets:   Raise GuardianError if secret-shaped content detected
         context:            Label for log output (e.g. "chat API", "search query")
         on_violation:       Optional callback for each violation found
 
@@ -216,7 +299,8 @@ def guard_input(
         Sanitized string safe to pass to AI API
 
     Raises:
-        GuardianError: if critical violation found and block_on_critical is True
+        GuardianError: if critical violation found and block_on_critical is True,
+                       or secrets found and block_on_secrets is True
     """
     if not isinstance(text, str):
         raise TypeError("guard_input requires a string.")
@@ -226,8 +310,8 @@ def guard_input(
         logger.warning(f"⚠️  [OTLC GUARDIAN] Input truncated: {len(text)} chars > {max_length} limit")
         text = text[:max_length]
 
-    # Scan
-    violations = scan(text)
+    # Scan (injection + secrets)
+    violations = scan(text, mode="all")
 
     # Report visibly
     report_violations(violations, context)
@@ -237,11 +321,78 @@ def guard_input(
         for v in violations:
             on_violation(v)
 
-    # Block on critical
-    if block_on_critical and any(v.severity == "CRITICAL" for v in violations):
+    # Block on secrets
+    has_secrets = any(v.type == "secret" for v in violations)
+    if has_secrets and block_on_secrets:
+        raise GuardianError("Input contains secret-shaped content. Blocked.", violations)
+
+    # Block on critical injection
+    has_critical = any(v.type == "injection" and v.severity == "CRITICAL" for v in violations)
+    if has_critical and block_on_critical:
         raise GuardianError("Critical prompt injection attempt detected. Blocked.", violations)
 
-    return sanitize(text)
+    sanitized = sanitize(text)
+
+    # Post-sanitize re-scan — catches payloads that only appear after stripping
+    # delimiters (e.g. zero-width space between i​g leaves "ignore" behind).
+    post = scan(sanitized, mode="injection")
+    if post:
+        report_violations(post, f"{context} [post-sanitize]")
+        if block_on_critical and any(v.severity == "CRITICAL" for v in post):
+            raise GuardianError("Critical injection detected after sanitization. Blocked.", post)
+
+    return sanitized
+
+
+# ---------------------------------------------------------------------------
+# OUTPUT GUARD — Python parity with security/01-injection-guard.js
+# Scan AI responses before they reach the user or get stored.
+# Catches: leaked secrets in AI output, reflected injection (model echoing back).
+# ---------------------------------------------------------------------------
+
+def guard_output(
+    output: str,
+    block_on_secrets: bool = True,
+    context: str = "AI output",
+    on_violation: Optional[Callable[[Violation], None]] = None,
+) -> str:
+    """
+    Guards AI output before it reaches the user or is stored.
+
+    Args:
+        output:           Raw AI response text
+        block_on_secrets: Raise GuardianError if secret-shaped content found
+        context:          Label for log output
+        on_violation:     Optional callback for each violation
+
+    Returns:
+        Output text safe to send to user
+
+    Raises:
+        GuardianError: if secrets found and block_on_secrets is True
+    """
+    if not isinstance(output, str):
+        raise TypeError("guard_output requires a string.")
+
+    # Scan for both — secrets always block-eligible, injection patterns are
+    # informational only on output (the AI is just echoing them back).
+    secret_violations    = scan(output, mode="secrets")
+    injection_violations = scan(output, mode="injection")
+    all_violations       = secret_violations + injection_violations
+
+    report_violations(all_violations, context)
+
+    if on_violation:
+        for v in all_violations:
+            on_violation(v)
+
+    if secret_violations and block_on_secrets:
+        raise GuardianError(
+            "AI output contains secret-shaped content. Blocked before delivery.",
+            secret_violations,
+        )
+
+    return output
 
 
 # ---------------------------------------------------------------------------
