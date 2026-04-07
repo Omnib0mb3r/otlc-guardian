@@ -1,5 +1,5 @@
 # OTLC Guardian — Setup Guide
-<!-- onthelevelconcepts.com · Version 1.2.1 -->
+<!-- onthelevelconcepts.com · Version 1.2.2 -->
 
 Step-by-step setup from zero to a fully protected, standards-enforced project.  
 Estimated time: **10 minutes** for a new project, **5 minutes** for an existing one.
@@ -752,4 +752,4 @@ npm uninstall -g otlc-guardian
 
 ---
 
-*OTLC Guardian · [onthelevelconcepts.com](https://onthelevelconcepts.com) · Version 1.2.1*
+*OTLC Guardian · [onthelevelconcepts.com](https://onthelevelconcepts.com) · Version 1.2.2*

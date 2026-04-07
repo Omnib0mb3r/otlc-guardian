@@ -28,6 +28,37 @@ import fs   from "fs";
 import path from "path";
 
 // ---------------------------------------------------------------------------
+// TEST FILE RECOGNITION
+// ---------------------------------------------------------------------------
+//
+// Rules whose intent is "production code only" (ERR-003 console.log,
+// CFG-001 / CFG-002 / CFG-003 hardcoded URL/IP, INJ-002 innerHTML,
+// TS-001 any-type, SEC-006 API-key assignment) should not fire on test
+// code that legitimately uses these patterns. The pre-1.2.2 list only
+// knew about *.test.* and *.spec.* and the substring "test/" — it
+// missed pytest's test_*.py and *_test.py, custom test runners like
+// test-site.js, the standard /tests/ directory on Windows where the
+// path separator is backslash, etc. The expanded list below recognizes
+// the full set of conventional test-file naming + directory locations
+// across JS, TS, and Python ecosystems. The anchored character class
+// [\/\\] is what makes the directory matchers work on Windows AND Unix.
+//
+// Defined at module top so AUDIT_RULES below can reference it. Hoisted
+// `const` declarations are OK in modern V8 but a forward reference
+// from a `const` initializer to another `const` declaration further
+// down the same module trips the temporal dead zone — keep this above
+// the rules array.
+const TEST_FILE_EXCLUDES = [
+  /\.test\./i,                       // *.test.{js,ts,...}  Jest / Vitest
+  /\.spec\./i,                       // *.spec.{js,ts,...}  Mocha / Jasmine / Karma
+  /[\/\\]__tests__[\/\\]/i,          // /__tests__/         Jest folder convention
+  /[\/\\]tests?[\/\\]/i,             // /test/ or /tests/   most other frameworks
+  /[\/\\]spec[\/\\]/i,               // /spec/              Rails / RSpec
+  /[\/\\]test[_-][^\/\\]+$/i,        // /test_*.py /test-*.js  pytest + custom runners
+  /[_-]test\.[a-z]+$/i,              // /*_test.py /*-test.js  alt pytest convention
+];
+
+// ---------------------------------------------------------------------------
 // AUDIT RULES
 // Each rule: { id, category, severity, description, pattern, fileTypes }
 // ---------------------------------------------------------------------------
@@ -95,6 +126,7 @@ const AUDIT_RULES = [
     description: "Hardcoded API key assignment",
     pattern: /api[_-]?key\s*[:=]\s*["'][^"']{8,}["']/i,
     fileTypes: [".js", ".ts", ".py", ".json", ".yaml", ".yml"],
+    excludePatterns: TEST_FILE_EXCLUDES,
   },
   {
     // SEC-011: connection strings with embedded credentials.
@@ -120,18 +152,35 @@ const AUDIT_RULES = [
     description: "Hardcoded localhost URL",
     pattern: /["'`]https?:\/\/localhost:\d+/,
     fileTypes: [".js", ".ts", ".jsx", ".tsx", ".py"],
+    excludePatterns: TEST_FILE_EXCLUDES,
   },
   {
     id: "CFG-002", category: "Configuration", severity: "HIGH",
     description: "Hardcoded 127.0.0.1 address",
     pattern: /["'`]https?:\/\/127\.0\.0\.1/,
     fileTypes: [".js", ".ts", ".jsx", ".tsx", ".py"],
+    excludePatterns: TEST_FILE_EXCLUDES,
   },
+  // CFG-003: hardcoded IP address. Excludes test files via the
+  // standard TEST_FILE_EXCLUDES list. The excludeLinePatterns list
+  // below distinguishes "binding to localhost" (security best
+  // practice — refuses external connections) from "URL pointing at a
+  // hardcoded IP" (real config leak). Pre-1.2.2 the rule conflated
+  // those two opposite things and flagged the safe form as a bug,
+  // which is actively misleading security advice. The bind-context
+  // patterns are anchored on the syntactic shape of the listen / bind
+  // call so they cannot match a URL string in the same line.
   {
     id: "CFG-003", category: "Configuration", severity: "MEDIUM",
     description: "Hardcoded IP address (potential config leak)",
     pattern: /["'`]\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}["'`]/,
     fileTypes: [".js", ".ts", ".jsx", ".tsx", ".py"],
+    excludePatterns: TEST_FILE_EXCLUDES,
+    excludeLinePatterns: [
+      /\bhost\s*[:=]\s*["'`]\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}["'`]/,         // host: '127.0.0.1' / host = '127.0.0.1'
+      /\.listen\s*\([^,)]*,\s*["'`]\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}["'`]/,  // .listen(port, '127.0.0.1', ...)
+      /\bbind\s*\(\s*["'`]\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}["'`]/,           // bind('127.0.0.1', ...)
+    ],
   },
 
   // --- ERROR HANDLING ---
@@ -168,7 +217,7 @@ const AUDIT_RULES = [
     description: "console.log() in non-test code — use structured logger",
     pattern: /console\.log\(/,
     fileTypes: [".js", ".ts", ".jsx", ".tsx"],
-    excludePatterns: [/\.test\./, /\.spec\./, /test\//, /spec\//],
+    excludePatterns: TEST_FILE_EXCLUDES,
   },
 
   // --- API DESIGN ---
@@ -190,6 +239,7 @@ const AUDIT_RULES = [
     id: "INJ-002", category: "Injection Risk", severity: "HIGH",
     description: "innerHTML assignment — potential XSS",
     pattern: /\.innerHTML\s*=/,
+    excludePatterns: TEST_FILE_EXCLUDES,
     fileTypes: [".js", ".ts", ".jsx", ".tsx"],
   },
   {
@@ -281,6 +331,7 @@ const AUDIT_RULES = [
     description: "Use of 'any' type — reduces type safety",
     pattern: /:\s*any(?:\s|;|,|\)|\[)/,
     fileTypes: [".ts", ".tsx"],
+    excludePatterns: TEST_FILE_EXCLUDES,
   },
 ];
 
@@ -288,10 +339,49 @@ const AUDIT_RULES = [
 // FILE SCANNER
 // ---------------------------------------------------------------------------
 
+// Directories the audit walker refuses to enter. Two categories:
+//
+//   1. Dependency / vendored code — `node_modules` (npm), `vendor`
+//      (PHP composer), `bower_components` (legacy JS), `target` (Rust /
+//      Maven build outputs that bundle dependencies), `site-packages` /
+//      `dist-packages` (Python install dirs). The auditor's job is to
+//      scan YOUR code for YOUR bugs. Dependency code is not your code,
+//      you can't fix it, and security scanning of dependencies is a
+//      different tool's job (npm audit, pip-audit, composer audit) —
+//      all of which are already in Guardian's CI workflow as separate
+//      steps. Walking these dirs produces 100% noise that drowns real
+//      findings.
+//
+//   2. Caches and build artifacts — `__pycache__`, `.pytest_cache`,
+//      `.mypy_cache`, `.ruff_cache`, `.turbo`, `.cache`, `coverage`,
+//      `dist`, `build`, `.next`, `out`, `.git`. Generated content,
+//      not source. The auditor would re-flag the same issues as the
+//      source dirs above, with confusing line numbers from minified
+//      bundles.
+//
+// Python venvs (`venv`, `.venv`) are kept on the list because most
+// projects also store their venv inside the project root. `env` is
+// deliberately NOT on this list — too many real projects have a
+// legitimate `env/` source directory and we'd rather have false
+// positives than false negatives for source code.
 const SKIP_DIRS = new Set([
-  "node_modules", ".git", "dist", "build", ".next", "__pycache__",
-  ".venv", "venv", "coverage", ".cache",
+  // JS / TS dependency dirs
+  "node_modules", "bower_components",
+  // PHP composer
+  "vendor",
+  // Python venvs and install dirs
+  "venv", ".venv", "site-packages", "dist-packages",
+  // Build outputs
+  "dist", "build", ".next", "out", "target",
+  // Caches
+  "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+  ".turbo", ".cache", "coverage",
+  // Git
+  ".git",
 ]);
+
+// (TEST_FILE_EXCLUDES is defined at the top of this file, before
+// AUDIT_RULES, because the rules reference it. See the block there.)
 
 function collectFiles(rootDir, extensions) {
   const results = [];
@@ -465,6 +555,16 @@ function scanFile(filePath, rule, exemptionState) {
 
   lines.forEach((line, index) => {
     if (rule.pattern.test(line)) {
+      // excludeLinePatterns lets a rule suppress findings whose
+      // surrounding line matches one of a list of "this is the safe
+      // form" patterns. Used by CFG-003 to distinguish a server bind
+      // call (host: '127.0.0.1', listen(port, '127.0.0.1', ...)) —
+      // which is a security best practice — from a hardcoded IP in a
+      // URL or config string, which is the real bug. Pre-1.2.2 the
+      // rule conflated those two opposite things and flagged the safe
+      // form as a config leak.
+      if (rule.excludeLinePatterns?.some((p) => p.test(line))) return;
+
       findings.push({
         file:    filePath,
         line:    index + 1,

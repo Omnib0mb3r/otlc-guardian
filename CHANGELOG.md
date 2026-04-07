@@ -4,6 +4,171 @@ All notable changes to OTLC Guardian. The format follows [Keep a Changelog](http
 
 ---
 
+## [1.2.2] — 2026-04-07
+
+Audit signal-to-noise improvements. Three real-world rule fixes that
+came out of running `guardian audit` against 12 projects on a developer
+machine and finding that ~95% of the HIGH/MEDIUM findings on three of
+those projects were false positives caused by scope and heuristic
+gaps in the audit rules — not bugs in the user's code.
+
+Concrete impact, measured by re-auditing the same three projects
+before and after this release:
+
+  DevNeural               56 → 14 findings  (-42, 75% drop)
+  New-Letter-and-TikToks  10 →  1 findings  (-9,  90% drop)
+  omnibomber-site         11 →  1 findings  (-10, 91% drop)
+  ----------------------------------------------------------
+  Total                   77 → 16 findings  (-61, 79% drop)
+
+Signal-to-noise on the DevNeural project went from 3 real findings out
+of 56 (5%) to 3 real findings out of 14 (21%) — a ~4x improvement.
+The 3 real findings are the same in both runs, which is what makes
+this a noise-reduction release: every fix below is a correctness
+improvement to the rule, not a way to silence real warnings.
+
+### Changed
+
+- **`SKIP_DIRS` expanded to include all major dependency and build
+  directories.** Pre-1.2.2 the audit walked `vendor/` (PHP composer),
+  `target/` (Rust / Maven build outputs), `bower_components/` (legacy
+  JS), and various Python cache directories — producing dozens of
+  false positives on minified jQuery, Popper, D3, and PHPUnit's own
+  bundled JS that real users had inside their own projects. The
+  audit's job is to scan **your** code for **your** bugs; dependency
+  scanning is a separate tool's job (`npm audit`, `pip-audit`,
+  `composer audit`) and is **already** in Guardian's CI workflow as
+  separate steps. Added: `vendor`, `bower_components`, `target`,
+  `out`, `site-packages`, `dist-packages`, `.pytest_cache`,
+  `.mypy_cache`, `.ruff_cache`, `.turbo`. The existing `node_modules`,
+  `dist`, `build`, `.next`, `__pycache__`, `.venv`, `venv`, `.git`,
+  `coverage`, `.cache` entries are kept. `env` is **deliberately
+  not** on the list because too many real projects have a legitimate
+  `env/` source directory. Documented inline.
+
+- **Test-file detection broadened to recognize 7 conventions across
+  ecosystems.** The pre-1.2.2 `excludePatterns` for `ERR-003`
+  console.log only knew about `*.test.*`, `*.spec.*`, and the
+  substring `test/` (which doesn't even match Windows backslash
+  paths). It missed pytest's `test_*.py`, the alt-pytest `*_test.py`
+  convention, custom test runners like `test-site.js`, the standard
+  `tests/` directory on Windows, Rails-style `spec/` directories, and
+  several others. The new module-level `TEST_FILE_EXCLUDES` constant
+  recognizes:
+    - `*.test.{js,ts,...}` (Jest, Vitest)
+    - `*.spec.{js,ts,...}` (Mocha, Jasmine, Karma)
+    - `__tests__/*` (Jest folder convention)
+    - `test/*` and `tests/*` (most other frameworks, both slash forms)
+    - `spec/*` (Rails / RSpec)
+    - `test_*.{py,js}` and `test-*.{py,js}` (pytest + custom runners)
+    - `*_test.{py,js}` and `*-test.{py,js}` (alt pytest convention)
+  The character class `[\/\\]` in the directory matchers is what
+  makes them work on both Windows and Unix path forms. The constant
+  is now applied to **every** rule whose intent is "production code
+  only": `ERR-003`, `CFG-001`, `CFG-002`, `CFG-003`, `INJ-002`,
+  `TS-001`, and `SEC-006`. The previous narrow list was attached to
+  `ERR-003` only, leaving the other rules to false-positive on test
+  fixtures.
+
+- **`CFG-003` distinguishes binding-to-localhost from URL-pointing-
+  at-localhost.** The pre-1.2.2 rule pattern was a bare
+  `/["'`]\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}["'`]/` that fired on any
+  quoted IP address. That conflated two opposite things:
+    1. **URL pointing at a hardcoded IP** — real bug. Production
+       config leak. `fetch('http://192.168.1.10:8080/api')`.
+    2. **Server binding to `127.0.0.1`** — security best practice.
+       The server refuses connections from any IP other than
+       loopback. `fastify.listen({ host: '127.0.0.1' })`,
+       `server.listen(0, '127.0.0.1', cb)`, `socket.bind('127.0.0.1', port)`.
+  The pre-1.2.2 rule fired on the safe form and called it a config
+  leak, which is actively wrong security advice. The fix introduces a
+  new `excludeLinePatterns` rule field — a list of regexes that
+  suppresses a finding when its surrounding line matches one of the
+  "this is the safe form" patterns. `CFG-003` now skips findings
+  where the IP appears immediately after `host:`, inside a `.listen(`
+  positional call, or inside a `bind(` call. The bind-context
+  patterns are anchored on the syntactic shape of the listen / bind
+  call so they cannot match a URL string in the same line. Bare IP
+  config assignments (`const dbHost = "192.168.1.10"`) and IP-in-URL
+  forms still fire, which is what `CFG-003` was always meant to
+  catch.
+
+### Added
+
+- **`excludeLinePatterns` rule field.** A general-purpose mechanism
+  for any future rule that needs to distinguish a "safe form" from a
+  "bug form" by line-context. Patterns are tested against the same
+  line that matched the main rule pattern; if any match, the finding
+  is suppressed. Currently only `CFG-003` uses it.
+
+### Tests
+
+- **`tests/audit.test.js`** — 14 new tests across three describe
+  blocks (`v1.2.2 — dependency directories`, `v1.2.2 — test-file
+  detection`, `v1.2.2 — CFG-003 bind vs URL`). Each fix has positive
+  tests (the rule must NOT fire on the new safe forms) AND control
+  tests (the rule must STILL fire in legitimate contexts so we
+  haven't accidentally turned the rule off entirely). Total audit
+  test count went from 20 → 34. Every test was watched fail before
+  the implementation landed.
+
+### Why these are best-practice fixes, not workarounds
+
+Each of the three changes corrects an **actual flaw in the rule**, not
+the visibility of a real warning:
+
+  1. **Dependency dirs.** Every serious security scanner — Semgrep,
+     SonarQube, ESLint, Ruff, Bandit, Snyk — skips dependency
+     directories by default. The audit already skipped `node_modules/`
+     for exactly this reason. Adding the equivalents for other
+     ecosystems is closing a parity gap.
+
+  2. **Test-file detection.** The principle "don't apply production
+     rules to test code" was already in the audit (`ERR-003` had
+     `excludePatterns`). The implementation just didn't recognize 6+
+     conventions used in the wild. The intent of the rule didn't
+     change — only the recognition heuristic was completed.
+
+  3. **CFG-003 bind vs URL.** The pre-1.2.2 rule was actively wrong:
+     it called a security best practice (binding to loopback) a
+     security bug. The fix doesn't silence a warning — it makes the
+     rule **correct**. Guardian's whole pitch is "production-grade
+     security," and the previous rule contradicted the pitch.
+
+A workaround would be: "add per-file `// otlc-guardian:audit-exempt`
+markers to all the noisy files in DevNeural." That hides real
+warnings behind a per-project carve-out. These three fixes are the
+opposite: they make the rules correctly distinguish bugs from
+non-bugs **for everybody**, so the auditor's signal-to-noise improves
+on every project that uses it.
+
+### Out of scope for 1.2.2
+
+- **`DEP-001` "no /health endpoint" false positive on non-server
+  projects.** This rule fires on every project that doesn't have a
+  `/health` endpoint, which includes every CLI tool, every static
+  site, every library, every code-generation skill, etc. After the
+  three fixes above, `DEP-001` is the lone remaining `MEDIUM` on
+  most non-server projects. The fix is to detect whether the project
+  looks like a server (Express, Fastify, Koa, FastAPI, Flask, etc.)
+  before firing the rule, similar to how the Python module check in
+  `guardian check` only fires on Python-shaped projects. Deferred to
+  a future release because the heuristic for "looks like a server"
+  needs more thought.
+
+- **`SEC-006` test-fixture downgrade.** Was on the original shortlist
+  but skipped because it's closer to a noise filter than a
+  correctness fix. The other three changes already cover the
+  test-file noise this would have addressed (test files are now
+  excluded from `SEC-006` via `TEST_FILE_EXCLUDES`).
+
+### Fixed
+
+- **Stale `Version 1.2.1` in `bin/guardian.js:121`** — bumped to
+  `1.2.2` alongside all the other version strings.
+
+---
+
 ## [1.2.1] — 2026-04-07
 
 Hotfix that reverts one of the two features shipped in 1.2.0. The SQL

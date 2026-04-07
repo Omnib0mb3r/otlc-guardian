@@ -414,6 +414,394 @@ describe("End-to-end regression — five bugs, five findings", () => {
 });
 
 // ---------------------------------------------------------------------------
+// v1.2.2 — DEPENDENCY DIRECTORY SKIP LIST
+// ---------------------------------------------------------------------------
+//
+// The pre-1.2.2 audit walked vendor/, target/, bower_components/, and
+// the various Python cache dirs. Real-world test on three projects
+// produced 9+ false-positive findings inside vendored composer packages
+// alone (jquery.min.js, popper.min.js, d3.min.js). Dependency code is
+// not the user's code; security scanning of dependencies is a separate
+// tool's job (npm audit, pip-audit, composer audit) and is already in
+// Guardian's CI workflow. The fix is to add the missing dependency
+// directories to SKIP_DIRS in lockstep with what the auditor already
+// does for node_modules/.
+
+describe("v1.2.2 — dependency directories are skipped", () => {
+  test("vendor/ (composer) — findings inside are NOT reported", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "vendor", "phpunit"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "vendor", "phpunit", "min.js"),
+        `try{x()}catch(e){}`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "ERR-001"),
+        "ERR-001 must not fire on a file inside vendor/"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("target/ (rust/maven build output) — findings inside are NOT reported", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "target", "debug"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "target", "debug", "bundle.js"),
+        `const k = "sk-proj-aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789aBcDeFgHi";`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "SEC-001"),
+        "SEC-001 must not fire on a file inside target/"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("bower_components/ — findings inside are NOT reported", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "bower_components", "jquery"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "bower_components", "jquery", "j.js"),
+        `try{x()}catch(t){}`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "ERR-001"),
+        "ERR-001 must not fire on a file inside bower_components/"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("control: same finding outside any skip dir IS still reported", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "src", "lib.js"),
+        `try{x()}catch(e){}`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        hasFinding(report, "ERR-001"),
+        "ERR-001 must still fire on a file in src/"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v1.2.2 — BROADENED TEST-FILE DETECTION
+// ---------------------------------------------------------------------------
+//
+// The pre-1.2.2 ERR-003 rule already had an excludePatterns list, but
+// it only knew about *.test.* and *.spec.* and the substring "test/".
+// Real-world test on three projects produced 28+ false-positive
+// findings on legitimate test code that uses other naming conventions:
+// pytest's test_*.py, custom test runners like test-site.js, files
+// inside a `tests/` directory on Windows where the path separator is
+// backslash, etc. The fix introduces a TEST_FILE_EXCLUDES constant
+// that recognizes the full set of conventional test-file patterns and
+// applies it to every rule whose intent is "production code only":
+// ERR-003, CFG-001, CFG-002, CFG-003, INJ-002, TS-001, SEC-006.
+
+describe("v1.2.2 — test-file detection recognizes more conventions", () => {
+  test("foo.spec.ts with localhost URL — CFG-001 must NOT fire", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      writeFileSync(
+        path.join(dir, "foo.spec.ts"),
+        `const url = "http://localhost:3000/api";`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "CFG-001"),
+        "CFG-001 must not fire in *.spec.ts files"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("test_foo.py with localhost URL — CFG-001 must NOT fire (pytest convention)", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      writeFileSync(
+        path.join(dir, "test_api.py"),
+        `URL = "http://localhost:8000/api"`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "CFG-001"),
+        "CFG-001 must not fire in test_*.py files"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("foo_test.py with localhost URL — CFG-001 must NOT fire (alt pytest)", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      writeFileSync(
+        path.join(dir, "api_test.py"),
+        `URL = "http://localhost:8000/api"`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "CFG-001"),
+        "CFG-001 must not fire in *_test.py files"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("test-site.js with console.log — ERR-003 must NOT fire (custom test runner)", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      writeFileSync(
+        path.join(dir, "test-site.js"),
+        `console.log("running tests");`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "ERR-003"),
+        "ERR-003 must not fire in test-*.js files (custom test runners)"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("nested tests/ directory on any OS — CFG-002 must NOT fire", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "pkg-a", "tests"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "pkg-a", "tests", "integration.ts"),
+        `const url = "http://127.0.0.1:8080/api";`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "CFG-002"),
+        "CFG-002 must not fire in any file inside a tests/ directory"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("__tests__ folder with innerHTML — INJ-002 must NOT fire (JSDOM cleanup)", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "__tests__"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "__tests__", "ui.test.ts"),
+        `document.body.innerHTML = '';`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "INJ-002"),
+        "INJ-002 must not fire in __tests__/ files (JSDOM teardown is standard)"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("tests/ file with `any` type — TS-001 must NOT fire", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "tests"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "tests", "mock.test.ts"),
+        `const cb = (e: any) => null;`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "TS-001"),
+        "TS-001 must not fire in tests/ files (mocking external APIs needs any)"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("test fixture API key assignment — SEC-006 must NOT fire", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "tests"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "tests", "setup.test.ts"),
+        `process.env.ANTHROPIC_API_KEY = 'test-key-for-vitest';`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "SEC-006"),
+        "SEC-006 must not fire in test files setting up env vars"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("control: src/ file with localhost URL still triggers CFG-001", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "src", "config.ts"),
+        `export const apiUrl = "http://localhost:3000/api";`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        hasFinding(report, "CFG-001"),
+        "CFG-001 must still fire in src/ production code"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("control: src/ file with console.log still triggers ERR-003", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "src", "service.ts"),
+        `console.log("debug: user fetched");`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        hasFinding(report, "ERR-003"),
+        "ERR-003 must still fire in src/ production code"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v1.2.2 — CFG-003 BIND-vs-URL DISTINCTION
+// ---------------------------------------------------------------------------
+//
+// The pre-1.2.2 CFG-003 rule fired on ANY quoted IP address. That
+// conflated two opposite things:
+//   - URL pointing at a hardcoded IP (real bug — production config leak)
+//   - Server BINDING to 127.0.0.1 (security best practice — refuses
+//     connections from any other IP)
+// DevNeural's audit had 4 false-positive CFG-003 findings on legitimate
+// `fastify.listen({ host: '127.0.0.1' })` and `server.listen(0,
+// '127.0.0.1', ...)` calls. The fix introduces an excludeLinePatterns
+// mechanism that lets a rule suppress findings whose surrounding line
+// matches one of a list of "this is the safe form" patterns.
+
+describe("v1.2.2 — CFG-003 distinguishes binding from URL", () => {
+  test("fastify.listen({ host: '127.0.0.1' }) — CFG-003 must NOT fire", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "src", "server.ts"),
+        `await fastify.listen({ port: 3000, host: '127.0.0.1' });`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "CFG-003"),
+        "CFG-003 must not fire on a fastify-style bind to 127.0.0.1"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("server.listen(0, '127.0.0.1', cb) — CFG-003 must NOT fire", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "src", "server.ts"),
+        `server.listen(0, '127.0.0.1', () => console.log('up'));`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "CFG-003"),
+        "CFG-003 must not fire on a positional listen(port, host, cb) bind"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("bind('127.0.0.1', port) — CFG-003 must NOT fire", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "src", "socket.ts"),
+        `socket.bind('127.0.0.1', 8080);`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "CFG-003"),
+        "CFG-003 must not fire on a bind() call"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("control: bare hardcoded IP assignment IS still flagged", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "src", "config.ts"),
+        `export const dbHost = "192.168.1.10";`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        hasFinding(report, "CFG-003"),
+        "CFG-003 must still fire on a bare IP config assignment (real config leak)"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

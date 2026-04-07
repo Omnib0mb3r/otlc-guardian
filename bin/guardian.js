@@ -112,7 +112,7 @@ ${c.bold}QUICK START${c.reset}
   3. In any project: guardian init
   4. guardian audit
 
-${c.dim}Version 1.2.1 · MIT License${c.reset}
+${c.dim}Version 1.2.2 · MIT License${c.reset}
 `);
 }
 
