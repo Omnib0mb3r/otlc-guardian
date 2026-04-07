@@ -285,6 +285,14 @@ Claude Code.
 - JSON output mode for CI integration
 - Works on any project — Python, TypeScript, JavaScript, mixed
 
+**Tagged-template SQL helper — parameterized queries without an ORM:**
+- `security/04-sql-guard.js` exports a zero-dep `sql\`\`` tag that auto-parameterizes
+  every `${}` interpolation into a `{ text, values }` object for `pg`, `mysql2`, and
+  `better-sqlite3`
+- OWASP-aligned — follows the Prepared Statements primary defense, not input filtering
+- Dynamic identifiers go through `sql.identifier(name, allowList)` with strict
+  allow-list validation; nested `sql\`\`` composition is supported
+
 **GitHub Actions workflow (if you push to GitHub):**
 - Secret scanning (Gitleaks)
 - Dependency vulnerability checks (`npm audit`, `pip-audit`)

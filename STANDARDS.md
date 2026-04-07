@@ -336,6 +336,12 @@ export const config = {
 - Every table has: `id` (cuid or UUID), `createdAt`, `updatedAt`
 - Add `@@index` for every column in WHERE, ORDER BY, and foreign keys
 - Cursor-based pagination only — offset pagination degrades at scale
+- **Zero-dep fallback for raw SQL:** if a project can't adopt Prisma, use the
+  `sql` tagged-template helper from `security/04-sql-guard.js`. It auto-parameterizes
+  every `${}` interpolation into a `{ text, values }` object compatible with `pg`,
+  `mysql2`, and `better-sqlite3`. Dynamic identifiers go through
+  `sql.identifier(name, allowList)` with strict allow-list validation — never
+  splice table or column names into query text by hand.
 
 ```typescript
 // Correct Prisma cursor pagination

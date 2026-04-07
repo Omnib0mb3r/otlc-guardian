@@ -7,7 +7,8 @@
   "exports": {
     ".":          "./security/01-injection-guard.js",
     "./security": "./security/02-code-security.js",
-    "./audit":    "./security/03-audit.js"
+    "./audit":    "./security/03-audit.js",
+    "./sql":      "./security/04-sql-guard.js"
   },
   "bin": {
     "guardian":       "./bin/guardian.js",
@@ -19,12 +20,13 @@
     "audit:json":   "node security/03-audit.js . --json",
     "scan":         "node bin/guardian.js scan",
     "check":        "node bin/guardian.js check",
-    "test":         "node tests/injection-guard.test.js && node tests/init.test.js && node tests/hook.test.js && node tests/agents-md.test.js && node tests/audit.test.js",
+    "test":         "node tests/injection-guard.test.js && node tests/init.test.js && node tests/hook.test.js && node tests/agents-md.test.js && node tests/audit.test.js && node tests/sql-guard.test.js",
     "test:guard":   "node tests/injection-guard.test.js",
     "test:init":    "node tests/init.test.js",
     "test:hook":    "node tests/hook.test.js",
     "test:agents":  "node tests/agents-md.test.js",
-    "test:audit":   "node tests/audit.test.js"
+    "test:audit":   "node tests/audit.test.js",
+    "test:sql":     "node tests/sql-guard.test.js"
   },
   "keywords": [
     "security",
