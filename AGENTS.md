@@ -1,5 +1,5 @@
 # OTLC Guardian — Universal Agent Instructions
-<!-- onthelevelconcepts.com · Version 1.2.2 -->
+<!-- onthelevelconcepts.com · Version 1.2.3 -->
 <!-- Read by any AI coding agent that honors the AGENTS.md convention: -->
 <!-- Codex CLI, Cursor, Aider, Continue, Windsurf, and others.          -->
 <!-- Claude Code reads CLAUDE.md instead — both files exist by design.  -->

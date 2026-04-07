@@ -4,6 +4,84 @@ All notable changes to OTLC Guardian. The format follows [Keep a Changelog](http
 
 ---
 
+## [1.2.3] — 2026-04-07
+
+Audit reporter readability rewrite. The pre-1.2.3 human-readable
+output of `guardian audit` repeated the rule header and full absolute
+path for every finding, even when the same rule fired on 14 different
+lines. Real-world DevNeural audit (56 findings before the 1.2.2
+noise-reduction fixes) was 200+ lines of console output that all
+looked the same. After 1.2.2 the same audit dropped to 14 findings,
+but the report still had 14 standalone blocks because the reporter
+hadn't been updated.
+
+This release rewrites the human reporter only — no rule changes, no
+detection changes, no JSON shape changes. The `--json` output that
+tooling and `tests/audit.test.js` consume is byte-identical to 1.2.2.
+Only the human-readable terminal output changed.
+
+### Changed
+
+- **Audit findings now group by rule, then by file.** Each severity
+  bucket lists each rule **once** with an occurrence count, then
+  underneath the rule lists each file **once** with all its line
+  numbers comma-separated. Snippets show once per file (the first
+  occurrence's content) instead of repeating for every line. Same
+  data, ~70% fewer lines on a non-trivial audit.
+
+- **File paths in the human report are now relative to the audit
+  target.** `c:\dev\Projects\DevNeural\06-notebooklm-integration\src\config.ts:13`
+  becomes `06-notebooklm-integration/src/config.ts:13`. Forward
+  slashes used regardless of OS, so a Windows audit copy-pastes
+  cleanly into a markdown PR comment.
+
+- **Trailing four-line `Summary:` block replaced with a one-line
+  status header at the top.** The pre-1.2.3 reporter ended every
+  multi-finding audit with:
+    ```
+       Summary:
+       CRITICAL : 0
+       HIGH     : 36
+       MEDIUM   : 11
+       LOW      : 9
+    ```
+  That information was already implied by the per-section headers
+  earlier in the report. Replaced with a single line directly under
+  the AUDIT COMPLETE banner:
+    ```
+    ⚠️  [OTLC GUARDIAN] AUDIT COMPLETE — 56 issue(s) found
+        0 CRITICAL · 36 HIGH · 11 MEDIUM · 9 LOW
+    ```
+
+### Real impact (DevNeural, 14 findings post-1.2.2)
+
+  Pre-1.2.3 reporter   : 14 standalone blocks, ~50 lines of output
+  Post-1.2.3 reporter  : 4 rule headers, ~25 lines of output
+
+The 4 rule headers correspond exactly to the 4 distinct rules that
+fired (`CFG-001`, `INJ-002`, `ERR-003`, `TS-001`). The reader sees
+"three categories of finding: a hardcoded URL, two innerHTML uses,
+seven console.log calls in CLI/server code, four `any` types in
+browser code" — at a glance, instead of having to mentally
+deduplicate 14 nearly-identical blocks.
+
+### Not changed
+
+- The `--json` output (used by `tests/audit.test.js` and CI). Same
+  structure, same field names, same severities. The 34 audit tests
+  pass byte-for-byte against the new build with no changes.
+- The detection rules. No rule was added, removed, or modified. The
+  same fixtures produce the same findings as 1.2.2.
+- The `[OTLC GUARDIAN] SAFETY AUDIT STARTING` header block (Target,
+  Rules, Files scanned, Exempt). Untouched.
+
+### Fixed
+
+- **Stale `Version 1.2.2` in `bin/guardian.js:121`** — bumped to
+  `1.2.3` alongside all the other version strings.
+
+---
+
 ## [1.2.2] — 2026-04-07
 
 Audit signal-to-noise improvements. Three real-world rule fixes that

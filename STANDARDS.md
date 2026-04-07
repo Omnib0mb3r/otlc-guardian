@@ -1,6 +1,6 @@
 # OTLC Guardian — Technology Standards
 # // stack standards · onthelevelconcepts.com
-# Version: 1.2.2
+# Version: 1.2.3
 #
 # READ THIS FILE ALONGSIDE CLAUDE.md
 #

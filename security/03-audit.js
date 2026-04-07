@@ -696,25 +696,92 @@ function runAudit(targetDir, options = {}) {
     if (allFindings.length === 0) {
       console.info(`✅ [OTLC GUARDIAN] AUDIT COMPLETE — No issues found.\n`);
     } else {
-      console.warn(`⚠️  [OTLC GUARDIAN] AUDIT COMPLETE — ${allFindings.length} issue(s) found\n`);
+      // Compact one-line severity summary instead of the trailing
+      // four-line "Summary:" block the pre-1.2.3 reporter printed
+      // after the findings list. Uses middle-dot separators so the
+      // four counts read as a single status line.
+      const summaryLine =
+        `${bySeverity.CRITICAL.length} CRITICAL · ` +
+        `${bySeverity.HIGH.length} HIGH · ` +
+        `${bySeverity.MEDIUM.length} MEDIUM · ` +
+        `${bySeverity.LOW.length} LOW`;
 
+      console.warn(`⚠️  [OTLC GUARDIAN] AUDIT COMPLETE — ${allFindings.length} issue(s) found`);
+      console.warn(`    ${summaryLine}\n`);
+
+      // Layout per severity bucket:
+      //
+      //   ICON SEVERITY (count)
+      //
+      //     [RULE-ID] description · N occurrence(s)
+      //       relative/path/to/file.ts:12, 34, 56
+      //         offending line snippet (first occurrence on that file)
+      //       relative/path/to/another/file.ts:9
+      //         offending line snippet
+      //
+      //     [NEXT-RULE] ...
+      //
+      // The pre-1.2.3 layout repeated `[CFG-001] Hardcoded localhost
+      // URL` 14 times in a row when the same rule fired on 14 lines,
+      // each with a full absolute path. Real-world DevNeural audit
+      // (56 findings) was over 200 lines of console output that all
+      // looked the same. The grouping below collapses that to one
+      // header per rule + one line per file + one snippet per file,
+      // with relative paths. Same DevNeural audit now fits in ~30
+      // lines that you can actually scan.
       for (const [severity, findings] of Object.entries(bySeverity)) {
         if (findings.length === 0) continue;
         const icon = severity === "CRITICAL" ? "🚨" : severity === "HIGH" ? "⚠️ " : severity === "MEDIUM" ? "🔶" : "🔵";
-        console.warn(`${icon} ${severity} (${findings.length})`);
-        findings.forEach((f) => {
-          const loc = f.line ? `${f.file}:${f.line}` : f.file;
-          console.warn(`   [${f.rule.id}] ${f.rule.description}`);
-          console.warn(`   → ${loc}`);
-          if (f.content) console.warn(`   → ${f.content}\n`);
-        });
-      }
+        console.warn(`${icon} ${severity} (${findings.length})\n`);
 
-      console.warn(`\n   Summary:`);
-      console.warn(`   CRITICAL : ${bySeverity.CRITICAL.length}`);
-      console.warn(`   HIGH     : ${bySeverity.HIGH.length}`);
-      console.warn(`   MEDIUM   : ${bySeverity.MEDIUM.length}`);
-      console.warn(`   LOW      : ${bySeverity.LOW.length}\n`);
+        // Group this severity's findings by rule ID. Map preserves
+        // insertion order so rules appear in the order they were
+        // first encountered in the AUDIT_RULES list.
+        const byRule = new Map();
+        for (const f of findings) {
+          if (!byRule.has(f.rule.id)) {
+            byRule.set(f.rule.id, { rule: f.rule, items: [] });
+          }
+          byRule.get(f.rule.id).items.push(f);
+        }
+
+        for (const { rule, items } of byRule.values()) {
+          const occLabel = items.length === 1 ? "1 occurrence" : `${items.length} occurrences`;
+          console.warn(`   [${rule.id}] ${rule.description} · ${occLabel}`);
+
+          // Within a rule, group findings by the file they hit.
+          // Multiple line numbers on the same file collapse to a
+          // single comma-separated list (`file.ts:7, 12, 34`) with
+          // the first finding's snippet shown once underneath as
+          // context — repeating the snippet for every line was the
+          // visual mush the pre-1.2.3 reporter produced.
+          const byFile = new Map();
+          for (const f of items) {
+            if (!byFile.has(f.file)) byFile.set(f.file, []);
+            byFile.get(f.file).push(f);
+          }
+
+          for (const [file, fileItems] of byFile) {
+            const relFile = path.relative(rootDir, file).replace(/\\/g, "/") || file;
+            const lineNumbers = fileItems
+              .map((f) => f.line)
+              .filter((n) => typeof n === "number")
+              .sort((a, b) => a - b);
+            const lineSuffix = lineNumbers.length > 0
+              ? `:${lineNumbers.join(", ")}`
+              : "";
+            console.warn(`     ${relFile}${lineSuffix}`);
+
+            // First non-empty snippet for this file, indented one
+            // step deeper than the file path. Rules without snippets
+            // (e.g. DEP-001 which is project-level) print no body.
+            const snippet = fileItems.find((f) => f.content)?.content;
+            if (snippet) console.warn(`       ${snippet}`);
+          }
+
+          console.warn(""); // blank line between rules within a severity
+        }
+      }
     }
   }
 
