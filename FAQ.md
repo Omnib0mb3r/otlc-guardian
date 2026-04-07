@@ -196,6 +196,29 @@ If you encounter a legitimate false positive, you can:
 
 ---
 
+**Is the audit-exempt marker a vulnerability? Can it be exploited?**
+
+Short answer: **no, but it's a controlled trust mechanism worth being explicit about.**
+
+There are two ways to exempt a file from `guardian audit` scanning:
+
+1. **Per-file marker** — drop `otlc-guardian:audit-exempt` into any file's header comment.
+2. **Central allowlist** — add an entry to `security/.audit-allowlist` with a required `# reason: ...` field.
+
+For an attacker to abuse either mechanism, they need write access to your repository. If they have that, they can already do strictly worse things — modify the audit script itself, modify the patterns, add backdoors, change the CI workflow to skip the audit entirely. The marker is one cell on a very long list of trust-based mechanisms.
+
+What Guardian ships to make any abuse **immediately visible**:
+
+- **Allowlist takes precedence over the marker.** A file in both is reported as `[allowlist]`, the more reviewable mechanism.
+- **The allowlist requires a reason field.** Lines without `# reason: ...` are loudly rejected at scan time. No silent additions.
+- **Every audit run prints the exemption summary.** The count *and* the full list of exempted files appears before any findings, so unexpected growth is impossible to miss.
+- **CI writes the exemption count to the GitHub Actions step summary.** Reviewers see it from the Actions tab without scrolling through logs.
+- **CODEOWNERS can require security review** of any change to `security/.audit-allowlist`, `.claude/hooks/`, or the pattern registry. Guardian ships a `.github/CODEOWNERS` template you can adapt.
+
+The honest framing: **the marker is a trust mechanism, not a security barrier.** Trust mechanisms are not vulnerabilities — they are the mechanism by which legitimate use cases get to coexist with security tooling. Guardian makes the trust visible (counts printed every run, allowlist requires reasons, CODEOWNERS gates the diff) so abuse cannot hide. If you find a way to exempt a file that does **not** show up in the summary or the allowlist, that **is** a Guardian security issue — please report it via [SECURITY.md](SECURITY.md).
+
+---
+
 **Can I add my own injection patterns?**
 
 Yes. Open `security/01-injection-guard.js` and add entries to `INJECTION_PATTERNS`:

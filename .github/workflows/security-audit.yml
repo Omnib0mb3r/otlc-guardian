@@ -46,7 +46,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- Files exempted from scanning: **$EXEMPT**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "If this number is unexpected, review security/.audit-allowlist and any files containing the otlc-guardian:audit-exempt marker." >> $GITHUB_STEP_SUMMARY
+          echo "If this number is unexpected, review security/.audit-allowlist and any files containing the per-file exempt marker." >> $GITHUB_STEP_SUMMARY
 
       - name: Check for secrets with Gitleaks
         uses: gitleaks/gitleaks-action@v2

@@ -50,29 +50,39 @@ That's it. Open Claude Code in your project — it reads the Guardian files auto
 
 ---
 
-## The Four Commands
+## The Six Commands
 
-Once installed, you have four commands. Here's when to use each one:
+Once installed, you have six commands:
 
-**`guardian init`** — Run this once inside each project you want Guardian in.
+**`guardian init`** — Run once inside each project you want Guardian in.
 ```bash
 cd /your/project
 guardian init
 ```
 
-**`guardian audit`** — Run this to scan your project for security and quality problems. Use it regularly.
+**`guardian update`** — Re-merge the latest Guardian files into an existing project. Same as `init` (merge-safe, idempotent), but the natural verb after pulling a new release.
+```bash
+guardian update
+```
+
+**`guardian audit`** — Scan your project for security and quality problems. Run regularly.
 ```bash
 guardian audit
 ```
 
-**`guardian scan`** — Run this to test a specific string for prompt injection. Useful during development.
+**`guardian scan`** — Test a specific string for prompt injection. Useful during development.
 ```bash
 guardian scan "some text you want to check"
 ```
 
-**`guardian check`** — Run this if something isn't working. Tells you exactly what's missing.
+**`guardian check`** — Verify Guardian is correctly installed. Includes a hook smoke test.
 ```bash
 guardian check
+```
+
+**`guardian list-watched`** — Print the effective hook watch list for the current project. Useful for debugging when the hook doesn't fire (or fires unexpectedly).
+```bash
+guardian list-watched
 ```
 
 ---
@@ -88,15 +98,22 @@ guardian check
 - Flags when it's about to use a junior-level library and switches to the right one
 
 **Your app gets runtime protection:**
-- Prompt injection scanner — 28 patterns including Unicode bypass attacks
+- Prompt injection scanner — 28 patterns including Unicode bypass attacks (NFKC normalization, invisible-character stripping, base64/URL decoding)
 - Output scanner — catches secrets leaking in AI responses
 - Rate limiter, secure headers, structured logger, health check endpoint
 - Safety audit CLI — scan any codebase for hardcoded secrets, silent errors, bad patterns
+
+**Two Claude Code hooks installed automatically (advisory only — never block):**
+- **PreToolUse** scans every Write/Edit on a wide default watch list — `.planning/`, `.gsd/`, `.cursor/`, `.continue/`, `.aider/`, `.windsurf/`, every `*/memory/` directory, plus `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursorrules`, `.windsurfrules`, `MEMORY.md`, `copilot-instructions.md`, and `.env*`. Patterns are imported from the runtime guard so they cannot drift.
+- **PostToolUse** scans every `WebFetch` and `WebSearch` response *before* Claude reasons about the content — catches indirect prompt injection at the entry point, the highest-leverage place to defend.
+- Configurable per project via `otlcGuardian.watchPaths` / `ignorePaths` in `.claude/settings.json`. Doc-exempt marker (`otlc-guardian:doc`) silences scanning for security spec files.
 
 **GitHub gets automatic scanning on every push:**
 - Secret scanning
 - Dependency vulnerability checks
 - Full codebase audit on every PR
+- All 90 unit tests run before the audit
+- Audit exemption count posted to the workflow summary for visibility
 
 ---
 
