@@ -87,6 +87,16 @@ ${c.bold}COMMANDS${c.reset}
     Copy Guardian files into the current project directory.
     Safe to run on existing projects — will not overwrite existing CLAUDE.md.
 
+  ${c.cyan}guardian update${c.reset}
+    Re-merge the latest Guardian files into the current project. Same
+    behavior as init — safe to re-run any time. Use this after pulling
+    a new Guardian release to refresh patterns and standards.
+
+  ${c.cyan}guardian list-watched${c.reset}
+    Print the effective hook watch list for this project. Shows the
+    default directories and files plus any customizations from
+    .claude/settings.json (otlcGuardian.watchPaths / ignorePaths).
+
   ${c.cyan}guardian help${c.reset}
     Show this help message.
 
@@ -150,6 +160,83 @@ async function runScan() {
     warn(`${violations.length} pattern(s) detected (${criticalCount} CRITICAL).`);
     log(`\n  Recommendation: Do not pass this input to an AI API without sanitization.`);
   }
+  log("");
+}
+
+// ---------------------------------------------------------------------------
+// LIST-WATCHED — print the effective hook watch list for the current project
+// ---------------------------------------------------------------------------
+//
+// Useful when you've customized otlcGuardian.watchPaths in settings.json
+// and want to see the effective list (defaults + your additions, minus
+// your ignores) without running the hook with a contrived payload.
+
+function runListWatched() {
+  log(`\n${c.bold}[OTLC GUARDIAN] EFFECTIVE HOOK WATCH LIST${c.reset}`);
+  log(`${c.dim}Project: ${CWD}${c.reset}\n`);
+
+  // Read otlcGuardian config from .claude/settings.json (if present)
+  const settingsPath = path.join(CWD, ".claude", "settings.json");
+  let userConfig = {};
+  if (existsSync(settingsPath)) {
+    try {
+      const raw = readFileSync(settingsPath, "utf8");
+      userConfig = JSON.parse(raw).otlcGuardian ?? {};
+    } catch {
+      warn(".claude/settings.json present but unreadable — showing defaults only");
+    }
+  } else {
+    warn("No .claude/settings.json found — showing defaults only");
+  }
+
+  const extendDefaults = userConfig.extendDefaults !== false;
+  const customWatch    = Array.isArray(userConfig.watchPaths)  ? userConfig.watchPaths  : [];
+  const customIgnore   = Array.isArray(userConfig.ignorePaths) ? userConfig.ignorePaths : [];
+
+  // These mirror the defaults in .claude/hooks/injection-guard-hook.mjs
+  const DEFAULT_DIRS = [
+    ".planning/", ".gsd/", ".plans/",
+    ".claude/", ".cursor/", ".continue/", ".aider/", ".windsurf/",
+    "/memory/",
+  ];
+  const DEFAULT_FILES = [
+    "CLAUDE.md", "AGENTS.md", "GEMINI.md",
+    ".cursorrules", ".windsurfrules", ".aider.conf.yml", "copilot-instructions.md",
+    "MEMORY.md", ".env", ".env.*",
+  ];
+
+  log(`${c.bold}Defaults:${c.reset} ${extendDefaults ? c.green + "ENABLED" : c.yellow + "DISABLED (extendDefaults: false)"}${c.reset}`);
+  log("");
+  log(`${c.bold}Watched directories${c.reset} ${c.dim}(any path containing these substrings)${c.reset}`);
+  if (extendDefaults) {
+    DEFAULT_DIRS.forEach((d) => log(`  ${c.green}✓${c.reset} ${d}`));
+  } else {
+    log(`  ${c.dim}(defaults disabled)${c.reset}`);
+  }
+  customWatch
+    .filter((p) => p.endsWith("/") || p.endsWith("\\"))
+    .forEach((d) => log(`  ${c.cyan}+${c.reset} ${d} ${c.dim}(custom)${c.reset}`));
+
+  log("");
+  log(`${c.bold}Watched files${c.reset} ${c.dim}(matched against the file basename)${c.reset}`);
+  if (extendDefaults) {
+    DEFAULT_FILES.forEach((f) => log(`  ${c.green}✓${c.reset} ${f}`));
+  } else {
+    log(`  ${c.dim}(defaults disabled)${c.reset}`);
+  }
+  customWatch
+    .filter((p) => !(p.endsWith("/") || p.endsWith("\\")))
+    .forEach((f) => log(`  ${c.cyan}+${c.reset} ${f} ${c.dim}(custom)${c.reset}`));
+
+  if (customIgnore.length > 0) {
+    log("");
+    log(`${c.bold}Ignored paths${c.reset}`);
+    customIgnore.forEach((p) => log(`  ${c.yellow}✗${c.reset} ${p}`));
+  }
+
+  log("");
+  log(`${c.bold}Doc-exempt marker${c.reset} — files containing ${c.cyan}otlc-guardian:doc${c.reset} are skipped`);
+  log(`${c.dim}Use this in security spec files that legitimately discuss injection patterns.${c.reset}`);
   log("");
 }
 
@@ -787,6 +874,17 @@ if (isMainModule) {
 
     case "init":
       runInit();
+      break;
+
+    case "update":
+      // update is an alias for init — both are merge-safe and idempotent.
+      // Provided as a separate command because "update" is the natural verb
+      // when refreshing patterns after pulling a new Guardian release.
+      runInit();
+      break;
+
+    case "list-watched":
+      runListWatched();
       break;
 
     case "help":

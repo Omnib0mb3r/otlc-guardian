@@ -412,11 +412,26 @@ def make_fastapi_guard(field: str = "message", **guard_kwargs):
         @app.post("/api/v1/chat")
         async def chat(body: ChatRequest, _=Depends(guard)):
             ...
+
+    Note: FastAPI is imported lazily so this module remains importable
+    in projects that don't use FastAPI. The previous version had a
+    bug where the `request` parameter had no type annotation, so
+    FastAPI's dependency injection could not provide it. Calling the
+    dependency would raise an internal error from FastAPI before our
+    code ran. Fixed by adding the Request type hint and resolving the
+    fastapi import once at decorator-build time.
     """
-    async def dependency(request):
+    try:
         from fastapi import Request, HTTPException
+    except ImportError as e:
+        raise ImportError(
+            "make_fastapi_guard requires fastapi to be installed. "
+            "Run: pip install fastapi"
+        ) from e
+
+    async def dependency(request: Request):
         body = await request.json()
-        raw  = body.get(field, "")
+        raw  = body.get(field, "") if isinstance(body, dict) else ""
         try:
             guard_input(raw, context=f"{request.method} {request.url.path}", **guard_kwargs)
         except GuardianError:
@@ -427,6 +442,7 @@ def make_fastapi_guard(field: str = "message", **guard_kwargs):
                     "message": "Input rejected by security guard.",
                 },
             })
+
     return dependency
 
 
