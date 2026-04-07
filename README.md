@@ -209,7 +209,26 @@ git remote add upstream https://github.com/Omnib0mb3r/otlc-guardian.git
 git fetch upstream && git merge upstream/main
 ```
 
-When forking: update `package.json`, replace `onthelevelconcepts.com` in `CLAUDE.md` and `STANDARDS.md`, keep `security/` intact.
+### Minimal fork (rebrand only)
+
+If you're keeping Guardian's multi-agent posture and just want to rebrand:
+
+- Update `package.json` — `name`, `homepage`, `repository`, `bugs`
+- Replace `onthelevelconcepts.com` in `CLAUDE.md`, `AGENTS.md`, and `STANDARDS.md`
+- Replace `Omnib0mb3r/otlc-guardian` in `README.md` and `SETUP.md` install commands
+- Keep `security/` intact — don't modify the runtime guard unless you're adding patterns
+- Keep the `otlc-guardian:doc` and `otlc-guardian:audit-exempt` marker names intact, or your fork's markers won't match any downstream docs that reference them
+
+### Single-agent fork (e.g. Codex-only, Cursor-only)
+
+If you want a fork that's scoped to a single agent — say, a Codex-first template for your team — the work is bigger than a rebrand. Be honest with yourself about the effort before you start:
+
+- **Delete the Claude-specific tier.** Remove `CLAUDE.md`, `.claude/`, the `mergeClaudeSettings` call path in `bin/guardian.js`, the smoke test in `runCheck`, and the Claude Code row from the compatibility table. Update `runInit`'s "what was merged" output. Update tests in `tests/init.test.js` and `tests/hook.test.js` that assert Claude-specific behavior.
+- **Replace the hook layer with something your agent actually supports** — or drop it entirely and ship a behavior-only product. Guardian's PreToolUse / PostToolUse hooks rely on Claude Code's tool-call lifecycle; Codex, Cursor, Aider, Continue, and Windsurf don't expose an equivalent as of early 2026. A real replacement is a 1–2 day research-and-build effort at minimum, and it may not be possible at all depending on the agent. A behavior-only fork is the realistic path.
+- **Rewrite the value sections in README, SETUP, and FAQ.** Everything in "Tier 2 — Claude Code integrations" has to go. The compatibility table collapses to one row. The `guardian check` editor-coverage output needs to be simplified.
+- **Decide whether to rename files.** `CLAUDE.md` is meaningless in a Codex-only fork. You can delete it, or keep it as an alias that points at `AGENTS.md`. Test your choice against `bin/guardian.js` and the test suite.
+
+If the above feels like a lot, that's the honest signal: a single-agent fork is real engineering work, not a 10-minute rebrand. The multi-agent default is the path of least resistance for almost every use case.
 
 ---
 
