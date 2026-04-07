@@ -285,17 +285,107 @@ function smokeTestHook(hookPath) {
   }
 }
 
+// Build a per-editor coverage summary based on which Guardian artifacts
+// exist in the current project. This is what tells a Codex / Cursor / Aider
+// user "yes, Guardian is working for you — here's what you get and what
+// you don't." Before commit 4 of the multi-agent fix, runCheck only reported
+// on Claude-Code-specific artifacts and had nothing to say to anyone else.
+//
+// Return shape: an ordered array of { editor, status, detail } so the
+// printer can align columns and colorize status tokens independently.
+function editorCoverage(root) {
+  const hasClaudeMd  = existsSync(path.join(root, "CLAUDE.md"));
+  const hasAgentsMd  = existsSync(path.join(root, "AGENTS.md"));
+  const hasSettings  = existsSync(path.join(root, ".claude", "settings.json"));
+  const hasPreHook   = existsSync(path.join(root, ".claude", "hooks", "injection-guard-hook.mjs"));
+  const hasPostHook  = existsSync(path.join(root, ".claude", "hooks", "web-content-guard.mjs"));
+  const claudeFull   = hasClaudeMd && hasSettings && hasPreHook && hasPostHook;
+
+  // Every non-Claude agent in the "behavior-only" tier reads AGENTS.md.
+  // Codex CLI, Cursor, Aider, Continue, and Windsurf are the mainstream
+  // ones as of early 2026 — keep the list short and honest. Anything not
+  // in this list is not-yet-integrated, not "quietly supported."
+  const behaviorOnlyEditors = ["Codex CLI", "Cursor", "Aider", "Continue", "Windsurf"];
+
+  const rows = [];
+
+  // Claude Code row
+  if (claudeFull) {
+    rows.push({
+      editor: "Claude Code",
+      status: "FULL",
+      detail: "CLAUDE.md + PreToolUse/PostToolUse hooks + smoke test",
+    });
+  } else if (hasClaudeMd) {
+    rows.push({
+      editor: "Claude Code",
+      status: "PARTIAL",
+      detail: "CLAUDE.md present; hooks missing (run guardian init)",
+    });
+  } else {
+    rows.push({
+      editor: "Claude Code",
+      status: "DISABLED",
+      detail: "CLAUDE.md not found — Claude Code will not load project rules",
+    });
+  }
+
+  // All the behavior-only editors that key off AGENTS.md
+  for (const editor of behaviorOnlyEditors) {
+    if (hasAgentsMd) {
+      rows.push({
+        editor,
+        status: "BEHAVIOR-ONLY",
+        detail: "AGENTS.md + runtime guard + audit CLI (no hook integration)",
+      });
+    } else {
+      rows.push({
+        editor,
+        status: "DISABLED",
+        detail: "AGENTS.md not found — this agent will load no project rules",
+      });
+    }
+  }
+
+  return rows;
+}
+
+// Colorize a status token so the terminal output makes the coverage
+// story obvious at a glance. FULL green, BEHAVIOR-ONLY cyan, PARTIAL
+// yellow, DISABLED red.
+function colorStatus(status) {
+  switch (status) {
+    case "FULL":          return `${c.green}${status}${c.reset}`;
+    case "BEHAVIOR-ONLY": return `${c.cyan}${status}${c.reset}`;
+    case "PARTIAL":       return `${c.yellow}${status}${c.reset}`;
+    case "DISABLED":      return `${c.red}${status}${c.reset}`;
+    default:              return status;
+  }
+}
+
 function runCheck() {
   log(`\n${c.bold}[OTLC GUARDIAN] SETUP CHECK${c.reset}`);
   log(`${c.dim}Checking: ${CWD}${c.reset}\n`);
 
   const pythonProject = isPythonProject(CWD);
 
+  // CLAUDE.md and AGENTS.md are individually optional — but at least one
+  // must be present or the project has no behavior rules at all, which is
+  // the one failure mode runCheck should refuse to let slide. The
+  // "behavior file present" gate below enforces that jointly.
+  const hasClaudeMd = existsSync(path.join(CWD, "CLAUDE.md"));
+  const hasAgentsMd = existsSync(path.join(CWD, "AGENTS.md"));
+
   const checks = [
     {
-      label: "CLAUDE.md in project root",
+      label: "CLAUDE.md in project root (Claude Code behavior rules)",
       path: path.join(CWD, "CLAUDE.md"),
-      required: true,
+      required: false,
+    },
+    {
+      label: "AGENTS.md in project root (universal agent behavior rules)",
+      path: path.join(CWD, "AGENTS.md"),
+      required: false,
     },
     {
       label: "STANDARDS.md in project root",
@@ -385,6 +475,19 @@ function runCheck() {
     }
   }
 
+  // ── Behavior-file gate ──────────────────────────────────────────────
+  // CLAUDE.md and AGENTS.md are individually optional, but at least one
+  // MUST be present — without either, Guardian has no behavior layer to
+  // enforce and the install is broken. This gate fails the check the same
+  // way a missing "required" file would, but with a targeted error that
+  // explains the multi-agent model instead of just saying "file missing."
+  if (!hasClaudeMd && !hasAgentsMd) {
+    err(`MISSING (required): behavior file — neither CLAUDE.md nor AGENTS.md found`);
+    log(`     ${c.dim}Guardian needs at least one behavior file so your coding agent can read the rules.${c.reset}`);
+    log(`     ${c.dim}Run ${c.reset}${c.cyan}guardian init${c.dim} to populate both.${c.reset}`);
+    failed++;
+  }
+
   // ── Hook smoke test — only when the hook file is present ───────────
   const hookPath = path.join(CWD, ".claude", "hooks", "injection-guard-hook.mjs");
   if (existsSync(hookPath)) {
@@ -397,6 +500,27 @@ function runCheck() {
       warn(`Hook smoke test failed: ${result.reason}`);
       warnings++;
     }
+  }
+
+  // ── Editor coverage — what this install means for each agent ───────
+  // This is the bit that was missing before commit 4 of the multi-agent
+  // fix: runCheck validated Claude-only artifacts and then said "Guardian
+  // is correctly installed" even if a Codex / Cursor / Aider user had no
+  // AGENTS.md at all. Now every agent gets a row.
+  log(`\n${c.bold}Editor coverage${c.reset}`);
+  const rows = editorCoverage(CWD);
+  const editorColWidth = Math.max(...rows.map((r) => r.editor.length));
+  const statusColWidth = Math.max(...rows.map((r) => r.status.length));
+  for (const row of rows) {
+    const editorCol = row.editor.padEnd(editorColWidth, " ");
+    // Compute visible padding on the raw status BEFORE colorizing.
+    // Colorizing first then padding would pad inside the ANSI reset and
+    // break alignment; padding first then colorizing would stop the
+    // switch from matching because the padded string is not the literal
+    // status token any more. So: color the token, then append spaces.
+    const pad = " ".repeat(statusColWidth - row.status.length);
+    const statusCol = colorStatus(row.status) + pad;
+    log(`  ${editorCol}  ${statusCol}  ${c.dim}${row.detail}${c.reset}`);
   }
 
   log(`\n${c.bold}Results:${c.reset} ${passed} passed · ${warnings} warnings · ${failed} missing required`);
@@ -425,13 +549,33 @@ function writeFile(p, content) {
 }
 
 /**
- * Merge two Markdown files.
- * Guardian content is appended under a clearly labelled section header
- * so the user's existing content is 100% preserved above it.
- * Idempotent — won't append again if the Guardian section already exists.
+ * Merge (or create) a Markdown behavior file with Guardian content wrapped
+ * in an OTLC-GUARDIAN-START / OTLC-GUARDIAN-END marker block.
+ *
+ * Three cases, all idempotent:
+ *
+ *   1. Destination missing entirely           → write a fresh file with
+ *                                                Guardian content inside
+ *                                                the marker block
+ *   2. Destination exists, no marker yet      → preserve user content at
+ *                                                the top, append marker
+ *                                                block with Guardian
+ *                                                content below
+ *   3. Destination exists, marker present     → no-op (already sealed)
+ *
+ * Case 1 is the fix for a latent double-init bug: before this function
+ * handled missing destinations, runInit used copyFileSync for fresh
+ * files (which produced a marker-less copy) and then mergeMd on the
+ * next run would fail the marker check and append Guardian content a
+ * second time. Routing every behavior-file write through this single
+ * function means every call site gets idempotency for free.
+ *
+ * The Guardian content below the marker is byte-identical across cases
+ * 1 and 2 — the only difference is whether user content precedes it.
+ * That invariant is what makes double-init safe.
  */
 function mergeMd(existingPath, guardianSrcPath, label) {
-  const existing = readFile(existingPath);
+  const existing = readFile(existingPath);  // '' if file missing — readFile swallows ENOENT
   const incoming = readFile(guardianSrcPath);
   const marker   = `<!-- OTLC-GUARDIAN-START -->`;
 
@@ -440,9 +584,17 @@ function mergeMd(existingPath, guardianSrcPath, label) {
     return;
   }
 
+  const userContent    = existing.trimEnd();
+  const hasUserContent = userContent.length > 0;
+
+  // When there's no user content (fresh install), the marker block sits
+  // at the top of the file with no leading whitespace. When there IS
+  // user content, the marker is separated from it by one blank line.
+  // Either way the marker is guaranteed present on disk after this call,
+  // so the next mergeMd will take the early-return branch above.
   const merged =
-    existing.trimEnd() +
-    `\n\n${marker}\n` +
+    (hasUserContent ? userContent + `\n\n` : ``) +
+    `${marker}\n` +
     `---\n\n` +
     `<!-- The section below was added by OTLC Guardian (guardian init)     -->\n` +
     `<!-- Do not edit between the OTLC-GUARDIAN-START and END markers.      -->\n` +
@@ -451,7 +603,9 @@ function mergeMd(existingPath, guardianSrcPath, label) {
     `\n\n<!-- OTLC-GUARDIAN-END -->\n`;
 
   writeFile(existingPath, merged);
-  ok(`${label} — merged Guardian content into existing file`);
+  ok(hasUserContent
+    ? `${label} — merged Guardian content into existing file`
+    : `${label} — created with Guardian content (new file, marker-sealed)`);
 }
 
 /**
@@ -714,26 +868,43 @@ function runInit() {
   log(`${c.dim}Guardian source: ${ROOT}${c.reset}\n`);
 
   // ── 1. CLAUDE.md ─────────────────────────────────────────────────────────
+  // CLAUDE.md is the Claude-Code-specific behavior file. Claude Code reads
+  // it natively on every session. AGENTS.md (below) is the universal
+  // equivalent for every other agent. Both files coexist by design — see
+  // AGENTS.md's project intent note and the README value section for the
+  // honest multi-agent split.
+  //
+  // All three behavior files (CLAUDE.md, AGENTS.md, STANDARDS.md) go
+  // through mergeMd unconditionally. mergeMd handles the missing-file
+  // case by creating a marker-sealed fresh file, so a second init into
+  // the same directory is a guaranteed no-op. Routing every write
+  // through one function is what makes double-init idempotent — the
+  // prior "if existsSync then merge else copy" pattern silently broke
+  // that invariant for fresh installs.
   log(`${c.bold}── CLAUDE.md${c.reset}`);
-  const claudeDest = path.join(CWD, "CLAUDE.md");
-  const claudeSrc  = path.join(ROOT, "CLAUDE.md");
-  if (existsSync(claudeDest)) {
-    mergeMd(claudeDest, claudeSrc, "CLAUDE.md");
-  } else {
-    copyFileSync(claudeSrc, claudeDest);
-    ok("CLAUDE.md — copied (new file)");
-  }
+  mergeMd(
+    path.join(CWD, "CLAUDE.md"),
+    path.join(ROOT, "CLAUDE.md"),
+    "CLAUDE.md",
+  );
+
+  // ── 1b. AGENTS.md ────────────────────────────────────────────────────────
+  // Universal entry point for Codex CLI, Cursor, Aider, Continue, Windsurf
+  // and any other agent that honors the AGENTS.md convention.
+  log(`\n${c.bold}── AGENTS.md${c.reset}`);
+  mergeMd(
+    path.join(CWD, "AGENTS.md"),
+    path.join(ROOT, "AGENTS.md"),
+    "AGENTS.md",
+  );
 
   // ── 2. STANDARDS.md ──────────────────────────────────────────────────────
   log(`\n${c.bold}── STANDARDS.md${c.reset}`);
-  const standardsDest = path.join(CWD, "STANDARDS.md");
-  const standardsSrc  = path.join(ROOT, "STANDARDS.md");
-  if (existsSync(standardsDest)) {
-    mergeMd(standardsDest, standardsSrc, "STANDARDS.md");
-  } else {
-    copyFileSync(standardsSrc, standardsDest);
-    ok("STANDARDS.md — copied (new file)");
-  }
+  mergeMd(
+    path.join(CWD, "STANDARDS.md"),
+    path.join(ROOT, "STANDARDS.md"),
+    "STANDARDS.md",
+  );
 
   // ── 3. .gitignore ─────────────────────────────────────────────────────────
   log(`\n${c.bold}── .gitignore${c.reset}`);
@@ -803,16 +974,22 @@ function runInit() {
   );
 
   // ── DONE ──────────────────────────────────────────────────────────────────
+  // The "next steps" block is written to be editor-neutral. The only
+  // Claude-specific line (step 4) is phrased as "your agent reads…" with
+  // Claude Code called out explicitly as one concrete example rather than
+  // the only option. Users on Codex, Cursor, Aider, Continue, or Windsurf
+  // should feel addressed by this output, not ignored by it.
   log(`
 ${c.green}${c.bold}✅ Guardian initialized successfully.${c.reset}
 
 ${c.bold}What was merged / added:${c.reset}
-  • CLAUDE.md        — Guardian rules appended (your content preserved above)
+  • CLAUDE.md        — Claude-specific rules appended (your content preserved)
+  • AGENTS.md        — Universal agent rules appended (your content preserved)
   • STANDARDS.md     — Guardian stack appended (your content preserved above)
   • .gitignore       — Guardian entries appended (your entries untouched)
   • .env.example     — Guardian variables appended (yours untouched)
   • security/        — Files copied (existing files skipped)
-  • .claude/         — Hook merged into settings.json (your hooks untouched)
+  • .claude/         — Claude Code hooks merged into settings.json (Claude-only)
   • .github/         — Workflow files added (existing files skipped)
 
 ${c.bold}Next steps:${c.reset}
@@ -826,10 +1003,13 @@ ${c.bold}Next steps:${c.reset}
 
   3. ${c.cyan}guardian audit${c.reset}  — scan your project for existing issues
 
-  4. Start a Claude Code session — CLAUDE.md and STANDARDS.md
-     activate automatically on the next session
+  4. Start (or restart) your coding agent session. Behavior files are
+     re-read at session start:
+       • Claude Code reads ${c.cyan}CLAUDE.md${c.reset} and ${c.cyan}STANDARDS.md${c.reset}
+       • Codex CLI / Cursor / Aider / Continue / Windsurf read ${c.cyan}AGENTS.md${c.reset}
+         (which points at ${c.cyan}STANDARDS.md${c.reset} + ${c.cyan}CLAUDE.md${c.reset} for the full rules)
 
-${c.dim}Run guardian check at any time to verify your setup.${c.reset}
+${c.dim}Run ${c.reset}${c.cyan}guardian check${c.dim} at any time to verify your setup.${c.reset}
 `);
 }
 
@@ -849,6 +1029,7 @@ export {
   canonicalMatcher,
   findMatcherBlock,
   gitignorePathToken,
+  editorCoverage,
 };
 
 // ---------------------------------------------------------------------------

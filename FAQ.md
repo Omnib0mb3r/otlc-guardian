@@ -55,17 +55,30 @@ Developers building AI-powered applications who want:
 
 **Do I need to be an expert to use this?**
 
-No. The whole setup is one command: `guardian init`. The runtime guard is a single function call: `guardInput(userMessage)`. The Claude Code behavior files activate automatically once they're in your project root.
+No, but there's one honest asterisk. The file-copy part of setup is one command: `guardian init` drops `CLAUDE.md`, `AGENTS.md`, `STANDARDS.md`, `security/`, `.env.example`, and the merge-safe defaults into your project. The runtime guard is a single function call: `guardInput(userMessage)`.
 
-See `SETUP.md` for the full walkthrough — it takes about 10 minutes.
+Activation from there depends on which agent you use:
+
+- **Claude Code** — behavior files activate automatically on the next session. `.claude/settings.json` and both `PreToolUse` / `PostToolUse` hooks are also wired up by `guardian init` and fire from the next session forward. This is the "one command, walk away" path.
+- **Codex CLI, Cursor, Aider, Continue, Windsurf** — `guardian init` creates `AGENTS.md`, which these agents read at session start. You still restart your agent session after running init, same as with Claude. You don't get the two `PreToolUse` / `PostToolUse` hooks or the Claude-specific smoke test — those rely on Claude Code's tool-call lifecycle which other agents don't currently expose.
+
+So: yes, one command gets everything on disk. The hooks-and-smoke-test layer only activates inside Claude Code. `guardian check` will tell you exactly which tier your install is in — see the "Editor coverage" section it prints.
+
+See `SETUP.md` for the full walkthrough — about 10 minutes regardless of agent.
 
 ---
 
 **Does this only work with Claude Code?**
 
-The runtime security modules (`security/`) work in any Node.js or Python project regardless of what AI tools you used to build it.
+No — and this is the asterisk from the previous answer spelled out in full.
 
-`CLAUDE.md` and `STANDARDS.md` are read by Claude Code. If you use a different AI coding tool, you can adapt those files for that tool's configuration format, or reference them in a system prompt.
+Guardian has two tiers. **Tier 1 works in any project with any agent:** the runtime security modules (`security/`), the `guardian audit` CLI, the behavior rules in `AGENTS.md` / `CLAUDE.md` / `STANDARDS.md`, and the GitHub Actions workflow. All portable, all ship on every `guardian init`.
+
+**Tier 2 is Claude Code only:** the two advisory hooks (`PreToolUse` + `PostToolUse`) and the hook smoke test in `guardian check`. These live inside Claude Code's tool-call lifecycle, which no other agent exposes today.
+
+If you use Codex CLI, Cursor, Aider, Continue, or Windsurf, the agent reads `AGENTS.md` at session start and picks up the full behavior rules from there — `AGENTS.md` points at `STANDARDS.md` and `CLAUDE.md` for the complete ruleset. You get everything in Tier 1 and nothing in Tier 2. That's the most Guardian can honestly offer you today.
+
+See the agent compatibility table at the top of `README.md` for the per-agent breakdown.
 
 ---
 

@@ -19,10 +19,11 @@
     "audit:json":   "node security/03-audit.js . --json",
     "scan":         "node bin/guardian.js scan",
     "check":        "node bin/guardian.js check",
-    "test":         "node tests/injection-guard.test.js && node tests/init.test.js && node tests/hook.test.js",
+    "test":         "node tests/injection-guard.test.js && node tests/init.test.js && node tests/hook.test.js && node tests/agents-md.test.js",
     "test:guard":   "node tests/injection-guard.test.js",
     "test:init":    "node tests/init.test.js",
-    "test:hook":    "node tests/hook.test.js"
+    "test:hook":    "node tests/hook.test.js",
+    "test:agents":  "node tests/agents-md.test.js"
   },
   "keywords": [
     "security",
@@ -46,7 +47,7 @@
     "url": "https://github.com/Omnib0mb3r/otlc-guardian/issues"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {},
   "devDependencies": {}
