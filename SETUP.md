@@ -14,8 +14,16 @@ Confirm these are installed before starting:
 |------|----------------|--------------|
 | Node.js | 22 LTS or higher | `node --version` |
 | Git | Any recent version | `git --version` |
-| Claude Code | Latest | `claude --version` |
 | Python | 3.11+ (Python projects only) | `python --version` |
+| **A coding agent — at least one of:** | (any recent version) | |
+| &nbsp;&nbsp;• Claude Code | Latest | `claude --version` |
+| &nbsp;&nbsp;• Codex CLI | Latest | `codex --version` |
+| &nbsp;&nbsp;• Cursor | Latest | in-app `About` |
+| &nbsp;&nbsp;• Aider | Latest | `aider --version` |
+| &nbsp;&nbsp;• Continue | Latest | in-app `About` |
+| &nbsp;&nbsp;• Windsurf | Latest | in-app `About` |
+
+> Claude Code gets the full stack including the two `PreToolUse` / `PostToolUse` hooks. Every other agent gets the behavior rules from `AGENTS.md` and the portable runtime guard + audit CLI. See the agent compatibility table in `README.md` for the full breakdown.
 
 ---
 
@@ -88,13 +96,14 @@ guardian init
 
 | File / Folder | What happens |
 |---------------|-------------|
-| `CLAUDE.md` | Guardian rules **appended** below your existing content |
+| `CLAUDE.md` | Guardian rules **appended** below your existing content (Claude Code behavior file) |
+| `AGENTS.md` | Guardian rules **appended** below your existing content (universal behavior file for Codex CLI / Cursor / Aider / Continue / Windsurf) |
 | `STANDARDS.md` | Guardian stack **appended** below your existing content |
 | `.gitignore` | Guardian entries **appended** — only ones you don't already have |
 | `.env.example` | Guardian variables **appended** — only ones you don't already have |
-| `.claude/settings.json` | Guardian hook **merged** into your existing hooks config |
+| `.claude/settings.json` | Guardian hooks **merged** into your existing hooks config (Claude Code only) |
 | `security/` files | **Copied only if not already present** |
-| `.claude/hooks/` files | **Copied only if not already present** |
+| `.claude/hooks/` files | **Copied only if not already present** (Claude Code only) |
 | `.github/` files | **Copied only if not already present** |
 
 Running `guardian init` a second time is safe — it detects everything already in place and skips it. No duplicates, no broken config.
@@ -258,7 +267,14 @@ async def chat(body: ChatRequest, request: Request):
 
 ---
 
-## Step 6 — Understand the Two Hooks
+## Step 6 — Understand the Two Hooks (Claude Code only)
+
+> **Skip this step if you're not using Claude Code.** The two hooks below
+> are Claude-specific integrations that rely on Claude Code's `PreToolUse`
+> and `PostToolUse` tool-call lifecycle — there is no equivalent in Codex
+> CLI, Cursor, Aider, Continue, or Windsurf today. If you're on one of
+> those agents, you still get the full runtime guard and the audit CLI
+> (Tier 1 in the README). Jump to Step 7.
 
 Guardian installs two Claude Code hooks. They are advisory only — they
 **never block** a tool call, only surface a warning. Both are wired up
@@ -372,9 +388,13 @@ Fix all **CRITICAL** and **HIGH** findings before pushing to production.
 
 ---
 
-## Step 8 — Verify Claude Code is Reading the Standards
+## Step 8 — Verify Your Agent is Reading the Standards
 
-Open a Claude Code session in your project directory:
+The verification procedure depends on which agent you use. The goal in every
+case is the same: confirm the agent has read the behavior file at session
+start and can cite rules from it.
+
+### If you use Claude Code
 
 ```bash
 claude
@@ -385,24 +405,53 @@ Ask Claude:
 What standards are you following for this project?
 ```
 
-Claude should describe the rules from `CLAUDE.md` and the stack from `STANDARDS.md`. If it doesn't reference either file, verify both files are in the **project root** — not in a subdirectory.
+Claude should describe the rules from `CLAUDE.md` and the stack from `STANDARDS.md`. If it doesn't reference either file, verify both files are in the **project root** — not a subdirectory.
 
-**Test behavioral enforcement:**
+### If you use Codex CLI
+
+```bash
+codex
+```
+
+Ask:
+```
+What standards are you following for this project?
+```
+
+Codex should describe the rules from `AGENTS.md` (which points at `STANDARDS.md` and `CLAUDE.md`). If it doesn't, confirm `AGENTS.md` is in the **project root**. Run `guardian check` — the "Editor coverage" section will show whether `AGENTS.md` was found.
+
+### If you use Cursor, Aider, Continue, or Windsurf
+
+Open your agent's chat in the project and ask:
+```
+What project rules from AGENTS.md are you following?
+```
+
+The agent should cite rules from `AGENTS.md` — the no-silent-catch rule, the no-hardcoded-secrets rule, the self-audit checklist. Each agent reads `AGENTS.md` slightly differently (some at session start, some on-demand); if the answer is vague, paste the first paragraph of `AGENTS.md` into the chat once to prime it.
+
+### Behavioral enforcement — works the same in every agent
+
+Once you've confirmed the behavior file is loaded, test enforcement with
+these prompts. Every Guardian-aware agent should give the same answers:
 
 ```
 Show me how to fetch data in a React component.
 ```
-→ Claude should reach for TanStack Query, not raw `useEffect` + `fetch`.
+→ The agent should reach for TanStack Query, not raw `useEffect` + `fetch`.
 
 ```
 Add a catch block to this function.
 ```
-→ Claude should write a structured, logged error handler — not `catch (e) {}`.
+→ The agent should write a structured, logged error handler — not `catch (e) {}`.
 
 ```
 I need to store the user's auth token.
 ```
-→ Claude should reach for `httpOnly` cookies, not `localStorage`.
+→ The agent should reach for `httpOnly` cookies, not `localStorage`.
+
+If any of those go wrong, the agent isn't actually reading the behavior file
+yet. Restart the session and run `guardian check` to confirm Guardian thinks
+everything is in place.
 
 ---
 
