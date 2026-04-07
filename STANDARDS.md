@@ -150,7 +150,7 @@ project-root/
 ## PART 3 — NODE.JS / TYPESCRIPT STACK
 
 ### Runtime and Language
-- **Node.js 20 LTS** minimum — never use non-LTS versions in production
+- **Node.js 22 LTS** minimum — never use non-LTS versions in production
 - **TypeScript 5+** — always, no exceptions. JavaScript-only = immediate technical debt.
 
 ### TypeScript Configuration
@@ -606,14 +606,14 @@ export const apiClient = axios.create({
 - Never run as root inside a container
 
 ```dockerfile
-FROM node:20.11-alpine AS builder
+FROM node:22.11-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM node:20.11-alpine AS runner
+FROM node:22.11-alpine AS runner
 WORKDIR /app
 RUN addgroup -S app && adduser -S app -G app
 COPY --from=builder --chown=app:app /app/dist ./dist
@@ -840,9 +840,9 @@ distributed tracing stack.
 | Raw `useEffect` + `fetch` | TanStack Query | No caching, no dedup, no states |
 | `useState` per form field | React Hook Form | Doesn't scale, re-renders on each keystroke |
 | CSS-in-JS | Tailwind CSS | Runtime cost, larger bundles |
-| `node:latest` Docker | `node:20.11-alpine` | Reproducible, minimal attack surface |
+| `node:latest` Docker | `node:22.11-alpine` | Reproducible, minimal attack surface |
 | Raw string SQL | ORM / parameterized queries | SQL injection vector |
-| `node-fetch` | Native `fetch` (Node 18+) | Built-in since Node 18 |
+| `node-fetch` | Native `fetch` | Built-in to Node — no package needed |
 | Redux (new project) | Zustand + TanStack Query | 80% less boilerplate |
 | Promise without `.catch()` | Always handle rejections | Unhandled rejections crash Node |
 | Empty `catch (e) {}` | Log + rethrow or typed response | Silent failures hide bugs forever |

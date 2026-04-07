@@ -5,7 +5,7 @@
 Free and open source · MIT License · Built by [onthelevelconcepts.com](https://onthelevelconcepts.com)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-cyan.svg)](LICENSE)
-[![Node: 18+](https://img.shields.io/badge/Node-18%2B-green.svg)](https://nodejs.org)
+[![Node: 22+](https://img.shields.io/badge/Node-22%2B-green.svg)](https://nodejs.org)
 [![Version: 1.1.0](https://img.shields.io/badge/version-1.1.0-blue.svg)](package.json)
 
 ---
@@ -145,7 +145,7 @@ Run it twice — nothing changes the second time. It detects what's already ther
 
 ## Requirements
 
-- Node.js 18+
+- Node.js 22+
 - Python 3.11+ (Python module only)
 - Claude Code (for behavior enforcement)
 - GitHub (for CI/CD workflows)

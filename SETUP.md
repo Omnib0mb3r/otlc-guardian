@@ -12,7 +12,7 @@ Confirm these are installed before starting:
 
 | Tool | Minimum Version | How to Check |
 |------|----------------|--------------|
-| Node.js | 18 LTS or higher | `node --version` |
+| Node.js | 22 LTS or higher | `node --version` |
 | Git | Any recent version | `git --version` |
 | Claude Code | Latest | `claude --version` |
 | Python | 3.11+ (Python projects only) | `python --version` |
