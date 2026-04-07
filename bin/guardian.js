@@ -1002,6 +1002,7 @@ export {
   canonicalMatcher,
   findMatcherBlock,
   gitignorePathToken,
+  editorCoverage,
 };
 
 // ---------------------------------------------------------------------------

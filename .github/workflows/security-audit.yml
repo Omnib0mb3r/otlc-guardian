@@ -33,6 +33,7 @@ jobs:
           node tests/injection-guard.test.js
           if [ -f tests/init.test.js ]; then node tests/init.test.js; fi
           if [ -f tests/hook.test.js ]; then node tests/hook.test.js; fi
+          if [ -f tests/agents-md.test.js ]; then node tests/agents-md.test.js; fi
 
       - name: Run guardian check
         if: hashFiles('bin/guardian.js') != ''
