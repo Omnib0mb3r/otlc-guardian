@@ -329,9 +329,20 @@ function runAudit(targetDir, options = {}) {
   const { outputJson = false, failOnError = false } = options;
   const rootDir = path.resolve(targetDir);
 
-  console.info(`\n🔍 [OTLC GUARDIAN] SAFETY AUDIT STARTING`);
-  console.info(`    Target  : ${rootDir}`);
-  console.info(`    Rules   : ${AUDIT_RULES.filter((r) => r.pattern).length} pattern rules`);
+  // Status output routing: in JSON mode, status lines go to stderr so
+  // the consumer of stdout (e.g. `node ... --json > out.json` in CI)
+  // gets clean parseable JSON. In human mode, status lines go to stdout
+  // alongside the human-readable report. This is the standard Unix
+  // convention — diagnostic stream vs result stream — and it fixes the
+  // CI bug where the JSON file was getting "🔍 SAFETY AUDIT STARTING"
+  // text prepended to the actual JSON object.
+  const status = outputJson
+    ? (msg) => process.stderr.write(msg + "\n")
+    : (msg) => process.stdout.write(msg + "\n");
+
+  status(`\n🔍 [OTLC GUARDIAN] SAFETY AUDIT STARTING`);
+  status(`    Target  : ${rootDir}`);
+  status(`    Rules   : ${AUDIT_RULES.filter((r) => r.pattern).length} pattern rules`);
 
   // ── Load exemption state once, up front ──────────────────────────────
   const allowlist = loadAllowlist(rootDir);
@@ -364,20 +375,20 @@ function runAudit(targetDir, options = {}) {
 
   const exemptionState = { exemptPaths };
 
-  console.info(`    Files   : ${files.length} scanned`);
-  console.info(`    Exempt  : ${exemptPaths.size} (${exemptByMarker.length} marker, ${exemptByList.length} allowlist)`);
+  status(`    Files   : ${files.length} scanned`);
+  status(`    Exempt  : ${exemptPaths.size} (${exemptByMarker.length} marker, ${exemptByList.length} allowlist)`);
 
   // Visibility: print the exempt list every run, not just on issues.
   // If this list grows unexpectedly, you see it immediately.
-  if (exemptPaths.size > 0 && !outputJson) {
+  if (exemptPaths.size > 0) {
     if (exemptByMarker.length > 0) {
-      console.info(`    [marker] ${exemptByMarker.join(", ")}`);
+      status(`    [marker] ${exemptByMarker.join(", ")}`);
     }
     if (exemptByList.length > 0) {
-      console.info(`    [allowlist] ${exemptByList.join(", ")}`);
+      status(`    [allowlist] ${exemptByList.join(", ")}`);
     }
   }
-  console.info("");
+  status("");
 
   const allFindings = [];
 
