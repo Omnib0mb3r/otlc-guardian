@@ -13,6 +13,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # Full history is required for gitleaks to compute the diff
+          # range on pull_request events. Without this, the action
+          # tries to scan HEAD^..HEAD but the parent commit isn't in
+          # the shallow clone and the step fails with "unknown
+          # revision". Only matters on PR events; push events provide
+          # the before/after SHAs through the event payload directly.
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
