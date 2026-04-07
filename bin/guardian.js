@@ -296,61 +296,135 @@ function mergeMd(existingPath, guardianSrcPath, label) {
 }
 
 /**
- * Merge Guardian's Claude Code hook into an existing .claude/settings.json.
- * Reads the existing JSON, finds (or creates) the PreToolUse hook array,
- * and adds the Guardian hook entry only if it isn't already there.
- * Never removes or modifies existing hooks.
+ * Normalize a matcher string into a canonical sorted token form.
+ * "Write|Edit" and "Edit|Write" both become "Edit|Write" — so we can
+ * compare two matchers as sets without caring about order.
+ */
+function canonicalMatcher(matcher) {
+  return String(matcher ?? "")
+    .split("|")
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .sort()
+    .join("|");
+}
+
+/**
+ * Find an existing hook block in `arr` whose matcher (as a token set) is
+ * equal to `targetMatcher`. Returns the block or null. Used so we add
+ * Guardian's hook to the user's existing block instead of creating a
+ * duplicate "Write|Edit" alongside their "Edit|Write".
+ */
+function findMatcherBlock(arr, targetMatcher) {
+  const target = canonicalMatcher(targetMatcher);
+  return arr.find((b) => canonicalMatcher(b.matcher) === target) ?? null;
+}
+
+/**
+ * Merge Guardian's Claude Code hooks into an existing .claude/settings.json.
+ *
+ * Reads the existing JSON, then for each hook Guardian wants to register
+ * (PreToolUse + PostToolUse, multiple matchers each), finds or creates the
+ * matching block and appends Guardian's hook entry only if not already there.
+ *
+ * Safety contract:
+ *   - NEVER overwrites the user's file. If the existing JSON is invalid,
+ *     aborts with a clear error and tells the user to fix it. Refusing to
+ *     write something we cannot reason about is the only correct behavior.
+ *   - NEVER removes or modifies existing hooks.
+ *   - Matcher comparison is set-based (Write|Edit == Edit|Write), so users
+ *     who already have one of those don't end up with two parallel blocks.
+ *   - Idempotent — running a second time is a no-op.
  */
 function mergeClaudeSettings(existingPath, guardianSrcPath) {
-  const guardianHook = {
-    type:    "command",
-    command: "node .claude/hooks/injection-guard-hook.js",
-  };
+  // Hooks Guardian wants to register. Each entry: { event, matcher, command }
+  const GUARDIAN_HOOKS = [
+    {
+      event:   "PreToolUse",
+      matcher: "Write|Edit",
+      command: "node .claude/hooks/injection-guard-hook.mjs",
+    },
+    {
+      event:   "PostToolUse",
+      matcher: "WebFetch|WebSearch",
+      command: "node .claude/hooks/web-content-guard.mjs",
+    },
+  ];
 
-  let existing = {};
+  // Parse the user's settings — refuse to touch the file if we can't.
+  let existing;
   try {
     existing = JSON.parse(readFile(existingPath) || "{}");
-  } catch {
-    warn(".claude/settings.json exists but is invalid JSON — writing fresh copy");
-    copyFileSync(guardianSrcPath, existingPath);
-    ok(".claude/settings.json — replaced (was invalid JSON)");
+  } catch (parseErr) {
+    err(`.claude/settings.json — INVALID JSON, refusing to overwrite`);
+    err(`    ${parseErr.message}`);
+    err(`    Fix the JSON manually, then re-run guardian init.`);
+    err(`    A reference copy is at: ${guardianSrcPath}`);
+    throw new Error(".claude/settings.json could not be parsed; aborting init");
+  }
+
+  existing.hooks = existing.hooks ?? {};
+
+  let added = 0;
+  let already = 0;
+
+  for (const hook of GUARDIAN_HOOKS) {
+    existing.hooks[hook.event] = existing.hooks[hook.event] ?? [];
+    const eventArr = existing.hooks[hook.event];
+
+    // Find or create the matcher block (set-based comparison)
+    let block = findMatcherBlock(eventArr, hook.matcher);
+    if (!block) {
+      block = { matcher: hook.matcher, hooks: [] };
+      eventArr.push(block);
+    }
+    block.hooks = block.hooks ?? [];
+
+    // Skip if Guardian's hook command is already registered in this block
+    if (block.hooks.some((h) => h.command === hook.command)) {
+      already++;
+      continue;
+    }
+
+    block.hooks.push({ type: "command", command: hook.command });
+    added++;
+  }
+
+  if (added === 0) {
+    ok(`.claude/settings.json — all ${already} Guardian hook(s) already registered`);
     return;
   }
 
-  // Navigate / create the hook path
-  existing.hooks                  = existing.hooks ?? {};
-  existing.hooks.PreToolUse       = existing.hooks.PreToolUse ?? [];
-
-  // Find or create the Write|Edit matcher block
-  let matcherBlock = existing.hooks.PreToolUse.find(
-    (b) => b.matcher === "Write|Edit"
-  );
-
-  if (!matcherBlock) {
-    matcherBlock = { matcher: "Write|Edit", hooks: [] };
-    existing.hooks.PreToolUse.push(matcherBlock);
-  }
-
-  matcherBlock.hooks = matcherBlock.hooks ?? [];
-
-  // Check if Guardian hook already registered
-  const alreadyAdded = matcherBlock.hooks.some(
-    (h) => h.command === guardianHook.command
-  );
-
-  if (alreadyAdded) {
-    ok(".claude/settings.json — Guardian hook already registered");
-    return;
-  }
-
-  matcherBlock.hooks.push(guardianHook);
   writeFile(existingPath, JSON.stringify(existing, null, 2) + "\n");
-  ok(".claude/settings.json — Guardian hook merged into existing config");
+  ok(`.claude/settings.json — merged ${added} Guardian hook(s) into existing config`);
+}
+
+/**
+ * Strip an inline comment from a gitignore line and return the path token.
+ * Examples:
+ *   ".env # local secrets"   →  ".env"
+ *   "node_modules/"          →  "node_modules/"
+ *   "# pure comment"         →  ""        (entire line is a comment)
+ *   "  "                     →  ""        (blank)
+ *
+ * Note: gitignore syntax allows literal '#' at the start of a path only when
+ * escaped as '\#'. We do not currently round-trip escaped patterns — those
+ * are vanishingly rare. The pragmatic stripper below catches the common
+ * "path then trailing comment" case that produced the duplicate-line bug.
+ */
+function gitignorePathToken(line) {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith("#")) return "";
+  // Drop anything from the first ' #' onward, then trim trailing whitespace.
+  const hashIdx = trimmed.indexOf(" #");
+  return (hashIdx >= 0 ? trimmed.slice(0, hashIdx) : trimmed).trimEnd();
 }
 
 /**
  * Merge a .gitignore — appends Guardian's entries under a labelled block.
- * Idempotent. Never removes existing entries.
+ * Idempotent. Never removes existing entries. Inline-comment-aware so a
+ * user line like ".env # local secrets" correctly suppresses Guardian's
+ * own ".env" entry.
  */
 function mergeGitignore(existingPath, guardianSrcPath) {
   const existing = readFile(existingPath);
@@ -362,11 +436,19 @@ function mergeGitignore(existingPath, guardianSrcPath) {
     return;
   }
 
-  // Extract only the lines from Guardian's gitignore that aren't already present
-  const existingLines = new Set(existing.split("\n").map(l => l.trim()));
+  // Existing path tokens (with inline comments stripped) — used for dedupe.
+  const existingTokens = new Set(
+    existing.split("\n").map(gitignorePathToken).filter(Boolean)
+  );
+
+  // From Guardian's template, keep only lines whose path token isn't
+  // already covered by the user's gitignore. Comments and blanks are dropped.
   const newLines = incoming
     .split("\n")
-    .filter(l => l.trim() && !l.startsWith("#") && !existingLines.has(l.trim()));
+    .filter((l) => {
+      const token = gitignorePathToken(l);
+      return token && !existingTokens.has(token);
+    });
 
   if (newLines.length === 0) {
     ok(".gitignore — all Guardian entries already covered");
