@@ -205,9 +205,9 @@ Then run `guardian check` to confirm the install and see which coverage tier you
 
 ---
 
-## The Six Commands
+## The Seven Commands
 
-Once installed, you have six commands:
+Once installed, you have seven commands:
 
 **`guardian init`** — Run once inside each project you want Guardian in. Merge-safe and
 idempotent.
@@ -248,6 +248,18 @@ guardian check
 project. Useful when debugging why a file is (or isn't) being scanned by the hook.
 ```bash
 guardian list-watched
+```
+
+**`guardian uninstall`** — Surgically remove Guardian from a project. Marker-strips
+Guardian's content from merged files (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`,
+`STANDARDS.md`, `.gitignore`, `.env.example`, `.claude/settings.json`) while preserving
+every line the user wrote. Deletes pure-Guardian files only when they are byte-identical
+to the shipped template — user-modified copies are kept and reported as "customized".
+Never removes a file Guardian did not create. The symmetry contract is
+`init && uninstall == no-op` on a well-formed project, enforced by `tests/uninstall.test.js`.
+```bash
+guardian uninstall             # perform the uninstall
+guardian uninstall --dry-run   # preview actions without touching disk
 ```
 
 ---
