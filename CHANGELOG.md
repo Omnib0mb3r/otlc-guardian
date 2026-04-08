@@ -4,6 +4,129 @@ All notable changes to OTLC Guardian. The format follows [Keep a Changelog](http
 
 ---
 
+## [1.2.4] — 2026-04-08
+
+`DEP-001` false-positive fix. The pre-1.2.4 `DEP-001 — No health check
+endpoint found` rule fired on every project that didn't contain the
+substring `health` in any file. It was designed for HTTP services but
+had no project-shape detection, so every CLI tool, static site, library,
+npm package, code-generation skill, desktop app, and notebook produced
+a spurious `MEDIUM` finding telling the user to add a `/health`
+endpoint to a project that should never have one.
+
+Real-world audit testing across 12 projects on a developer machine
+showed 9 of them hitting exactly this false positive — they are not
+servers, so they do not have health endpoints, and that is correct.
+The 9 projects involved were CLIs, static sites, AutoLISP skill
+modules, and code-generation tools. None of them needed a health
+endpoint. The audit was telling them to add one anyway.
+
+This release adds a `looksLikeHttpServer(rootDir, files)` gate that
+runs in two stages:
+
+1. **Manifest check (fast path).** Inspects `package.json`,
+   `requirements.txt`, `pyproject.toml`, and `Pipfile` in the project
+   root for any known HTTP server framework dependency. The Node list
+   covers `express`, `fastify`, `koa`, `@hapi/hapi`, `restify`,
+   `@nestjs/core`, `polka`, `tinyhttp`, `connect`, `h3`, `hono`,
+   `@feathersjs/feathers`, `micro`, `sails`, `loopback`, and
+   `@adonisjs/core`. The Python list covers `fastapi`, `flask`,
+   `django`, `starlette`, `tornado`, `aiohttp`, `bottle`, `sanic`,
+   `quart`, `falcon`, `pyramid`, `cherrypy`, `masonite`, and
+   `litestar`. Both `dependencies` and `devDependencies` are checked,
+   so a project that uses express only in its dev tooling still
+   counts as a server shape.
+
+2. **Source-pattern fallback.** Only runs when the manifest check
+   comes back empty. Scans up to 150 source files (sorted shallow-
+   first so the project bootstrap is examined first) for known
+   listen-style call patterns: `app.listen(`, `server.listen(`,
+   `http.createServer(`, `fastify(`, `uvicorn.run(`, etc. Catches
+   single-file servers run via `tsx` / `bun` / `deno` that have no
+   manifest but are clearly listening on a port.
+
+DEP-001 only fires when both conditions hold: the project looks like
+an HTTP server AND no `health` substring is found in any source file.
+Non-server projects are left alone.
+
+The gate mirrors the design of `isPythonProject()` in
+`bin/guardian.js`, which only requires `injection_guard.py` when the
+project actually looks Python-shaped. Same principle: don't pester
+users about features their project type doesn't need.
+
+### Changed
+
+- **`security/03-audit.js`** — added `looksLikeHttpServer(rootDir, files)`
+  helper as a hoisted function declaration above `AUDIT_RULES`. Updated
+  `DEP-001`'s `checkFn` to gate on it. Updated the function-rule
+  invocation loop in `runAudit` to pass `rootDir` as the second
+  argument so future project-shape rules can use the same hook.
+
+- **`tests/audit.test.js`** — added 6 TDD tests for the new behavior:
+  positive (express + no health → fires), positive (fastapi + no
+  health → fires), negative (CLI project → does NOT fire), negative
+  (static site → does NOT fire), control (server WITH /health → does
+  NOT fire), positive edge (no manifest but `app.listen()` in source
+  → fires). Test count: 34 → 40, all green.
+
+### Real-world impact
+
+Re-audit of the same 12 projects from the 1.2.2 / 1.2.3 testing run:
+
+```
+Project                  pre-1.2.4      post-1.2.4    DEP-001 dropped
+DevNeural                14 findings    14 findings   (was already 0 — has /health)
+New-Letter-and-TikToks    1 finding      0 findings   yes
+omnibomber-site           1 finding      0 findings   yes
+autolisp-skill            1 finding      0 findings   yes
+blkbom                    1 finding      0 findings   yes
+Claude-Setup              1 finding      0 findings   yes
+conveyor-designer         1 finding      0 findings   yes
+conveyornum               1 finding      0 findings   yes
+devneural-projects        1 finding      0 findings   yes
+dev-template              1 finding      0 findings   yes
+Landmark40                1 finding      0 findings   yes
+skill-connections         1 finding      0 findings   yes
+```
+
+11 of 12 projects dropped from `MEDIUM: 1` to `MEDIUM: 0` — the exact
+predicted outcome. The 12th (DevNeural) was already at 0 because it
+has both a real server (`02-api-server/src/server.ts`) AND a real
+`/health` endpoint at `02-api-server/src/routes/graph.ts:9`, which is
+the correct happy path. The audit detector confirmed the monorepo
+shape via the source-pattern fallback (DevNeural has no root
+`package.json`) and then correctly suppressed the finding because the
+health endpoint exists.
+
+Guardian's own self-audit also benefits: pre-1.2.4 the audit would
+have correctly suppressed DEP-001 on the Guardian repo because some
+of its source files mention "health" in comments, but post-1.2.4 it's
+properly suppressed for the right reason (Guardian is a CLI, not an
+HTTP server, so the rule doesn't apply at all).
+
+### Not changed
+
+- The `--json` output shape. Field names, severities, and finding
+  structure are identical to 1.2.3. Tooling consuming the JSON output
+  needs no changes.
+- Any other rule. Only `DEP-001`'s gating changed; the underlying
+  "look for `health` substring" check is the same.
+- The two known auditor gaps deferred since 1.2.2 — `INJ-005` template
+  literal SQL with variable indirection, and `INJ-006` Python f-string
+  SQL with inner quoted literals. Still on the deferred list. See the
+  1.2.2 / 1.2.3 testing notes for the isolated test fixtures at
+  `c:/tmp/guardian-audit-fixture/sql-edges.{js,py}`.
+
+### Fixed
+
+- **Stale `Version 1.2.3` strings across the repo** — bumped to 1.2.4
+  in `package.json`, `bin/guardian.js` help footer, `README.md` badge,
+  `AGENTS.md`, `CLAUDE.md`, `STANDARDS.md`, `SETUP.md`, `FAQ.md`, and
+  `GEMINI.md`. This is the same lockstep-version-bump checklist used
+  in every prior 1.2.x patch release.
+
+---
+
 ## [1.2.3] — 2026-04-07
 
 Audit reporter readability rewrite. The pre-1.2.3 human-readable

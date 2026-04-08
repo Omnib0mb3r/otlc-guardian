@@ -1,5 +1,5 @@
 # OTLC Guardian — FAQ
-<!-- onthelevelconcepts.com · Version 1.2.3 -->
+<!-- onthelevelconcepts.com · Version 1.2.4 -->
 
 ---
 
@@ -438,4 +438,4 @@ The security patterns and standards evolve as new attack vectors are discovered 
 
 ---
 
-*OTLC Guardian · [onthelevelconcepts.com](https://onthelevelconcepts.com) · Version 1.2.3*
+*OTLC Guardian · [onthelevelconcepts.com](https://onthelevelconcepts.com) · Version 1.2.4*

@@ -802,6 +802,203 @@ describe("v1.2.2 — CFG-003 distinguishes binding from URL", () => {
 });
 
 // ---------------------------------------------------------------------------
+// v1.2.4 — DEP-001 GATED ON "LOOKS LIKE AN HTTP SERVER"
+// ---------------------------------------------------------------------------
+//
+// The pre-1.2.4 DEP-001 rule fired on any project that didn't contain the
+// substring "health" in any file. It was designed for HTTP services but had
+// no project-shape detection, so every CLI tool, static site, library, npm
+// package, code-generation skill, desktop app, and notebook produced a
+// spurious "No health check endpoint found" finding. Audit testing across
+// 12 real projects on the user's machine showed 9 of them hitting exactly
+// this false positive — they are not servers, so they do not have health
+// endpoints, and that is correct.
+//
+// The fix adds a `looksLikeHttpServer(rootDir, files)` gate that checks
+// package.json / requirements.txt / pyproject.toml for known HTTP server
+// frameworks AND scans source files for listen-pattern calls. DEP-001
+// only fires when both conditions hold: the project looks like an HTTP
+// server AND no health endpoint is found. Non-server projects are left
+// alone.
+
+describe("v1.2.4 — DEP-001 gated on HTTP server shape", () => {
+  // POSITIVE: a Node project with express in package.json and no /health
+  // endpoint must still trip DEP-001. This is the original use case of the
+  // rule and must not regress.
+  test("express in package.json, no /health — DEP-001 FIRES", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "my-api",
+          dependencies: { express: "^4.18.0" },
+        }),
+        "utf8"
+      );
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "src", "server.js"),
+        `import express from 'express';\n` +
+        `const app = express();\n` +
+        `app.get('/users', (req, res) => res.json([]));\n` +
+        `app.listen(3000);\n`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        hasFinding(report, "DEP-001"),
+        "DEP-001 must still fire on an express app that has no /health"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // POSITIVE: a Python project with fastapi in requirements.txt and no
+  // /health endpoint must trip DEP-001. Mirrors the Node case.
+  test("fastapi in requirements.txt, no /health — DEP-001 FIRES", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      writeFileSync(
+        path.join(dir, "requirements.txt"),
+        `fastapi==0.104.0\nuvicorn==0.24.0\n`,
+        "utf8"
+      );
+      mkdirSync(path.join(dir, "app"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "app", "main.py"),
+        `from fastapi import FastAPI\n` +
+        `app = FastAPI()\n` +
+        `@app.get('/items')\n` +
+        `def list_items(): return []\n`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        hasFinding(report, "DEP-001"),
+        "DEP-001 must fire on a FastAPI app that has no /health"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // NEGATIVE: a pure CLI project with no server framework must NOT trip
+  // DEP-001. This is the 9-of-12 false-positive case the fix exists for.
+  test("CLI project, no server framework — DEP-001 does NOT fire", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "my-cli",
+          bin: { "my-cli": "./bin/cli.js" },
+          dependencies: { chalk: "^5.0.0" },
+        }),
+        "utf8"
+      );
+      mkdirSync(path.join(dir, "bin"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "bin", "cli.js"),
+        `#!/usr/bin/env node\nimport chalk from 'chalk';\nconsole.log(chalk.green('hi'));\n`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "DEP-001"),
+        "DEP-001 must not fire on a CLI project that has no server framework"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // NEGATIVE: a project with no package.json, no requirements.txt, and no
+  // server-looking source files (e.g. a static site or a data/notebook dir)
+  // must NOT trip DEP-001.
+  test("static site — no manifest, no server code — DEP-001 does NOT fire", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      writeFileSync(
+        path.join(dir, "index.html"),
+        `<!doctype html><html><body><h1>hi</h1></body></html>`,
+        "utf8"
+      );
+      writeFileSync(
+        path.join(dir, "styles.css"),
+        `body { font-family: sans-serif; }`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "DEP-001"),
+        "DEP-001 must not fire on a static site with no server framework"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // CONTROL: a project that IS a server AND HAS a /health endpoint must
+  // NOT trip DEP-001. This is the existing happy path and must not regress.
+  test("express app WITH /health endpoint — DEP-001 does NOT fire", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "my-api",
+          dependencies: { express: "^4.18.0" },
+        }),
+        "utf8"
+      );
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "src", "server.js"),
+        `import express from 'express';\n` +
+        `const app = express();\n` +
+        `app.get('/health', (req, res) => res.json({ status: 'ok' }));\n` +
+        `app.listen(3000);\n`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "DEP-001"),
+        "DEP-001 must not fire on a server that has a /health endpoint"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // POSITIVE edge: no manifest at all, but source files contain
+  // app.listen(...) / server.listen(...) / createServer(...) — still
+  // counts as a server. This catches projects that bundle via tsx or
+  // run from source without a package.json (rare but real).
+  test("source contains app.listen() but no manifest — DEP-001 FIRES", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "src", "server.js"),
+        `import http from 'http';\n` +
+        `const server = http.createServer((req, res) => res.end('hi'));\n` +
+        `server.listen(3000);\n`,
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        hasFinding(report, "DEP-001"),
+        "DEP-001 must fire when source code clearly calls .listen() even without a manifest"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

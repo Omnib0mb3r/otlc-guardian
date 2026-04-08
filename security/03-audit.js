@@ -59,6 +59,178 @@ const TEST_FILE_EXCLUDES = [
 ];
 
 // ---------------------------------------------------------------------------
+// PROJECT SHAPE DETECTION — "does this project look like an HTTP server?"
+// ---------------------------------------------------------------------------
+//
+// Gate for DEP-001 (and any future deploy-shaped rules). Returns true only
+// when the project clearly has an HTTP server framework or clearly calls
+// a listen-style bootstrap in source.
+//
+// Pre-1.2.4 DEP-001 fired on every project that didn't contain the
+// substring "health" anywhere. That's correct for real HTTP services but
+// produces a spurious MEDIUM finding on every CLI tool, static site,
+// library, npm package, code-generation skill, desktop app, and notebook
+// — none of which should have a /health endpoint. Audit testing across 12
+// real projects on the user's machine showed 9 of them hitting exactly
+// this false positive.
+//
+// The detector runs in two stages so it's cheap on the common case:
+//
+//   1. MANIFEST CHECK — the fast path. Looks at package.json /
+//      requirements.txt / pyproject.toml / Pipfile in the project root
+//      for any known HTTP server framework dependency. 95% of real server
+//      projects are detectable this way with a few tens of bytes of I/O.
+//
+//   2. SOURCE-PATTERN CHECK — the fallback. Only runs when the manifest
+//      check comes back empty. Scans a capped sample of .js/.ts/.py
+//      source files for `.listen(`, `createServer(`, `fastify(`, etc.
+//      The source check exists because some projects (typically single-
+//      file servers run via tsx / bun / deno) have no manifest but are
+//      still clearly servers. The cap keeps the worst-case cost bounded
+//      on massive repos that happen not to have a manifest.
+//
+// This helper is a `function` declaration (hoisted), not a `const`, so
+// AUDIT_RULES below can reference it without tripping the temporal dead
+// zone. Same pattern as the TEST_FILE_EXCLUDES hoisting note above.
+
+// Known HTTP server frameworks. Conservative list — only frameworks whose
+// presence in a manifest unambiguously means the project listens on a
+// port. Client libraries (axios, got, undici) are deliberately NOT here.
+const HTTP_SERVER_FRAMEWORKS_JS = [
+  "express", "fastify", "koa", "@hapi/hapi", "hapi", "restify",
+  "@nestjs/core", "nest", "polka", "tinyhttp", "@tinyhttp/app",
+  "connect", "h3", "hono", "feathersjs", "@feathersjs/feathers",
+  "micro", "sails", "loopback", "adonisjs", "@adonisjs/core",
+];
+
+const HTTP_SERVER_FRAMEWORKS_PY = [
+  "fastapi", "flask", "django", "starlette", "tornado",
+  "aiohttp", "bottle", "sanic", "quart", "falcon", "pyramid",
+  "cherrypy", "masonite", "litestar",
+];
+
+// Source-file listen / createServer patterns. Anchored on a word boundary
+// so substrings inside comments / identifiers don't trigger, and wrapped
+// with `\s*\(` so we only match call sites. Kept tight so this is a
+// SECOND-chance signal — if a project has one of these, it's a server.
+const LISTEN_PATTERNS = [
+  /\b(?:app|server|fastify|instance)\.listen\s*\(/,
+  /\bhttp\.createServer\s*\(/,
+  /\bhttps\.createServer\s*\(/,
+  /\bnet\.createServer\s*\(/,
+  /\bcreateServer\s*\(/,                                      // hono / polka
+  /\bfastify\s*\(\s*[{)]/,                                    // const f = fastify({...})
+  /\bserver\.bind\s*\(/,                                      // raw net servers
+  /\buvicorn\.run\s*\(/,                                      // Python: uvicorn.run(app, ...)
+  /\bapp\.run\s*\(/,                                          // Python Flask: app.run(...)
+];
+
+// Cap on how many source files we scan for listen patterns in the
+// fallback check. 150 files is enough to catch any realistic "single-file
+// server" while keeping worst-case cost bounded for repos with thousands
+// of source files. We sort by filename length so shallow paths are
+// examined first — the bootstrap is almost always at the project root or
+// one level deep.
+const LISTEN_SCAN_FILE_CAP = 150;
+
+function looksLikeHttpServer(rootDir, files) {
+  // Stage 1 — manifest check (fast path)
+
+  // package.json: express, fastify, koa, etc. Check both `dependencies`
+  // and `devDependencies` — some projects put their web framework under
+  // devDependencies when it's only used during tests or tooling. Either
+  // way, if express is in the manifest it's a server shape.
+  const pkgPath = path.join(rootDir, "package.json");
+  if (fs.existsSync(pkgPath)) {
+    try {
+      const pkg  = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+      const deps = {
+        ...(pkg.dependencies ?? {}),
+        ...(pkg.devDependencies ?? {}),
+        ...(pkg.peerDependencies ?? {}),
+      };
+      for (const name of HTTP_SERVER_FRAMEWORKS_JS) {
+        if (deps[name]) return true;
+      }
+    } catch {
+      // Malformed package.json — fall through to source check. Not our
+      // job to surface JSON parse errors here; other tooling will.
+    }
+  }
+
+  // requirements.txt: fastapi, flask, django, etc. One package per line,
+  // optional version pin, comment lines start with #. Stripped to the
+  // bare package name then lowercased for comparison.
+  const reqPath = path.join(rootDir, "requirements.txt");
+  if (fs.existsSync(reqPath)) {
+    try {
+      const content = fs.readFileSync(reqPath, "utf8");
+      for (const rawLine of content.split("\n")) {
+        const line = rawLine.trim();
+        if (!line || line.startsWith("#")) continue;
+        // Strip version pins, extras, env markers: `fastapi[all]==0.104.0 ; python_version >= '3.8'`
+        const name = line.split(/[=<>!~;\s[]/)[0].toLowerCase();
+        if (HTTP_SERVER_FRAMEWORKS_PY.includes(name)) return true;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // pyproject.toml: substring-scan for each framework name. We don't pull
+  // in a TOML parser for a dependency-free project — a substring match on
+  // `"fastapi"` / `"flask"` etc. inside the dependencies table is reliable
+  // enough in practice. False positives would require someone to mention
+  // a framework name in a pure string context, which is rare.
+  const pyprojectPath = path.join(rootDir, "pyproject.toml");
+  if (fs.existsSync(pyprojectPath)) {
+    try {
+      const content = fs.readFileSync(pyprojectPath, "utf8").toLowerCase();
+      for (const name of HTTP_SERVER_FRAMEWORKS_PY) {
+        // Match `"fastapi"` or `fastapi =` (poetry and PEP 621 both used)
+        if (new RegExp(`["']${name}["']|\\b${name}\\s*[=~]`).test(content)) return true;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // Pipfile: same substring approach as pyproject.toml.
+  const pipfilePath = path.join(rootDir, "Pipfile");
+  if (fs.existsSync(pipfilePath)) {
+    try {
+      const content = fs.readFileSync(pipfilePath, "utf8").toLowerCase();
+      for (const name of HTTP_SERVER_FRAMEWORKS_PY) {
+        if (new RegExp(`["']${name}["']|\\b${name}\\s*=`).test(content)) return true;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // Stage 2 — source-pattern fallback (slow path, capped)
+  //
+  // Only runs when the manifest check came back empty. Handles the single-
+  // file-server / no-manifest case without paying for file I/O on every
+  // run of a normal manifest-having project.
+  const candidates = files
+    .filter((f) => /\.(?:js|mjs|cjs|ts|mts|cts|py)$/i.test(f))
+    .sort((a, b) => a.length - b.length) // shallow paths first
+    .slice(0, LISTEN_SCAN_FILE_CAP);
+
+  for (const file of candidates) {
+    let content;
+    try { content = fs.readFileSync(file, "utf8"); }
+    catch { continue; }
+    for (const re of LISTEN_PATTERNS) {
+      if (re.test(content)) return true;
+    }
+  }
+
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // AUDIT RULES
 // Each rule: { id, category, severity, description, pattern, fileTypes }
 // ---------------------------------------------------------------------------
@@ -310,12 +482,25 @@ const AUDIT_RULES = [
   },
 
   // --- DEPLOYMENT ---
+  //
+  // DEP-001 is gated on `looksLikeHttpServer()` so it only fires when the
+  // project actually has an HTTP server framework (express, fastify, koa,
+  // fastapi, flask, ...) or clearly calls `.listen(` / `createServer(` in
+  // source. Pre-1.2.4 the rule fired on every project without a "health"
+  // substring, which produced spurious findings on CLI tools, static
+  // sites, libraries, notebooks, and desktop apps — none of which should
+  // have a /health endpoint. The gate mirrors how `isPythonProject()` in
+  // bin/guardian.js only requires the Python injection module when the
+  // project actually looks Python-shaped. See 1.2.4 CHANGELOG entry.
   {
     id: "DEP-001", category: "Deployment", severity: "MEDIUM",
     description: "No health check endpoint found",
     pattern: null, // checked separately
     fileTypes: [],
-    checkFn: (files) => !files.some((f) => /health/.test(fs.readFileSync(f, "utf8").toLowerCase())),
+    checkFn: (files, rootDir) => {
+      if (!looksLikeHttpServer(rootDir, files)) return false;
+      return !files.some((f) => /health/.test(fs.readFileSync(f, "utf8").toLowerCase()));
+    },
   },
   {
     id: "DEP-002", category: "Deployment", severity: "LOW",
@@ -662,10 +847,13 @@ function runAudit(targetDir, options = {}) {
     }
   }
 
-  // Function-based rules
+  // Function-based rules. Signature: checkFn(files, rootDir). The rootDir
+  // argument was added in 1.2.4 so project-shape gates (e.g. DEP-001's
+  // looksLikeHttpServer check) can read root-level manifests. Existing
+  // rules that only need the file list (e.g. DEP-002) can ignore it.
   for (const rule of AUDIT_RULES) {
     if (!rule.checkFn) continue;
-    const triggered = rule.checkFn(files);
+    const triggered = rule.checkFn(files, rootDir);
     if (triggered) {
       allFindings.push({ file: targetDir, line: null, content: null, rule });
     }
