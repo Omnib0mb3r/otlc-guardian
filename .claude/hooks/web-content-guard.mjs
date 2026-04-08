@@ -2,7 +2,7 @@
 // ============================================================
 // OTLC GUARDIAN — Web Content Guard (PostToolUse)
 // // security · onthelevelconcepts.com
-// Version: 1.0.0
+// Version: 1.3.1
 // ============================================================
 //
 // Indirect prompt injection arrives via WebFetch and WebSearch results
@@ -12,15 +12,26 @@
 // the entry point is dramatically higher leverage than waiting until
 // it has been laundered through Claude's reasoning into a plan file.
 //
-// Triggered on: PostToolUse → WebFetch, WebSearch (and any other web
-// content tool registered in .claude/settings.json against this hook)
+// Triggered on: PostToolUse → WebFetch, WebSearch.
+//
+// Note: as of 1.3.1 the watched tool list is hardcoded to the four
+// canonical web tools (WebFetch, WebSearch, mcp__firecrawl__crawl,
+// mcp__exa__search). Pre-1.3.1 the docstring claimed "any web content
+// tool registered against this hook" but the code only ever consulted
+// the hardcoded set. Configurability is on the roadmap; until then,
+// this hook only fires on those four tool names. If you need to add
+// another web tool, fork-and-edit the WATCHED_TOOLS set below.
 //
 // Action: Advisory only — never blocks. The hook returns
 // `additionalContext` in the hook response so Claude sees a clear
 // in-band warning before proceeding to use the fetched content.
 //
-// Pattern source: imports directly from security/01-injection-guard.js
-// (single source of truth, drift-proof).
+// Scanner: imports `scan()` directly from security/01-injection-guard.js
+// (single source of truth — same patterns, same NFKC normalization,
+// same URL/base64 decode, same length cap). Pre-1.3.1 the hook
+// duplicated only the raw pattern walk and missed every encoded /
+// fullwidth / homoglyph payload that the runtime guard catches.
+// Hook/runtime parity is now enforced by importing the public scanner.
 // ============================================================
 
 import { existsSync } from "node:fs";
@@ -28,50 +39,69 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 // ---------------------------------------------------------------------------
-// PATTERN IMPORT
+// SCANNER IMPORT — single source of truth (1.3.1)
 // ---------------------------------------------------------------------------
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const guardModulePath = path.resolve(__dirname, "..", "..", "security", "01-injection-guard.js");
 
-let INJECTION_PATTERNS = [];
-const INVISIBLE_UNICODE_PATTERN = /[\u200B-\u200F\u2028-\u202F\uFEFF\u00AD]/;
+let scan = null;
 
 try {
   if (existsSync(guardModulePath)) {
     const mod = await import(pathToFileURL(guardModulePath).href);
-    INJECTION_PATTERNS = mod.INJECTION_PATTERNS ?? [];
+    scan = typeof mod.scan === "function" ? mod.scan : null;
   }
 } catch {
   process.exit(0);
 }
 
-if (INJECTION_PATTERNS.length === 0) process.exit(0);
+// If the main module is missing or `scan` isn't exported (older Guardian
+// install), exit silently. The runtime guards in security/* are the
+// primary defense; the hook is advisory.
+if (!scan) process.exit(0);
 
 // ---------------------------------------------------------------------------
-// SCANNER
+// WATCHED TOOLS
 // ---------------------------------------------------------------------------
 //
-// Web content can be huge. Cap the scan window so an oversized fetch
-// doesn't keep the hook busy. The first ~64 KB of fetched content is
-// where prompt injection payloads almost always sit (header, intro,
-// metadata) — the long tail is rarely the attack vector.
+// The exact set of tool_name values this hook will fire on. Adding a
+// new web-fetching tool to your environment? Edit this set. The hook
+// is intentionally NOT configurable via .claude/settings.json yet —
+// configurability is on the roadmap but the surface needs careful
+// thought to avoid users accidentally disabling the security default.
+
+const WATCHED_TOOLS = new Set([
+  "WebFetch",
+  "WebSearch",
+  "mcp__firecrawl__crawl",
+  "mcp__exa__search",
+]);
+
+// ---------------------------------------------------------------------------
+// SCANNER WRAPPER
+// ---------------------------------------------------------------------------
+//
+// Web content can be huge. Cap the scan window before handing it to
+// scan(); the first ~64 KB of fetched content is where prompt injection
+// payloads almost always sit (header, intro, metadata) — the long tail
+// is rarely the attack vector. scan() also has its own MAX_SCAN_LENGTH
+// cap (256 KB), but capping here first means we never send a 10 MB
+// fetch through the normalizer.
 
 const SCAN_BYTE_CAP = 65_536;
 
 function scanContent(text) {
   const window = text.length > SCAN_BYTE_CAP ? text.slice(0, SCAN_BYTE_CAP) : text;
-  const findings = [];
-  for (const { pattern, severity, id } of INJECTION_PATTERNS) {
-    if (pattern.test(window)) {
-      const m = window.match(pattern);
-      findings.push({ id, severity, matched: m ? m[0] : "" });
-    }
-  }
-  if (INVISIBLE_UNICODE_PATTERN.test(window)) {
-    findings.push({ id: "INJ-UNICODE", severity: "HIGH", matched: "invisible unicode characters" });
-  }
-  return findings;
+  // Use the runtime scanner so we get NFKC normalization, URL decode,
+  // base64 decode, and INJ-UNICODE detection — all the bypass defenses
+  // that the duplicated raw-pattern walk used to miss.
+  const { violations } = scan(window, "injection");
+  return violations.map((v) => ({
+    id:       v.id,
+    severity: v.severity,
+    matched:  v.matched,
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -121,9 +151,10 @@ process.stdin.on("end", () => {
     const data     = JSON.parse(input);
     const toolName = data.tool_name;
 
-    // Only scan recognized web tools — bail otherwise.
-    const watched = new Set(["WebFetch", "WebSearch", "mcp__firecrawl__crawl", "mcp__exa__search"]);
-    if (!watched.has(toolName)) process.exit(0);
+    // Only scan recognized web tools — bail otherwise. This list is
+    // hardcoded by design (see the docstring at the top of the file);
+    // adding a new tool requires editing this set in a fork.
+    if (!WATCHED_TOOLS.has(toolName)) process.exit(0);
 
     const text = extractText(data.tool_response).trim();
     if (!text) process.exit(0);

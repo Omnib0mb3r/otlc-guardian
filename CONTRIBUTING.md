@@ -9,8 +9,8 @@ Thanks for considering a contribution. Guardian is small enough that everything 
 ```bash
 git clone https://github.com/Omnib0mb3r/otlc-guardian.git
 cd otlc-guardian
-npm install -g .   # installs the guardian CLI
-npm test           # runs all 90 tests
+npm install -g .  # installs the guardian CLI
+npm test          # runs the full test suite (6 test files, 100+ assertions)
 guardian check    # verifies your install
 guardian audit    # scans the repo for issues
 ```

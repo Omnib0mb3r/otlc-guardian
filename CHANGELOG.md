@@ -4,6 +4,331 @@ All notable changes to OTLC Guardian. The format follows [Keep a Changelog](http
 
 ---
 
+## [1.3.1] — 2026-04-08
+
+Comprehensive pre-release adversarial review pass. Codex CLI was tasked
+with a hostile audit of the entire 1.3.0 release covering README clarity,
+CLI UX, hidden assumptions, audit-rule edge cases, hook/runtime parity,
+documentation consistency, and npm publish readiness. This release ships
+fixes for **every actionable finding** Codex returned that was safe to
+apply without changing the project's product positioning.
+
+The most important fix is the README uninstall data-loss bug — the
+README at line 380 was telling users to `rm -f CLAUDE.md AGENTS.md
+GEMINI.md STANDARDS.md`, which would destroy any project-specific rules
+the user wrote before running `guardian init`. This was the same bug
+already fixed in `SETUP.md` back in PR #4 but never propagated to the
+README. It is now removed and replaced with a marker-based manual
+procedure that links to the full SETUP instructions.
+
+This is a patch release. No breaking API changes for the runtime guard,
+the audit CLI, or the SQL helper. **One soft-breaking change** for
+Python FastAPI users — see SECURITY FIX #2 below.
+
+### Security fixes
+
+1. **Hook/runtime scanner parity (Codex HIGH #1).** Both Claude Code
+   hooks (`.claude/hooks/injection-guard-hook.mjs` and
+   `.claude/hooks/web-content-guard.mjs`) used to walk the raw
+   `INJECTION_PATTERNS` array directly, bypassing the runtime guard's
+   NFKC normalization, invisible-Unicode stripping, URL-decode, and
+   base64-decode passes. That meant a fullwidth-Unicode or `%`-encoded
+   prompt-injection payload would slip past the hooks even though
+   `guardInput()` (or any direct `scan()` call from the user's app)
+   would catch it. Both hooks now import the public `scan()` function
+   from `security/01-injection-guard.js` and call it directly. Hook
+   coverage is now byte-for-byte identical to runtime coverage; no
+   bypass class can defeat the hook without also defeating the runtime
+   guard. The pattern array is no longer duplicated across the hook
+   files at all.
+
+2. **FastAPI dependency now returns sanitized input (Codex HIGH #2).**
+   `make_fastapi_guard()` in `security/injection_guard.py` used to call
+   `guard_input()` and discard the sanitized return value. The Node
+   middleware (`injectionMiddleware()` in `01-injection-guard.js`)
+   correctly writes the sanitized value back into `req.body[field]`,
+   but the Python helper just relied on the side effect of raising on
+   critical violations. That meant non-blocking but sanitizable input
+   — for example a string with a zero-width-space bypass — would reach
+   the endpoint UNCHANGED in Python while being correctly sanitized in
+   Node. Fixed by capturing the `guard_input()` return value and
+   returning it from the dependency, so the endpoint receives the
+   sanitized version through `Depends()`.
+
+   **SOFT-BREAKING for Python FastAPI users:** if you were using the
+   helper as `_=Depends(guard)` to discard the return value, switch to
+   `clean_message: str = Depends(guard)` to receive the sanitized
+   string. The old form still works (the dependency still raises
+   `HTTPException` on critical violations) but it now silently
+   discards the sanitized output, leaving the unsanitized raw input
+   reachable via `body["message"]` if your endpoint reads it directly.
+   The new form is documented in the helper's docstring and in
+   `FAQ.md`.
+
+3. **Audit subdirectory scoping (Codex HIGH #3).** `guardian audit
+   ./src` was treating the scan target as the project root for both
+   the file walker AND the project-shape lookups. That meant manifest
+   checks (`looksLikeHttpServer()`) and the central `.audit-allowlist`
+   load both looked at `./src/package.json` and
+   `./src/security/.audit-allowlist`, neither of which exist. Result:
+   subdirectory audits silently disabled DEP-001 gating AND ignored
+   project-level exemptions, producing different findings than the
+   same audit run from the project root.
+
+   Fixed by adding a `findProjectRoot(scanDir)` helper that walks
+   upward from the scan target looking for project markers (`.git/`,
+   `package.json`, `requirements.txt`, `pyproject.toml`, `Pipfile`,
+   `security/.audit-allowlist`), capped at 8 levels deep. The audit
+   now distinguishes `scanRoot` (where the walker walks) from
+   `projectRoot` (where manifests, allowlists, and project-shape
+   lookups are read). The walker still walks the user's chosen scan
+   target; everything else consults the upward-walked project root.
+   Reported in the audit header as `Project : <path>` whenever the
+   two diverge.
+
+   Three new tests in `tests/audit.test.js` cover the contract: DEP-001
+   fires correctly when scanning a subdirectory of an express project,
+   does NOT fire when scanning a subdirectory of a CLI project, and
+   the project-root allowlist is honored when scanning a subdirectory.
+
+### Audit rule fixes
+
+4. **`INJ-005b`, `SEC-*`, `CFG-*`, `ERR-*`, `INJ-*`, `API-001`, `TS-001`
+   now scan modern JS module extensions (Codex HIGH #5).** Pre-1.3.1
+   most rules hardcoded `[".js", ".ts", ".jsx", ".tsx"]` and silently
+   missed `.mjs/.cjs/.mts/.cts` files. Modern Node projects (post-2020)
+   commonly use these extensions for explicit ESM/CommonJS module
+   declarations, and any rule that didn't include them was a silent
+   coverage gap. The 1.3.0 release fixed this for `INJ-005b` only;
+   1.3.1 applies the same fix to every JS/TS rule.
+
+   Fixed by introducing four centralized extension constants at the
+   top of `security/03-audit.js`:
+
+   - `JS_TS_EXTS` — every JS/TS module extension we scan (`.js`,
+     `.ts`, `.jsx`, `.tsx`, `.mjs`, `.cjs`, `.mts`, `.cts`)
+   - `JS_TS_PY_EXTS` — same plus `.py`
+   - `SECRET_FILE_EXTS` — JS/TS/Python plus the data-format extensions
+     where credentials commonly leak (`.env`, `.json`, `.yaml`, `.yml`)
+   - `TS_EXTS` — TypeScript-only (`.ts`, `.tsx`, `.mts`, `.cts`) for
+     `TS-001` (`any` type detection)
+
+   Every rule's `fileTypes` array now references one of these
+   constants instead of hardcoding its own list. New file-extension
+   support flows through the whole rule set automatically.
+
+### Documentation fixes
+
+5. **README uninstall instructions no longer destroy user data
+   (Codex CRITICAL #1).** The README at line 380 told users to
+   `rm -f CLAUDE.md AGENTS.md GEMINI.md STANDARDS.md` and
+   `rm -rf security/`. Both contradict Guardian's merge-safety
+   contract — `guardian init` appends Guardian content below
+   `<!-- OTLC-GUARDIAN-START -->` markers inside those files, and a
+   blanket `rm -f` would destroy every line the user wrote above the
+   marker. The same bug was already fixed in `SETUP.md` back in PR #4
+   but never propagated to the README until now.
+
+   Fixed by removing the dangerous block entirely and replacing it
+   with a marker-based manual procedure that links to the full
+   `SETUP.md § Uninstalling` walkthrough. README now calls the bug
+   out explicitly so users with old README copies in their cache
+   don't get caught by the obsolete instructions.
+
+6. **CI dependency-scan honesty (Codex HIGH #4).** `npm audit` and
+   `pip-audit` in `.github/workflows/security-audit.yml` run with
+   `continue-on-error: true`, meaning they report vulnerable
+   dependencies in the run log but do NOT fail the workflow. The
+   pre-1.3.1 README sold this as "Dependency vulnerability checks"
+   without the asterisk, which contradicted the STANDARDS.md OWASP
+   checklist (which says HIGH/CRITICAL findings should block release).
+   Fixed by:
+   - Adding inline workflow comments explaining the
+     advisory-only stance and the rationale (`npm audit` can flag a
+     fresh CVE before any fixed version exists, and a hard-fail gate
+     would brick PRs in that window).
+   - Updating README's "What you get" list to label each CI step as
+     either **blocking** or **advisory**.
+   - Adding a footnote to `STANDARDS.md § CI/CD` that says: the
+     standard is "block on HIGH/CRITICAL," but Guardian's own template
+     ships with "advisory only" as the default because it serves a
+     wide variety of project types — projects that want hard-fail
+     should remove `continue-on-error: true` from their fork.
+
+7. **Python parity overstated (Codex HIGH #7).** README was claiming
+   "Two languages (Node and Python) at parity" but only the injection
+   guard has a Python implementation; `02-code-security.js` (server
+   utilities), `03-audit.js` (the audit CLI), and `04-sql-guard.js`
+   (the SQL helper) are all Node-only. FAQ also pointed users at the
+   wrong path (`python/injection_guard.py` instead of
+   `security/injection_guard.py`) and instructed them to install
+   `structlog` even though the Python module uses stdlib `logging`.
+
+   Fixed by rewriting the "Layer 2 — The Runtime Security Layer"
+   section in README to label each component's language support
+   honestly:
+   - `01-injection-guard.js` / `injection_guard.py` — both Node and
+     Python at parity
+   - `02-code-security.js` — Node only
+   - `03-audit.js` — Node script that scans both Node AND Python
+     source
+   - `04-sql-guard.js` — Node only (Python equivalent on the roadmap)
+
+   The FAQ entry was rewritten to use the correct path
+   (`security/injection_guard.py`), explicitly say "do NOT install
+   structlog," and show the full FastAPI usage pattern with the new
+   `clean_message: str = Depends(guard)` form.
+
+8. **`SETUP.md` uninstall section updated for 1.1.1+ AGENTS.md/GEMINI.md
+   reality (Codex MEDIUM #1).** SETUP step 5 still listed `AGENTS.md`
+   and `GEMINI.md` under "files Guardian never creates" with a
+   "future release" note. That was true pre-1.1.1; both files have
+   been Guardian-managed since 1.1.1. Updated:
+   - Step 1 (un-merge) now lists `AGENTS.md` and `GEMINI.md` alongside
+     `CLAUDE.md` and `STANDARDS.md`.
+   - Step 5 (do not touch) now only lists files Guardian truly never
+     creates: `.cursorrules`, `.windsurfrules`, `.aider.conf.yml`,
+     `copilot-instructions.md`. The "future release" note is replaced
+     with an "updated 1.3.1" note flagging the move for users reading
+     older versions of the doc.
+
+9. **Stale rule counts in README (Codex MEDIUM #2).** README said
+   "23 rules in 1.1.1" in two places. The current count is 24
+   (INJ-005b was added in 1.3.0). Updated both references and added
+   a hint pointing users at `node bin/guardian.js help` for the
+   current count so future bumps don't strand the README.
+
+10. **`CONTRIBUTING.md` test count fix (Codex LOW #3).** Said `npm
+    test` runs "all 90 tests." Updated to "the full test suite (6
+    test files, 100+ assertions)." Stopped hardcoding numbers because
+    they always go stale.
+
+### CLI fixes
+
+11. **Web hook overclaim hardened (Codex MEDIUM #3).**
+    `web-content-guard.mjs` claimed to handle "any other web content
+    tool registered against this hook" but the code hardcoded four
+    tool names (`WebFetch`, `WebSearch`, `mcp__firecrawl__crawl`,
+    `mcp__exa__search`). The misleading comment is gone; the watched
+    set is now declared as a top-level `WATCHED_TOOLS` constant with
+    a clear comment explaining that adding a new tool requires
+    fork-and-edit. Configurability via `.claude/settings.json` is on
+    the roadmap but explicitly not in this release — the surface
+    needs careful thought to avoid users accidentally disabling the
+    security default.
+
+12. **`editorCoverage()` no longer reports false coverage for Gemini
+    CLI (Codex MEDIUM #4).** Pre-1.3.1, `runCheck()` reported Gemini
+    CLI as `BEHAVIOR-ONLY` whenever `GEMINI.md` existed, even if
+    `AGENTS.md` was missing. Since `GEMINI.md` is a pointer file
+    (it tells Gemini "read AGENTS.md and CLAUDE.md"), a missing
+    `AGENTS.md` means the pointer dangles and Gemini loads no
+    Guardian rules even though `GEMINI.md` exists. Now reports
+    `PARTIAL` with the message "GEMINI.md present but AGENTS.md
+    missing — pointer dangles, no rules loaded" in that case.
+
+13. **CLI color/emoji output is TTY-gated (Codex MEDIUM #5).** Pre-1.3.1
+    every `guardian` command emitted unconditional ANSI escape
+    sequences and emoji glyphs (✅, ⚠️, ❌). That polluted redirected
+    output (`guardian audit > findings.txt` would have raw escape
+    codes inside the file) and broke some non-ANSI Windows terminals.
+    Now:
+    - ANSI sequences are silenced when `process.stdout.isTTY` (or
+      `process.stderr.isTTY` for warn/err) is false
+    - The `NO_COLOR=1` environment variable is honored (per the
+      no-color.org convention)
+    - A new `--no-color` flag forces plain output regardless of TTY
+      state, useful in CI logs and pipes
+    - Emoji glyphs are replaced with ASCII tags (`[ok]`, `[warn]`,
+      `[err]`) when colors are off, so a UTF-8-impaired Windows
+      console doesn't render mojibake
+    - The `--no-color` flag is stripped from `process.argv` before
+      the per-command parsers see it, so it doesn't accidentally
+      become a positional argument
+
+14. **`guardian scan` accepts piped stdin (Codex LOW #1).** Pre-1.3.1
+    `guardian scan` only accepted positional argv text, which made
+    it useless in pipelines. Now supports all of:
+    ```bash
+    guardian scan "ignore all previous instructions"   # positional
+    echo "untrusted text" | guardian scan              # piped stdin
+    guardian scan < input.txt                          # stdin redirect
+    ```
+    Stdin reads are gated on `!process.stdin.isTTY` so an interactive
+    `guardian scan` with no args still shows usage instead of hanging
+    on a blank stdin. A 5-second timeout protects against pathological
+    pipe stalls.
+
+### Package metadata
+
+15. **`package.json` description and keywords no longer Claude-centric
+    (Codex LOW #2).** Updated description to "Production-grade AI
+    security guardrails for any AI coding agent (Claude Code, Codex,
+    Cursor, Aider, Continue, Windsurf, Gemini)..." and expanded
+    keywords from 9 to 22 entries — added agent names (`claude-code`,
+    `codex`, `cursor`, `aider`, `continue`, `windsurf`, `gemini`,
+    `agents-md`) and feature names (`audit`, `audit-cli`,
+    `sql-injection`, `parameterized-queries`, `secrets-detection`).
+    Better discoverability via `npm search` and Google.
+
+16. **Internal version headers aligned to 1.3.1 (Codex LOW #4).**
+    Pre-1.3.1, internal file version headers ranged from `1.0.0` to
+    `2.0.0` (the PreToolUse hook claimed 2.0.0 for some reason)
+    while the package was at 1.3.0. They're now all at 1.3.1, in
+    lockstep with `package.json`. The test files keep their per-test
+    version headers because those legitimately document "what
+    version added this test."
+
+### Verification
+
+- `npm test` — all 6 test files green: injection-guard, init, hook,
+  agents-md, **audit 52/52** (up from 48/48 in 1.3.0 — added 4 new
+  tests for the projectRoot/scanRoot fix), sql-guard 40/40
+- `node security/03-audit.js .` — `No issues found` on the Guardian
+  repo. **24 rules** (unchanged — no new rules in 1.3.1, only fixes
+  to existing rules' file-type coverage).
+- `node bin/guardian.js check` — 15 passed, 0 warnings, 0 missing
+- `node bin/guardian.js help` — footer shows `Version 1.3.1`
+- `guardian audit` and `guardian scan` exercised in TTY, piped, and
+  `--no-color` modes; output adapts correctly in all three.
+- 12-project real-world re-audit — no false positives from any of the
+  rule changes. Same finding totals as 1.3.0.
+
+### Things explicitly NOT changed in this release
+
+These were findings or considerations in the Codex review that the
+assistant deliberately did not act on without user input. Each is on
+the roadmap but requires a product decision the user has not made yet.
+
+- **CI dependency scans switching from advisory to blocking
+  (Codex HIGH #4 second half).** Codex flagged this as "the right
+  default for a security-forward template, but it will break some
+  user repos immediately." This is a positioning call that needs the
+  user's go-ahead. The honesty fix (item 6 above) IS in this release;
+  the behavior change is not.
+- **Primary install path becoming `npm install -g otlc-guardian`
+  instead of `git clone && npm install -g .` (Codex HIGH #6).** Codex
+  said this is the right move for an npm-bound release but called it
+  "a product/positioning call." The README still documents the
+  source-clone path as primary because the package isn't on npm yet.
+  When the user actually runs `npm publish`, the install instructions
+  in README and SETUP should flip — that's a separate commit.
+- **Hook configurability via `.claude/settings.json`.** Codex
+  flagged the four hardcoded web tools as a place to add user
+  configurability. The honesty fix (item 11 above) is in this release;
+  the configurability surface needs careful design and is deferred.
+- **Whether the npm package should ship `.github/` and `.claude/`.**
+  Codex asked whether these directories belong in the public package
+  surface. They currently do, because `guardian init` copies them
+  into target projects. Changing that would require redesigning the
+  init flow.
+- **Python equivalent of `04-sql-guard.js`.** Still deferred — Python
+  has no tagged template literals, so the design needs to be a
+  context manager or `?` placeholder wrapper. ~4-8 hours of work and
+  a separate Python test suite.
+
+---
+
 ## [1.3.0] — 2026-04-08
 
 Audit blind-spot fixes plus release-readiness improvements. Two new

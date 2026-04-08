@@ -1,5 +1,5 @@
 # OTLC Guardian — FAQ
-<!-- onthelevelconcepts.com · Version 1.3.0 -->
+<!-- onthelevelconcepts.com · Version 1.3.1 -->
 
 ---
 
@@ -365,7 +365,32 @@ Nested composition also works — one `sql` result can be interpolated into anot
 
 **Can I use just the Python module?**
 
-Yes. `python/injection_guard.py` is self-contained with no dependency on the JavaScript files. Install structlog (`pip install structlog`) and import `guard_input` from it.
+Yes. `security/injection_guard.py` is self-contained with no dependency on either the JavaScript files or any third-party Python packages. It uses the Python standard library only — `logging`, `re`, `unicodedata`, `base64`, `urllib.parse` — so a stock Python 3.11+ install is enough. **Do not `pip install structlog`** — pre-1.3.1 this answer told you to, but the module has never used `structlog`. The correct usage is:
+
+```python
+from security.injection_guard import guard_input, guard_output, GuardianError
+
+clean = guard_input(user_message)
+reply = call_your_ai(clean)
+safe  = guard_output(reply)
+```
+
+For FastAPI integration use the bundled dependency factory `make_fastapi_guard()`:
+
+```python
+from fastapi import Depends
+from security.injection_guard import make_fastapi_guard
+
+guard = make_fastapi_guard(field="message")
+
+@app.post("/api/v1/chat")
+async def chat(clean_message: str = Depends(guard)):
+    # clean_message is the SANITIZED version of body["message"].
+    reply = await call_your_ai(clean_message)
+    return {"reply": reply}
+```
+
+**1.3.1 note:** the FastAPI helper now RETURNS the sanitized field value (it used to call `guard_input()` and discard the result, leaving the unsanitized raw input to reach the endpoint). If you were using the helper as `_=Depends(guard)` to discard the return value, switch to `clean_message: str = Depends(guard)` to receive the sanitized string.
 
 ---
 
@@ -438,4 +463,4 @@ The security patterns and standards evolve as new attack vectors are discovered 
 
 ---
 
-*OTLC Guardian · [onthelevelconcepts.com](https://onthelevelconcepts.com) · Version 1.3.0*
+*OTLC Guardian · [onthelevelconcepts.com](https://onthelevelconcepts.com) · Version 1.3.1*

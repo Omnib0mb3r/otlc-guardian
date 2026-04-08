@@ -2,7 +2,7 @@
 // ============================================================
 // OTLC GUARDIAN — Claude Code PreToolUse Hook (ESM)
 // // security · onthelevelconcepts.com
-// Version: 2.0.0
+// Version: 1.3.1
 // ============================================================
 //
 // Scans the content of Write and Edit tool calls before they touch
@@ -41,41 +41,45 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 // ---------------------------------------------------------------------------
-// PATTERN IMPORT — single source of truth
+// SCANNER IMPORT — single source of truth (1.3.1)
 // ---------------------------------------------------------------------------
 //
 // The hook lives at <project>/.claude/hooks/injection-guard-hook.mjs and
-// the patterns live at <project>/security/01-injection-guard.js. Resolve
+// the scanner lives at <project>/security/01-injection-guard.js. Resolve
 // the path relative to this file so the import works no matter what cwd
 // Claude Code launched the hook from.
 //
 // We import dynamically + defensively: if the security module is missing
 // (e.g. during a partial install), we exit cleanly instead of blocking
 // the user's tool call.
+//
+// Pre-1.3.1 the hook only imported the raw INJECTION_PATTERNS array and
+// ran each regex against the input directly. That bypassed the runtime
+// guard's NFKC normalization, URL-decode, and base64-decode steps —
+// meaning a fullwidth-Unicode or %-encoded payload would slip past the
+// hook even though `guardInput()` (or any direct `scan()` call from the
+// user's app) would have caught it. Hook/runtime parity is now enforced
+// by importing the public `scan()` function and calling it directly.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const guardModulePath = path.resolve(__dirname, "..", "..", "security", "01-injection-guard.js");
 
-let INJECTION_PATTERNS = [];
-let INVISIBLE_UNICODE_PATTERN = null;
+let scan = null;
 
 try {
   if (existsSync(guardModulePath)) {
     const mod = await import(pathToFileURL(guardModulePath).href);
-    INJECTION_PATTERNS         = mod.INJECTION_PATTERNS ?? [];
-    // The main module exports the literal regex via the file source — we
-    // recreate it here from the same Unicode range so the hook stays
-    // self-contained even if the export shape changes.
-    INVISIBLE_UNICODE_PATTERN  = /[\u200B-\u200F\u2028-\u202F\uFEFF\u00AD]/;
+    scan = typeof mod.scan === "function" ? mod.scan : null;
   }
 } catch {
   // Hook never blocks on its own failures.
   process.exit(0);
 }
 
-// If the main module is missing or empty, exit silently — the runtime
-// guards in security/* are the primary defense; the hook is advisory.
-if (INJECTION_PATTERNS.length === 0) process.exit(0);
+// If the main module is missing or `scan` isn't exported (older Guardian
+// install), exit silently — the runtime guards in security/* are the
+// primary defense; the hook is advisory.
+if (!scan) process.exit(0);
 
 // ---------------------------------------------------------------------------
 // DEFAULT WATCH LIST
@@ -215,21 +219,22 @@ function isExempt(filePath, newContent) {
 }
 
 // ---------------------------------------------------------------------------
-// SCANNER
+// SCANNER WRAPPER
 // ---------------------------------------------------------------------------
+//
+// Delegates to the imported `scan()` function so the hook gets the
+// runtime guard's full bypass-defense stack: NFKC normalization,
+// invisible-Unicode stripping, URL-decode, base64-decode, and the
+// MAX_SCAN_LENGTH cap. Returns the violations in the simpler shape
+// the hook's downstream warning formatter expects.
 
 function scanContent(text) {
-  const findings = [];
-  for (const { pattern, severity, id } of INJECTION_PATTERNS) {
-    if (pattern.test(text)) {
-      const m = text.match(pattern);
-      findings.push({ id, severity, matched: m ? m[0] : "" });
-    }
-  }
-  if (INVISIBLE_UNICODE_PATTERN.test(text)) {
-    findings.push({ id: "INJ-UNICODE", severity: "HIGH", matched: "invisible unicode characters" });
-  }
-  return findings;
+  const { violations } = scan(text, "injection");
+  return violations.map((v) => ({
+    id:       v.id,
+    severity: v.severity,
+    matched:  v.matched,
+  }));
 }
 
 // ---------------------------------------------------------------------------

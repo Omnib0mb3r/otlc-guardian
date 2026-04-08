@@ -3,7 +3,7 @@
  * ============================================================
  * OTLC GUARDIAN — Safety Audit Tool
  * // security · onthelevelconcepts.com
- * Version: 1.1.1
+ * Version: 1.3.1
  * ============================================================
  *
  * Scans an existing codebase for security and quality violations.
@@ -57,6 +57,37 @@ const TEST_FILE_EXCLUDES = [
   /[\/\\]test[_-][^\/\\]+$/i,        // /test_*.py /test-*.js  pytest + custom runners
   /[_-]test\.[a-z]+$/i,              // /*_test.py /*-test.js  alt pytest convention
 ];
+
+// ---------------------------------------------------------------------------
+// CENTRALIZED FILE EXTENSIONS (1.3.1)
+// ---------------------------------------------------------------------------
+//
+// Pre-1.3.1 each rule hardcoded its own fileTypes list. Most rules
+// said `[".js", ".ts", ".jsx", ".tsx"]` and silently missed
+// `.mjs/.cjs/.mts/.cts` — modern ESM/CommonJS module extensions that
+// any post-2020 Node project uses. The 1.3.0 release fixed this for
+// INJ-005b only; this release applies the same fix consistently.
+//
+// JS_TS_EXTS  — every JavaScript/TypeScript module extension we want
+//               to scan. Use this for any rule whose pattern looks
+//               for JS/TS source-level constructs (eval, console.log,
+//               innerHTML, dangerouslySetInnerHTML, raw SQL, any-type).
+// JS_TS_PY_EXTS — same plus Python. Use this for cross-language rules
+//                 (secrets, credentials, hardcoded URLs/IPs).
+// SECRET_FILE_EXTS — JS/TS/Python plus the data-format extensions
+//                    where credentials commonly leak: .env, .json,
+//                    .yaml, .yml. Use this for any SEC-* rule.
+// TS_EXTS — TypeScript-only extensions for rules like TS-001
+//           (`any` type detection) that are not relevant in plain JS.
+//
+// Defining these as `const` arrays at module top means a future rule
+// addition only has to reference the constant; new file-extension
+// support flows through the whole rule set automatically.
+
+const JS_TS_EXTS    = [".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs", ".mts", ".cts"];
+const JS_TS_PY_EXTS = [...JS_TS_EXTS, ".py"];
+const SECRET_FILE_EXTS = [...JS_TS_PY_EXTS, ".env", ".json", ".yaml", ".yml"];
+const TS_EXTS       = [".ts", ".tsx", ".mts", ".cts"];
 
 // ---------------------------------------------------------------------------
 // PROJECT SHAPE DETECTION — "does this project look like an HTTP server?"
@@ -255,49 +286,49 @@ const AUDIT_RULES = [
     id: "SEC-001", category: "Secrets", severity: "CRITICAL",
     description: "Hardcoded OpenAI Project API key (sk-proj-...)",
     pattern: /sk-proj-[a-zA-Z0-9_-]{20,}/,
-    fileTypes: [".js", ".ts", ".py", ".env", ".json", ".yaml", ".yml"],
+    fileTypes: SECRET_FILE_EXTS,
   },
   {
     id: "SEC-010", category: "Secrets", severity: "CRITICAL",
     description: "Hardcoded Anthropic API key (sk-ant-api...)",
     pattern: /sk-ant-api\d{2}-[a-zA-Z0-9_-]{20,}/,
-    fileTypes: [".js", ".ts", ".py", ".env", ".json", ".yaml", ".yml"],
+    fileTypes: SECRET_FILE_EXTS,
   },
   {
     id: "SEC-001b", category: "Secrets", severity: "CRITICAL",
     description: "Hardcoded OpenAI API key (legacy sk- format)",
     pattern: /sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}/,
-    fileTypes: [".js", ".ts", ".py", ".env", ".json", ".yaml", ".yml"],
+    fileTypes: SECRET_FILE_EXTS,
   },
   {
     id: "SEC-002", category: "Secrets", severity: "CRITICAL",
     description: "Hardcoded AWS access key",
     pattern: /AKIA[0-9A-Z]{16}/,
-    fileTypes: [".js", ".ts", ".py", ".env", ".json", ".yaml", ".yml"],
+    fileTypes: SECRET_FILE_EXTS,
   },
   {
     id: "SEC-003", category: "Secrets", severity: "CRITICAL",
     description: "Hardcoded GitHub token",
     pattern: /ghp_[a-zA-Z0-9]{36}/,
-    fileTypes: [".js", ".ts", ".py", ".env", ".json"],
+    fileTypes: SECRET_FILE_EXTS,
   },
   {
     id: "SEC-004", category: "Secrets", severity: "CRITICAL",
     description: "Private key embedded in code",
     pattern: /-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----/,
-    fileTypes: [".js", ".ts", ".py", ".json", ".env"],
+    fileTypes: SECRET_FILE_EXTS,
   },
   {
     id: "SEC-005", category: "Secrets", severity: "HIGH",
     description: "Inline password assignment",
     pattern: /password\s*[:=]\s*["'][^"']{6,}["']/i,
-    fileTypes: [".js", ".ts", ".py", ".json", ".yaml", ".yml"],
+    fileTypes: SECRET_FILE_EXTS,
   },
   {
     id: "SEC-006", category: "Secrets", severity: "HIGH",
     description: "Hardcoded API key assignment",
     pattern: /api[_-]?key\s*[:=]\s*["'][^"']{8,}["']/i,
-    fileTypes: [".js", ".ts", ".py", ".json", ".yaml", ".yml"],
+    fileTypes: SECRET_FILE_EXTS,
     excludePatterns: TEST_FILE_EXCLUDES,
   },
   {
@@ -315,7 +346,7 @@ const AUDIT_RULES = [
     id: "SEC-011", category: "Secrets", severity: "HIGH",
     description: "Connection string with embedded credentials (user:pass@host)",
     pattern: /(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqps?):\/\/[^:@\/\s"'`]*:[^@\s"'`]+@/i,
-    fileTypes: [".js", ".ts", ".py", ".env", ".json", ".yaml", ".yml"],
+    fileTypes: SECRET_FILE_EXTS,
   },
 
   // --- HARDCODED CONFIG ---
@@ -323,14 +354,14 @@ const AUDIT_RULES = [
     id: "CFG-001", category: "Configuration", severity: "HIGH",
     description: "Hardcoded localhost URL",
     pattern: /["'`]https?:\/\/localhost:\d+/,
-    fileTypes: [".js", ".ts", ".jsx", ".tsx", ".py"],
+    fileTypes: JS_TS_PY_EXTS,
     excludePatterns: TEST_FILE_EXCLUDES,
   },
   {
     id: "CFG-002", category: "Configuration", severity: "HIGH",
     description: "Hardcoded 127.0.0.1 address",
     pattern: /["'`]https?:\/\/127\.0\.0\.1/,
-    fileTypes: [".js", ".ts", ".jsx", ".tsx", ".py"],
+    fileTypes: JS_TS_PY_EXTS,
     excludePatterns: TEST_FILE_EXCLUDES,
   },
   // CFG-003: hardcoded IP address. Excludes test files via the
@@ -346,7 +377,7 @@ const AUDIT_RULES = [
     id: "CFG-003", category: "Configuration", severity: "MEDIUM",
     description: "Hardcoded IP address (potential config leak)",
     pattern: /["'`]\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}["'`]/,
-    fileTypes: [".js", ".ts", ".jsx", ".tsx", ".py"],
+    fileTypes: JS_TS_PY_EXTS,
     excludePatterns: TEST_FILE_EXCLUDES,
     excludeLinePatterns: [
       /\bhost\s*[:=]\s*["'`]\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}["'`]/,         // host: '127.0.0.1' / host = '127.0.0.1'
@@ -375,20 +406,20 @@ const AUDIT_RULES = [
     id: "ERR-001", category: "Error Handling", severity: "HIGH",
     description: "Silent catch block — swallows errors (empty or comments-only body)",
     pattern: /catch\s*\([^)]*\)\s*\{\s*(?:\/\/[^\n]*\n\s*|\/\*[\s\S]*?\*\/\s*)*\}/,
-    fileTypes: [".js", ".ts", ".jsx", ".tsx"],
+    fileTypes: JS_TS_EXTS,
     wholeFile: true,
   },
   {
     id: "ERR-002", category: "Error Handling", severity: "HIGH",
     description: "catch block with only console.log — not structured logging",
     pattern: /catch\s*\([^)]*\)\s*\{\s*console\.log/,
-    fileTypes: [".js", ".ts", ".jsx", ".tsx"],
+    fileTypes: JS_TS_EXTS,
   },
   {
     id: "ERR-003", category: "Error Handling", severity: "MEDIUM",
     description: "console.log() in non-test code — use structured logger",
     pattern: /console\.log\(/,
-    fileTypes: [".js", ".ts", ".jsx", ".tsx"],
+    fileTypes: JS_TS_EXTS,
     excludePatterns: TEST_FILE_EXCLUDES,
   },
 
@@ -397,7 +428,7 @@ const AUDIT_RULES = [
     id: "API-001", category: "API Design", severity: "MEDIUM",
     description: "API route without version prefix (/api/v1/...)",
     pattern: /(?:app|router)\.(?:get|post|put|patch|delete)\s*\(\s*["'`]\/api\/(?!v\d)/,
-    fileTypes: [".js", ".ts"],
+    fileTypes: JS_TS_EXTS,
   },
 
   // --- SECURITY PATTERNS ---
@@ -405,20 +436,20 @@ const AUDIT_RULES = [
     id: "INJ-001", category: "Injection Risk", severity: "CRITICAL",
     description: "Direct user input passed to eval()",
     pattern: /eval\s*\(/,
-    fileTypes: [".js", ".ts", ".jsx", ".tsx"],
+    fileTypes: JS_TS_EXTS,
   },
   {
     id: "INJ-002", category: "Injection Risk", severity: "HIGH",
     description: "innerHTML assignment — potential XSS",
     pattern: /\.innerHTML\s*=/,
     excludePatterns: TEST_FILE_EXCLUDES,
-    fileTypes: [".js", ".ts", ".jsx", ".tsx"],
+    fileTypes: JS_TS_EXTS,
   },
   {
     id: "INJ-003", category: "Injection Risk", severity: "HIGH",
     description: "dangerouslySetInnerHTML — potential XSS (ensure sanitized)",
     pattern: /dangerouslySetInnerHTML/,
-    fileTypes: [".js", ".ts", ".jsx", ".tsx"],
+    fileTypes: JS_TS_EXTS,
   },
   //
   // INJ-004 / INJ-005: raw SQL detection. The README has claimed "raw SQL"
@@ -460,14 +491,14 @@ const AUDIT_RULES = [
     // inputs — 300 chars is long enough for a realistic query and short
     // enough that worst-case work is millisecond-scale.
     pattern: /\b(?:query|execute|exec|raw|prepare)\s*\(\s*['"`][\s\S]{0,300}?(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[\s\S]{0,300}?['"`]\s*\+/i,
-    fileTypes: [".js", ".ts", ".py", ".jsx", ".tsx"],
+    fileTypes: JS_TS_PY_EXTS,
     wholeFile: true,
   },
   {
     id: "INJ-005", category: "Injection Risk", severity: "CRITICAL",
     description: "Raw SQL in template literal with ${} interpolation — SQL injection risk",
     pattern: /\b(?:query|execute|exec|raw|prepare)\s*\(\s*`[^`]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[^`]*\$\{[^`]*`/i,
-    fileTypes: [".js", ".ts", ".jsx", ".tsx"],
+    fileTypes: JS_TS_EXTS,
     wholeFile: true,
   },
   //
@@ -502,7 +533,7 @@ const AUDIT_RULES = [
     id: "INJ-005b", category: "Injection Risk", severity: "CRITICAL",
     description: "Template-literal SQL with ${} interpolation — SQL injection risk (variable form)",
     pattern: /`[^`]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[^`]*\$\{[^`]*`/i,
-    fileTypes: [".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs", ".mts", ".cts"],
+    fileTypes: JS_TS_EXTS,
     wholeFile: true,
     // This rule is very noisy on documentation files that show the pattern
     // as an example of what NOT to do (e.g. STANDARDS.md, an ORM README).
@@ -554,8 +585,17 @@ const AUDIT_RULES = [
     description: "No health check endpoint found",
     pattern: null, // checked separately
     fileTypes: [],
-    checkFn: (files, rootDir) => {
-      if (!looksLikeHttpServer(rootDir, files)) return false;
+    // 1.3.1: signature is `(files, projectRoot)`. The second arg is
+    // the upward-walked project root, NOT the scan target. That lets
+    // looksLikeHttpServer find the manifest even when the user runs
+    // `guardian audit ./src` from a project whose package.json lives
+    // one level up. Pre-1.3.1 the manifest check failed silently in
+    // that case and the rule fell through to the source-pattern
+    // fallback (which still worked for express because of `app.listen`,
+    // but failed for projects whose framework only registered via the
+    // manifest).
+    checkFn: (files, projectRoot) => {
+      if (!looksLikeHttpServer(projectRoot, files)) return false;
       return !files.some((f) => /health/.test(fs.readFileSync(f, "utf8").toLowerCase()));
     },
   },
@@ -572,7 +612,7 @@ const AUDIT_RULES = [
     id: "TS-001", category: "TypeScript", severity: "LOW",
     description: "Use of 'any' type — reduces type safety",
     pattern: /:\s*any(?:\s|;|,|\)|\[)/,
-    fileTypes: [".ts", ".tsx"],
+    fileTypes: TS_EXTS,
     excludePatterns: TEST_FILE_EXCLUDES,
   },
 ];
@@ -820,12 +860,68 @@ function scanFile(filePath, rule, exemptionState) {
 }
 
 // ---------------------------------------------------------------------------
+// PROJECT ROOT DETECTION (1.3.1)
+// ---------------------------------------------------------------------------
+//
+// Walks upward from the scan target looking for project markers. Used
+// to separate `projectRoot` (where the manifest, .git, and central
+// allowlist live) from `scanRoot` (the directory the user told the
+// audit to scan). Pre-1.3.1 the auditor conflated the two: if you
+// ran `guardian audit ./src` from a project root, manifest lookups
+// hit `./src/package.json` (which doesn't exist) and the central
+// allowlist at `<root>/security/.audit-allowlist` was ignored.
+//
+// Markers, in priority order:
+//   1. `.git/` directory — the strongest signal a project root exists
+//   2. `security/.audit-allowlist` — Guardian's own central allowlist
+//   3. `package.json` (Node), `requirements.txt`/`pyproject.toml`/`Pipfile` (Python)
+//
+// Walk caps at 8 levels deep or the filesystem root, whichever comes
+// first. If no markers are found, falls back to the scan target as
+// its own project root (matches pre-1.3.1 behavior for orphan dirs).
+//
+// Returns an absolute path string.
+
+const PROJECT_ROOT_MARKERS = [
+  ".git",
+  path.join("security", ".audit-allowlist"),
+  "package.json",
+  "requirements.txt",
+  "pyproject.toml",
+  "Pipfile",
+];
+
+function findProjectRoot(scanDir) {
+  let current = path.resolve(scanDir);
+  // Cap depth at 8 — most real projects sit no more than a few levels
+  // below the filesystem root, and an attacker-controlled symlink
+  // farm shouldn't be able to make us walk forever.
+  for (let depth = 0; depth < 8; depth++) {
+    for (const marker of PROJECT_ROOT_MARKERS) {
+      if (fs.existsSync(path.join(current, marker))) return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break; // hit filesystem root
+    current = parent;
+  }
+  // No markers found anywhere up the tree — fall back to the original
+  // scan target. This matches pre-1.3.1 behavior for orphan dirs and
+  // avoids surprising users who run audits in /tmp scratch directories.
+  return path.resolve(scanDir);
+}
+
+// ---------------------------------------------------------------------------
 // MAIN AUDIT RUNNER
 // ---------------------------------------------------------------------------
 
 function runAudit(targetDir, options = {}) {
   const { outputJson = false, failOnError = false } = options;
-  const rootDir = path.resolve(targetDir);
+  // 1.3.1: scanRoot is what the user asked to scan; projectRoot is where
+  // manifests, .git, and the central allowlist live. They're identical
+  // when the user audits the project root directly (the common case)
+  // and divergent when the user audits a subdirectory.
+  const scanRoot    = path.resolve(targetDir);
+  const projectRoot = findProjectRoot(scanRoot);
 
   // Status output routing: in JSON mode, status lines go to stderr so
   // the consumer of stdout (e.g. `node ... --json > out.json` in CI)
@@ -839,20 +935,38 @@ function runAudit(targetDir, options = {}) {
     : (msg) => process.stdout.write(msg + "\n");
 
   status(`\n🔍 [OTLC GUARDIAN] SAFETY AUDIT STARTING`);
-  status(`    Target  : ${rootDir}`);
+  status(`    Target  : ${scanRoot}`);
+  if (projectRoot !== scanRoot) {
+    // Visibility — surfacing the project root makes it obvious why a
+    // root-level allowlist is being honored on a subdirectory scan,
+    // and helps debug "wrong project root" detection issues.
+    status(`    Project : ${projectRoot}`);
+  }
   status(`    Rules   : ${AUDIT_RULES.filter((r) => r.pattern).length} pattern rules`);
 
   // ── Load exemption state once, up front ──────────────────────────────
-  const allowlist = loadAllowlist(rootDir);
+  // 1.3.1: load from projectRoot, not scanRoot. Pre-1.3.1 a subdir
+  // scan would silently ignore the central allowlist at
+  // <projectRoot>/security/.audit-allowlist.
+  const allowlist = loadAllowlist(projectRoot);
 
-  // Collect all relevant files
+  // Collect all relevant files. Walker scans the user's requested
+  // target, NOT the upward-walked project root — the user said "audit
+  // ./src" and they meant "audit ./src", not "audit my whole repo".
   const allExtensions = [...new Set(AUDIT_RULES.flatMap((r) => r.fileTypes))];
-  const files         = collectFiles(rootDir, allExtensions);
+  const files         = collectFiles(scanRoot, allExtensions);
 
   // Precompute which files are exempt and via which mechanism. We do
   // this once here instead of inside scanFile so the same file isn't
   // re-checked once per rule, and so the audit summary can report
   // exemption counts up front.
+  //
+  // 1.3.1: exemptionMechanism resolves the file's path RELATIVE TO
+  // projectRoot (not scanRoot) when checking against the allowlist.
+  // The central .audit-allowlist contains entries like
+  // `bin/guardian.js  # reason: ...` which are project-root-relative;
+  // computing the rel-path against scanRoot would produce paths like
+  // `../../bin/guardian.js` and the lookup would never match.
   const exemptPaths     = new Set();
   const exemptByMarker  = [];
   const exemptByList    = [];
@@ -861,13 +975,13 @@ function runAudit(targetDir, options = {}) {
     let head;
     try { head = fs.readFileSync(file, "utf8"); }
     catch { continue; }
-    const mech = exemptionMechanism(file, head, allowlist, rootDir);
+    const mech = exemptionMechanism(file, head, allowlist, projectRoot);
     if (mech === "marker") {
       exemptPaths.add(file);
-      exemptByMarker.push(path.relative(rootDir, file).replace(/\\/g, "/"));
+      exemptByMarker.push(path.relative(scanRoot, file).replace(/\\/g, "/"));
     } else if (mech === "allowlist") {
       exemptPaths.add(file);
-      exemptByList.push(path.relative(rootDir, file).replace(/\\/g, "/"));
+      exemptByList.push(path.relative(scanRoot, file).replace(/\\/g, "/"));
     }
   }
 
@@ -904,13 +1018,18 @@ function runAudit(targetDir, options = {}) {
     }
   }
 
-  // Function-based rules. Signature: checkFn(files, rootDir). The rootDir
-  // argument was added in 1.2.4 so project-shape gates (e.g. DEP-001's
-  // looksLikeHttpServer check) can read root-level manifests. Existing
-  // rules that only need the file list (e.g. DEP-002) can ignore it.
+  // Function-based rules. Signature: checkFn(files, projectRoot).
+  // The second arg was added in 1.2.4 so project-shape gates (e.g.
+  // DEP-001's looksLikeHttpServer check) can read root-level
+  // manifests. In 1.3.1 it was renamed from `rootDir` to
+  // `projectRoot` because the auditor now distinguishes the upward-
+  // walked project root from the scan target — manifest checks must
+  // see the project root, not the subdirectory the user happened to
+  // scan. Existing rules that only need the file list (e.g. DEP-002)
+  // can still ignore the second argument.
   for (const rule of AUDIT_RULES) {
     if (!rule.checkFn) continue;
-    const triggered = rule.checkFn(files, rootDir);
+    const triggered = rule.checkFn(files, projectRoot);
     if (triggered) {
       allFindings.push({ file: targetDir, line: null, content: null, rule });
     }
@@ -1007,7 +1126,11 @@ function runAudit(targetDir, options = {}) {
           }
 
           for (const [file, fileItems] of byFile) {
-            const relFile = path.relative(rootDir, file).replace(/\\/g, "/") || file;
+            // Display paths relative to scanRoot (what the user asked
+            // to scan), not projectRoot (where the manifest lives).
+            // The user thinks in terms of "I ran audit on this dir"
+            // and the report should reflect that mental model.
+            const relFile = path.relative(scanRoot, file).replace(/\\/g, "/") || file;
             const lineNumbers = fileItems
               .map((f) => f.line)
               .filter((n) => typeof n === "number")

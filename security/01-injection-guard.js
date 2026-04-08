@@ -2,7 +2,7 @@
  * ============================================================
  * OTLC GUARDIAN — Prompt Injection Guard
  * // security · onthelevelconcepts.com
- * Version: 1.1.1
+ * Version: 1.3.1
  * ============================================================
  *
  * Runtime input sanitizer for AI-powered applications.

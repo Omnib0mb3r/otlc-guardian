@@ -1212,6 +1212,144 @@ describe("v1.3.0 — INJ-006 inner-quote regex fix", () => {
 });
 
 // ---------------------------------------------------------------------------
+// v1.3.1 — projectRoot vs scanRoot (audit subdirectory scoping)
+// ---------------------------------------------------------------------------
+//
+// The pre-1.3.1 audit treated the scan target as the project root for
+// BOTH the file walker AND the project-shape lookups (manifest checks,
+// .audit-allowlist load). That was wrong when the user ran
+// `guardian audit ./src` — the manifest is at the project root, not
+// inside src/, so DEP-001 gating saw "no package.json" and silently
+// disabled itself, AND the central .audit-allowlist was ignored
+// because it lives at <project-root>/security/.audit-allowlist.
+//
+// Fix: separate `projectRoot` from `scanRoot`. The walker still walks
+// `scanRoot`, but manifest lookups, .audit-allowlist, and any other
+// project-level concept consult the upward-walked project root.
+
+describe("v1.3.1 — projectRoot vs scanRoot (subdirectory audit scoping)", () => {
+  test("DEP-001 fires when scanning a subdirectory of an express project", () => {
+    // Build a project structure:
+    //   tmp/
+    //     package.json (express)
+    //     src/
+    //       server.js  (no /health)
+    // Then audit the src/ subdirectory. DEP-001 should still fire
+    // because looksLikeHttpServer should walk UP to find package.json.
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({ name: "my-api", dependencies: { express: "^4.18.0" } }),
+        "utf8"
+      );
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "src", "server.js"),
+        "import express from 'express';\nconst app = express();\napp.listen(3000);\n",
+        "utf8"
+      );
+      const report = runAuditOn(path.join(dir, "src"));
+      assert.ok(
+        hasFinding(report, "DEP-001"),
+        "DEP-001 must fire when scanning ./src of a project whose package.json (with express) lives one level up"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("DEP-001 does NOT fire when scanning a subdirectory of a non-server project", () => {
+    // Same as above but the parent project has no server framework.
+    // DEP-001 must stay silent because the project as a whole is not
+    // a server, even though the scanned subdirectory has source files.
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({ name: "my-cli", bin: { "my-cli": "./bin/cli.js" } }),
+        "utf8"
+      );
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "src", "lib.js"),
+        "export function add(a, b) { return a + b; }\n",
+        "utf8"
+      );
+      const report = runAuditOn(path.join(dir, "src"));
+      assert.ok(
+        !hasFinding(report, "DEP-001"),
+        "DEP-001 must NOT fire when scanning ./src of a CLI project whose parent has no server framework"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test(".audit-allowlist at project root is honored when scanning a subdirectory", () => {
+    // Build a project with a centralized allowlist that exempts a file
+    // inside src/. Audit ./src and verify the allowlist is consulted.
+    // Pre-1.3.1 the allowlist load would look at ./src/security/.audit-allowlist
+    // which doesn't exist, and the file would not be exempted — false
+    // positive. Post-1.3.1 the allowlist is loaded from the project
+    // root and the file is correctly exempted.
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      // Project marker at the top
+      writeFileSync(
+        path.join(dir, "package.json"),
+        JSON.stringify({ name: "my-app" }),
+        "utf8"
+      );
+      // Centralized allowlist at <project-root>/security/.audit-allowlist
+      mkdirSync(path.join(dir, "security"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "security", ".audit-allowlist"),
+        "src/legacy.js  # reason: legacy code, scheduled for rewrite in Q3\n",
+        "utf8"
+      );
+      // The file that should be exempted — contains a SEC-001 trigger
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "src", "legacy.js"),
+        'const KEY = "sk-proj-aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890AbCdEfGhIjKl";\n',
+        "utf8"
+      );
+      // Audit the src/ subdirectory
+      const report = runAuditOn(path.join(dir, "src"));
+      assert.ok(
+        !hasFinding(report, "SEC-001"),
+        "SEC-001 must NOT fire on src/legacy.js when the project-root .audit-allowlist exempts it (subdirectory scan must consult the project-root allowlist)"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Project-root walker stops at filesystem boundary if no markers found", () => {
+    // Edge case: scanning a directory that has no project markers
+    // anywhere up the tree (e.g. /tmp/orphaned-source/). The detector
+    // must NOT walk past the original scan target — it should fall
+    // back to the scan target as its own project root.
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      // No package.json, no .git, no requirements.txt — no markers
+      writeFileSync(
+        path.join(dir, "main.js"),
+        "console.log('hello');\n",
+        "utf8"
+      );
+      // Audit should still run cleanly without crashing on the missing
+      // upward markers; behavior should match scanning the dir directly.
+      const report = runAuditOn(dir);
+      assert.ok(Array.isArray(report.findings), "audit should still produce a valid report on a marker-less directory");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

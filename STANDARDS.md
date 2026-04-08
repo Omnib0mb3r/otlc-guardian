@@ -1,6 +1,6 @@
 # OTLC Guardian — Technology Standards
 # // stack standards · onthelevelconcepts.com
-# Version: 1.3.0
+# Version: 1.3.1
 #
 # READ THIS FILE ALONGSIDE CLAUDE.md
 #
@@ -648,6 +648,17 @@ lint → typecheck → test → security audit → build → deploy
 
 - Never merge to `main` without all stages passing
 - Deploy only from CI — never manual deploys to production
+
+> **Note on Guardian's own CI default.** The shipped
+> `.github/workflows/security-audit.yml` runs `npm audit` and `pip-audit`
+> as **advisory-only** (`continue-on-error: true`) — vulnerable dependencies
+> show up in the run log but do not fail the workflow. This is the
+> "report, don't block" stance, chosen because the template ships to a
+> wide variety of project types and a hard-fail dependency gate would
+> brick PRs in the window between a CVE landing and an upstream fix
+> shipping. **For your own production projects, the standard above
+> applies — make those steps blocking by removing `continue-on-error: true`
+> from both dependency-scan steps in the workflow.**
 
 ---
 

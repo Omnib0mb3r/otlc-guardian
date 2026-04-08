@@ -2,7 +2,7 @@
 ============================================================
 OTLC GUARDIAN — Prompt Injection Guard (Python)
 // security · onthelevelconcepts.com
-Version: 1.1.1
+Version: 1.3.1
 ============================================================
 
 Runtime input sanitizer for Python AI-powered applications.
@@ -444,17 +444,38 @@ def guard_output(
 
 def make_fastapi_guard(field: str = "message", **guard_kwargs):
     """
-    Returns a FastAPI dependency that guards a specific request body field.
+    Returns a FastAPI dependency that guards a specific request body field
+    AND returns the sanitized value so the endpoint receives clean input.
 
-    Usage:
+    Pre-1.3.1 the dependency called `guard_input()` for its side effect
+    (raising on critical violations) but discarded the sanitized return
+    value entirely. That meant non-blocking but sanitizable input — for
+    example a string with a zero-width-space bypass — would reach the
+    endpoint UNCHANGED. The Node middleware (`injectionMiddleware()` in
+    01-injection-guard.js) writes the sanitized value back into
+    `req.body[field]`; the Python dependency now mirrors that behavior
+    by returning the sanitized field value, which the endpoint receives
+    through `Depends()`.
+
+    Usage (1.3.1+):
         from fastapi import Depends
         from security.injection_guard import make_fastapi_guard
 
         guard = make_fastapi_guard(field="message")
 
         @app.post("/api/v1/chat")
-        async def chat(body: ChatRequest, _=Depends(guard)):
+        async def chat(clean_message: str = Depends(guard)):
+            # clean_message is the SANITIZED version of body["message"].
+            # Use it directly — do NOT re-read body["message"], that would
+            # be the unsanitized original.
+            reply = await call_your_ai(clean_message)
             ...
+
+    The endpoint receives the dependency's return value, not the raw
+    request body field. If your endpoint needs other fields from the
+    body in addition to the guarded one, take them from a separate
+    Pydantic model parameter — Pydantic models and Depends() coexist
+    cleanly.
 
     Note: FastAPI is imported lazily so this module remains importable
     in projects that don't use FastAPI. The previous version had a
@@ -472,11 +493,15 @@ def make_fastapi_guard(field: str = "message", **guard_kwargs):
             "Run: pip install fastapi"
         ) from e
 
-    async def dependency(request: Request):
+    async def dependency(request: Request) -> str:
         body = await request.json()
         raw  = body.get(field, "") if isinstance(body, dict) else ""
         try:
-            guard_input(raw, context=f"{request.method} {request.url.path}", **guard_kwargs)
+            sanitized = guard_input(
+                raw,
+                context=f"{request.method} {request.url.path}",
+                **guard_kwargs,
+            )
         except GuardianError:
             raise HTTPException(status_code=400, detail={
                 "success": False,
@@ -485,6 +510,10 @@ def make_fastapi_guard(field: str = "message", **guard_kwargs):
                     "message": "Input rejected by security guard.",
                 },
             })
+        # 1.3.1: return the sanitized value so the endpoint actually
+        # receives clean input. Pre-1.3.1 this return was missing and
+        # the unsanitized raw body field reached the endpoint.
+        return sanitized
 
     return dependency
 

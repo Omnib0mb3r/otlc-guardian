@@ -1,5 +1,5 @@
 # OTLC Guardian — Setup Guide
-<!-- onthelevelconcepts.com · Version 1.3.0 -->
+<!-- onthelevelconcepts.com · Version 1.3.1 -->
 
 Step-by-step setup from zero to a fully protected, standards-enforced project.  
 Estimated time: **10 minutes** for a new project, **5 minutes** for an existing one.
@@ -624,6 +624,8 @@ The marker syntax for `.gitignore` and `.env.example`:
 Files to un-merge this way:
 
 - `CLAUDE.md` — remove the `<!-- OTLC-GUARDIAN-START -->` ... `<!-- OTLC-GUARDIAN-END -->` block
+- `AGENTS.md` — same marker pair (Guardian merges this in 1.1.1+)
+- `GEMINI.md` — same marker pair (Guardian merges this in 1.1.1+)
 - `STANDARDS.md` — same marker pair
 - `.gitignore` — remove the `# OTLC-GUARDIAN-START` ... `# OTLC-GUARDIAN-END` block
 - `.env.example` — same marker pair
@@ -720,8 +722,6 @@ or merge your customizations into a new workflow file under a different name.
 Guardian does **not** create any of these files. If they exist in your
 project, they belong to other tools (or to you) and must be left alone:
 
-- `AGENTS.md` — used by OpenAI Codex, Cursor, and other agents
-- `GEMINI.md` — used by Google Gemini
 - `.cursorrules` — used by Cursor
 - `.windsurfrules` — used by Windsurf
 - `.aider.conf.yml` — used by Aider
@@ -731,11 +731,12 @@ Guardian's hooks **scan** these files for prompt-injection attempts during
 Claude Code sessions, but Guardian never **writes** to them. Removing
 Guardian must never delete them.
 
-> **Note:** A future Guardian release will populate `AGENTS.md` (the
-> universal cross-agent entry point) using the same merge-marker pattern as
-> `CLAUDE.md`. After that release ships, `AGENTS.md` will join the list of
-> files in Step 1 — un-merge by removing only the marker block, never
-> blanket-delete.
+> **Updated 1.3.1:** `AGENTS.md` and `GEMINI.md` have moved OUT of this
+> "do not touch" list and INTO the marker-uninstall list in Step 1. Guardian
+> has merged into both files since 1.1.1 — they now contain the same
+> `<!-- OTLC-GUARDIAN-START -->` markers as `CLAUDE.md` and `STANDARDS.md`,
+> and the marker-block removal procedure in Step 1 applies. This note exists
+> to flag the change for anyone reading older versions of this document.
 
 ### Step 6 — Optional: uninstall the global CLI
 
@@ -752,4 +753,4 @@ npm uninstall -g otlc-guardian
 
 ---
 
-*OTLC Guardian · [onthelevelconcepts.com](https://onthelevelconcepts.com) · Version 1.3.0*
+*OTLC Guardian · [onthelevelconcepts.com](https://onthelevelconcepts.com) · Version 1.3.1*

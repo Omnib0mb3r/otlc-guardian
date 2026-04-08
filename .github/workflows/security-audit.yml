@@ -79,12 +79,28 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Dependency vulnerability scan (Node)
+      # ADVISORY ONLY — does not block the build.
+      #
+      # `continue-on-error: true` means a known-vulnerable dependency
+      # surfaces in the run log but does NOT fail the workflow. This is
+      # deliberate: a fresh-cut release of a popular package can be
+      # vulnerable for a window of hours-to-days before a fixed version
+      # ships, and a hard-fail dependency gate would brick every PR
+      # during that window for projects that can't immediately upgrade.
+      #
+      # If your project's policy is "no PR merges with known
+      # vulnerabilities," remove `continue-on-error: true` from BOTH
+      # steps below in your fork. STANDARDS.md documents this as the
+      # expected behavior for security-forward production projects;
+      # the default in this template is the more permissive
+      # "report but don't block" stance because the template ships
+      # to a wide variety of project types.
+      - name: Dependency vulnerability scan (Node) — advisory
         if: hashFiles('package.json') != ''
         run: npm audit --audit-level=high
         continue-on-error: true
 
-      - name: Dependency vulnerability scan (Python)
+      - name: Dependency vulnerability scan (Python) — advisory
         if: hashFiles('requirements.txt') != ''
         run: |
           pip install pip-audit

@@ -6,7 +6,7 @@ Free and open source · MIT License · Built by [onthelevelconcepts.com](https:/
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-cyan.svg)](LICENSE)
 [![Node: 22+](https://img.shields.io/badge/Node-22%2B-green.svg)](https://nodejs.org)
-[![Version: 1.3.0](https://img.shields.io/badge/version-1.3.0-blue.svg)](package.json)
+[![Version: 1.3.1](https://img.shields.io/badge/version-1.3.1-blue.svg)](package.json)
 
 ---
 
@@ -99,13 +99,16 @@ the ecosystem the hooks were already defending.
 
 ### Layer 2 — The Runtime Security Layer
 
-Four files under `security/`. All zero-dependency, all drop-in, all work on Windows,
-Linux, and macOS. Two languages (Node and Python) at parity.
+Five files under `security/`. All zero-dependency, all drop-in, all work on Windows,
+Linux, and macOS. **Most files are Node-only**; the injection guard has a Python
+parity implementation. See the per-file breakdown below for the exact language
+support of each component.
 
-**`01-injection-guard.js` / `injection_guard.py` — Input + output scanner**
+**`01-injection-guard.js` (Node) / `injection_guard.py` (Python) — Input + output scanner**
 Wraps every call into your AI API. Scans user input before it reaches the model (blocks
 critical injections, sanitizes delimiters, normalizes Unicode) and scans AI output
 before it reaches your user (blocks leaked API keys, catches reflected injection).
+**Both Node and Python implementations** — same patterns, same normalizer, same shape.
 
 - **28 injection patterns** — classic override, role hijack, prompt extraction, delimiter
   injection, jailbreak classics, HTML/block-comment context poisoning
@@ -120,23 +123,38 @@ before it reaches your user (blocks leaked API keys, catches reflected injection
 - **Input length cap** (1.1.1) — `scan()` hard-caps input at 100 KB to prevent CPU burn
   from crafted mega-payloads
 - **Express middleware** (Node) and **FastAPI dependency** (Python) both included
+- The Python module uses `logging` from the standard library — **no `structlog` or
+  any other dependency required.** It runs on a stock Python 3.11+ install.
 
-**`02-code-security.js` — Server utilities**
+**`02-code-security.js` — Server utilities (Node only)**
 Secure headers, rate limiter, structured logger with request ID threading, consistent
 success/error response shapes, health check helper, environment variable validation,
-Windows environment setup helper. Drop in, wire up, done.
+Windows environment setup helper. Drop in, wire up, done. **No Python equivalent
+yet** — Python projects should use established libraries (`fastapi.middleware`, `slowapi`,
+`structlog`, `pydantic-settings`) for the same functionality.
 
-**`03-audit.js` — Standalone audit CLI**
+**`03-audit.js` — Standalone audit CLI (Node, scans both Node and Python source)**
 Run `guardian audit` from anywhere inside a project. Scans for hardcoded secrets,
 silent catches, raw SQL string concatenation, `console.log` in production paths,
 missing health endpoints, `any`-typed TypeScript, and a dozen other junior patterns.
-Exit code signals CI failure when --fail-on-error is set. JSON output mode for
-machine parsing.
+**The audit script itself runs on Node, but the rules cover both `.js/.ts/.mjs/.cjs/.mts/.cts/.jsx/.tsx` AND `.py` files** — your Python source code is scanned alongside your JS. Exit
+code signals CI failure when `--fail-on-error` is set. JSON output mode for machine
+parsing.
 
-**Injection guard — Python parity**
-`security/injection_guard.py` is a full parity implementation of the Node module —
-same patterns, same normalizer, same `guardInput` / `guardOutput` shape. Import and
-use in FastAPI, Flask, Django, or plain Python. No additional dependencies.
+**`04-sql-guard.js` — Tagged template literal SQL helper (Node only)**
+A `sql\`SELECT * FROM users WHERE id = ${id}\`` tagged template that auto-parameterizes
+interpolated values into `{ text, values }` for direct use with `pg`, `mysql2`,
+`better-sqlite3`, etc. OWASP-aligned: parameterized queries are the #1 SQL injection
+defense. **Python equivalent is on the roadmap** — Python has no tagged template
+literals, so the design needs to be different (context manager or `?` placeholder
+wrapper). Until it ships, Python users should use SQLAlchemy parameterized queries
+or the DB-API `execute(sql, params)` form, both of which the audit's `INJ-006` rule
+recognizes as safe.
+
+**Python parity scope:** Today, Python parity is **injection-guard only**. The audit
+CLI scans Python source, but the helper utilities (server middleware, SQL helper) are
+Node-only. If your project is Python-first, you get full input/output guarding plus
+audit coverage; you bring your own server middleware and ORM.
 
 ---
 
@@ -222,8 +240,9 @@ Same behavior as `init` (safe to re-run any time). Use this after pulling a new 
 guardian update
 ```
 
-**`guardian audit`** — Scan your project for security and quality problems. 23 rules in
-1.1.1. Run regularly.
+**`guardian audit`** — Scan your project for security and quality problems. 24 rules
+in 1.3.x (the rule set grows; check `node bin/guardian.js help` or `CHANGELOG.md` for
+the current count). Run regularly.
 ```bash
 guardian audit
 guardian audit ./src              # scope to a subdirectory
@@ -286,7 +305,7 @@ Claude Code.
 
 **Audit CLI — scan any codebase:**
 - `guardian audit` scans for hardcoded secrets, silent errors, raw SQL, console.log in
-  prod paths, missing `/health`, and more (23 rules in 1.1.1 — every finding should be
+  prod paths, missing `/health`, and more (24 rules in 1.3.x — every finding should be
   reviewed; the tool is advisory)
 - JSON output mode for CI integration
 - Works on any project — Python, TypeScript, JavaScript, mixed
@@ -300,11 +319,11 @@ Claude Code.
   allow-list validation; nested `sql\`\`` composition is supported
 
 **GitHub Actions workflow (if you push to GitHub):**
-- Secret scanning (Gitleaks)
-- Dependency vulnerability checks (`npm audit`, `pip-audit`)
-- Full codebase audit on every PR
-- All Guardian unit tests run before the audit
+- Secret scanning (Gitleaks) — **blocking**, fails the build on a hit
+- Full Guardian audit (`guardian audit . --fail-on-error`) — **blocking**, fails on any HIGH or CRITICAL finding
+- All Guardian unit tests run before the audit — **blocking**, fails on any test failure
 - Audit exemption count posted to the workflow summary for visibility
+- Dependency vulnerability checks (`npm audit`, `pip-audit`) — **advisory only** (`continue-on-error: true`). Vulnerable dependencies show up in the run log but do NOT fail the build by default. The shipped behavior is "report, don't block" because a hard-fail gate would brick PRs in the window between a CVE landing and an upstream fix shipping. To switch to hard-fail in your fork, remove `continue-on-error: true` from both steps in `.github/workflows/security-audit.yml`.
 
 ### Tier 2 — Claude Code integrations (Claude Code only)
 
@@ -373,28 +392,26 @@ builtin, which you can verify by grepping the source tree.
 
 ## Uninstalling
 
-To remove Guardian from a project while keeping your own code intact:
+> **Uninstalling Guardian is a manual, marker-based process — NOT a blanket delete.**
+> `guardian init` is merge-safe: it appends Guardian's content below
+> `<!-- OTLC-GUARDIAN-START -->` markers inside your `CLAUDE.md`, `AGENTS.md`,
+> `GEMINI.md`, `STANDARDS.md`, `.gitignore`, and `.env.example`, preserving every
+> line you wrote above. Uninstalling cleanly therefore requires the inverse — remove
+> only the marker-delimited block, never blanket-delete a merged file.
+>
+> **A blanket `rm -f CLAUDE.md` would destroy any project-specific rules you wrote
+> before running `guardian init`.** Same risk for `rm -rf security/` (would delete
+> any custom files you added to `security/`) and `rm -rf .claude/hooks/` (same for
+> custom hooks).
 
-**1. Remove the Guardian-added files:**
-```bash
-rm -f CLAUDE.md AGENTS.md GEMINI.md STANDARDS.md
-rm -rf security/
-rm -rf .claude/hooks/
-```
+**Full step-by-step uninstall instructions live in [`SETUP.md`](SETUP.md#uninstalling).** It walks through:
 
-**2. Revert `.gitignore` and `.env.example` if you want them back to pre-Guardian state:**
-```bash
-git checkout .gitignore .env.example
-```
+1. **Un-merging files Guardian appended into** — open `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `STANDARDS.md`, `.gitignore`, and `.env.example` in your editor and delete only the content between the `<!-- OTLC-GUARDIAN-START -->` and `<!-- OTLC-GUARDIAN-END -->` markers (or `# OTLC-GUARDIAN-START` for shell-comment files).
+2. **Cleaning `.claude/settings.json`** — remove only the two Guardian hook entries (PreToolUse `Write|Edit` → `injection-guard-hook.mjs` and PostToolUse `WebFetch|WebSearch` → `web-content-guard.mjs`). Leave every other hook alone.
+3. **Deleting pure-Guardian files individually by name** — `security/01-injection-guard.js`, `security/02-code-security.js`, `security/03-audit.js`, `security/04-sql-guard.js`, `security/injection_guard.py`, `.claude/hooks/injection-guard-hook.mjs`, `.claude/hooks/web-content-guard.mjs`. **Never** `rm -rf security/` or `rm -rf .claude/hooks/` — those would also delete any custom files you added.
+4. **Optionally uninstalling the global CLI** — `npm uninstall -g otlc-guardian`.
 
-**3. Clean `.claude/settings.json`** — open the file and remove only the Guardian-added
-entries (PreToolUse `Write|Edit` running `injection-guard-hook.mjs`, and PostToolUse
-`WebFetch|WebSearch` running `web-content-guard.mjs`). Leave any other hooks alone.
-
-**4. Uninstall the global CLI if you want it off the machine entirely:**
-```bash
-npm uninstall -g otlc-guardian
-```
+See [`SETUP.md` § Uninstalling](SETUP.md#uninstalling) for the full marker syntax, exact file list, and the "files Guardian never creates and must never delete" safety list (`.cursorrules`, `.windsurfrules`, `.aider.conf.yml`, `copilot-instructions.md`, etc.).
 
 You do **not** need to uninstall the global CLI to stop using Guardian in a project.
 Deleting the project files is enough — the CLI does nothing on its own.

@@ -33,27 +33,81 @@ import { fileURLToPath, pathToFileURL } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT      = path.join(__dirname, "..");
 const CWD       = process.cwd();
-const args      = process.argv.slice(2);
+// 1.3.1: strip the global `--no-color` flag from argv before the command
+// router and per-command parsers see it. This is the only global flag
+// supported by every command, so handling it once at the entry point is
+// simpler than threading it through every command function. The TTY/color
+// detection block below already reads it via `process.argv.includes`.
+const args      = process.argv.slice(2).filter((a) => a !== "--no-color");
 const command   = args[0];
 
 // ---------------------------------------------------------------------------
 // COLORS — no dependencies
 // ---------------------------------------------------------------------------
-const c = {
-  reset:  "\x1b[0m",
-  cyan:   "\x1b[36m",
-  green:  "\x1b[32m",
-  yellow: "\x1b[33m",
-  red:    "\x1b[31m",
-  bold:   "\x1b[1m",
-  dim:    "\x1b[2m",
+//
+// 1.3.1: ANSI escape sequences are silenced when stdout/stderr is not a TTY,
+// or when the user sets NO_COLOR=1 (the documented "no-color" convention at
+// https://no-color.org), or when --no-color is passed on the command line.
+// Pre-1.3.1 the CLI emitted unconditional escape sequences which polluted
+// redirected output (`guardian audit > findings.txt` would have raw escape
+// codes inside the file) and broke some non-ANSI Windows terminals.
+//
+// Detection happens at module load time. We check stdout for the main color
+// helpers (log/info/ok) and stderr separately for warn/err since the user
+// can redirect the two streams independently in a shell pipeline.
+
+const NO_COLOR_ENV = process.env.NO_COLOR === "1" || process.env.NO_COLOR === "true";
+const NO_COLOR_FLAG = process.argv.includes("--no-color");
+const COLORS_ENABLED_STDOUT = !NO_COLOR_ENV && !NO_COLOR_FLAG && Boolean(process.stdout.isTTY);
+const COLORS_ENABLED_STDERR = !NO_COLOR_ENV && !NO_COLOR_FLAG && Boolean(process.stderr.isTTY);
+
+// `c` returns ANSI escape sequences only when stdout colors are enabled;
+// otherwise every key is the empty string. The same constant is used in
+// template literals throughout the file, so a single conditional at module
+// load handles every color call site without needing per-line guards.
+const c = COLORS_ENABLED_STDOUT
+  ? {
+      reset:  "\x1b[0m",
+      cyan:   "\x1b[36m",
+      green:  "\x1b[32m",
+      yellow: "\x1b[33m",
+      red:    "\x1b[31m",
+      bold:   "\x1b[1m",
+      dim:    "\x1b[2m",
+    }
+  : {
+      reset:  "",
+      cyan:   "",
+      green:  "",
+      yellow: "",
+      red:    "",
+      bold:   "",
+      dim:    "",
+    };
+
+// `cErr` is the same idea for stderr. Mostly identical to `c` but checked
+// against the stderr TTY state instead so the user can `2>&1 | less` while
+// still keeping a clean redirected stdout in another pipe.
+const cErr = COLORS_ENABLED_STDERR ? c : {
+  reset: "", cyan: "", green: "", yellow: "", red: "", bold: "", dim: "",
+};
+
+// Status glyphs. When colors are off (non-TTY or NO_COLOR), we also drop
+// the emoji and substitute ASCII tags so a redirected `> findings.txt`
+// is plain ASCII and a non-UTF-8 console (some Windows cmd setups) does
+// not render mojibake. The shape stays the same so visual scannability
+// is preserved either way.
+const GLYPH = {
+  ok:   COLORS_ENABLED_STDOUT ? "✅ " : "[ok]   ",
+  warn: COLORS_ENABLED_STDERR ? "⚠️  " : "[warn] ",
+  err:  COLORS_ENABLED_STDERR ? "❌ " : "[err]  ",
 };
 
 const log  = (msg) => console.log(msg);
 const info = (msg) => console.log(`${c.cyan}${msg}${c.reset}`);
-const ok   = (msg) => console.log(`${c.green}✅ ${msg}${c.reset}`);
-const warn = (msg) => console.warn(`${c.yellow}⚠️  ${msg}${c.reset}`);
-const err  = (msg) => console.error(`${c.red}❌ ${msg}${c.reset}`);
+const ok   = (msg) => console.log(`${c.green}${GLYPH.ok}${msg}${c.reset}`);
+const warn = (msg) => console.warn(`${cErr.yellow}${GLYPH.warn}${msg}${cErr.reset}`);
+const err  = (msg) => console.error(`${cErr.red}${GLYPH.err}${msg}${cErr.reset}`);
 
 // ---------------------------------------------------------------------------
 // HELP
@@ -112,7 +166,7 @@ ${c.bold}QUICK START${c.reset}
   3. In any project: guardian init
   4. guardian audit
 
-${c.dim}Version 1.3.0 · MIT License${c.reset}
+${c.dim}Version 1.3.1 · MIT License${c.reset}
 `);
 }
 
@@ -155,11 +209,41 @@ function runAudit() {
 // SCAN — scan a string for injection
 // ---------------------------------------------------------------------------
 
+// Read all of stdin into a single string. Resolves on EOF, or after a
+// 5-second timeout if nothing arrives (so the CLI doesn't hang forever
+// when it's invoked without arguments AND without piped input). Returns
+// an empty string on the timeout path.
+function readStdinSync(timeoutMs = 5000) {
+  return new Promise((resolve) => {
+    let data = "";
+    const timer = setTimeout(() => resolve(data), timeoutMs);
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => { data += chunk; });
+    process.stdin.on("end", () => { clearTimeout(timer); resolve(data); });
+    process.stdin.on("error", () => { clearTimeout(timer); resolve(data); });
+  });
+}
+
 async function runScan() {
-  const text = args.slice(1).join(" ");
+  // 1.3.1: accept input from EITHER positional args OR piped stdin.
+  // Pre-1.3.1 the CLI required `guardian scan "text"` and could not be
+  // used in pipelines like `cat untrusted.txt | guardian scan` or
+  // `curl -s ... | guardian scan`. Argv-first / stdin-fallback matches
+  // what every standard Unix tool does (grep, jq, sed, base64).
+  let text = args.slice(1).join(" ");
+
+  // Only consult stdin when no positional text was provided AND stdin
+  // is being piped (not a TTY). If stdin IS a TTY, the user invoked
+  // `guardian scan` interactively with no args — show usage instead of
+  // hanging on a blank stdin waiting for input.
+  if (!text && !process.stdin.isTTY) {
+    text = (await readStdinSync()).trim();
+  }
 
   if (!text) {
     err("Usage: guardian scan \"<text to scan>\"");
+    err("       echo \"<text>\" | guardian scan");
+    err("       guardian scan < input.txt");
     process.exit(1);
   }
 
@@ -386,11 +470,24 @@ function editorCoverage(root) {
   // points users at AGENTS.md for the shared rules. Reported separately so a
   // user who skipped GEMINI.md provisioning can see that the door isn't in
   // place for them yet.
-  if (hasGeminiMd) {
+  //
+  // 1.3.1: Gemini's status is gated on BOTH files because GEMINI.md is a
+  // pointer file — it tells Gemini "read AGENTS.md and CLAUDE.md for the
+  // full rules." If AGENTS.md is missing, the pointer dangles and the
+  // Gemini agent loads no Guardian rules even though GEMINI.md exists.
+  // Pre-1.3.1 the row reported BEHAVIOR-ONLY whenever GEMINI.md existed,
+  // which silently lied about the user's actual coverage.
+  if (hasGeminiMd && hasAgentsMd) {
     rows.push({
       editor: "Gemini CLI",
       status: "BEHAVIOR-ONLY",
       detail: "GEMINI.md → AGENTS.md + runtime guard + audit CLI (no hook integration)",
+    });
+  } else if (hasGeminiMd && !hasAgentsMd) {
+    rows.push({
+      editor: "Gemini CLI",
+      status: "PARTIAL",
+      detail: "GEMINI.md present but AGENTS.md missing — pointer dangles, no rules loaded",
     });
   } else {
     rows.push({
