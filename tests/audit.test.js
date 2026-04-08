@@ -999,6 +999,219 @@ describe("v1.2.4 — DEP-001 gated on HTTP server shape", () => {
 });
 
 // ---------------------------------------------------------------------------
+// v1.3.0 — INJ-005b: template literal SQL with ${} interpolation,
+// regardless of how the variable is used (variable indirection fix)
+// ---------------------------------------------------------------------------
+//
+// The pre-1.3.0 INJ-005 rule required the backtick template to be the
+// FIRST ARGUMENT of `query|execute|exec|raw|prepare`. A simple two-line
+// refactor evaded the rule:
+//
+//   const sql = `SELECT * FROM users WHERE id = ${userId}`;
+//   db.query(sql);
+//
+// The SQL is still unparameterized, the user input is still being
+// spliced into the query text, the injection surface is identical —
+// but the regex sees `db.query(sql)` (no backtick as the first arg)
+// and doesn't fire. A single level of variable indirection bypassed
+// the entire rule.
+//
+// Fix: add a companion rule INJ-005b that catches template-literal
+// SQL with `${}` interpolation ANYWHERE in the file, regardless of
+// how (or whether) the variable is subsequently used. Writing
+// `const sql = \`SELECT ... ${x}\`` is independently dangerous — if
+// that line exists in your code, it's a bug, whether it's then
+// passed directly to `db.query(sql)` or through 5 more levels of
+// indirection. The original INJ-005 is kept as-is; projects can get
+// the direct-call match from INJ-005 and the declaration-site match
+// from INJ-005b, making the two rules complementary.
+
+describe("v1.3.0 — INJ-005b: variable-indirection template literal SQL", () => {
+  test("INJ-005b catches const X = `SELECT ... ${x}` ... db.query(X)", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "src", "bad.js"),
+        "async function getUser(userId) {\n" +
+        "  const sql = `SELECT * FROM users WHERE id = ${userId}`;\n" +
+        "  return await db.query(sql);\n" +
+        "}\n",
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        hasFinding(report, "INJ-005b"),
+        "INJ-005b should fire on template-literal SQL stored in a variable"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("INJ-005b catches let X = `INSERT INTO ... ${x}` (bare declaration)", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "src", "bad.ts"),
+        "let sql: string;\n" +
+        "sql = `INSERT INTO audit_log (actor) VALUES ('${actor}')`;\n" +
+        "await db.execute(sql);\n",
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        hasFinding(report, "INJ-005b"),
+        "INJ-005b should fire on a template-literal SQL assignment with an interpolation"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("INJ-005b does NOT fire on template literal without interpolation", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "src", "ok.js"),
+        "const sql = `SELECT id, name FROM users WHERE active = true`;\n" +
+        "const rows = await db.query(sql);\n",
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "INJ-005b"),
+        "INJ-005b must not fire on a template-literal SQL with no interpolation"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("INJ-005b does NOT fire on a template literal that isn't SQL", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "src"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "src", "ok.js"),
+        "const greeting = `Hello, ${name}! You have ${count} messages.`;\n" +
+        "console.log(greeting);\n",
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "INJ-005b"),
+        "INJ-005b must not fire on a non-SQL template literal with interpolation"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v1.3.0 — INJ-006: Python f-string SQL with inner quoted literals
+// ---------------------------------------------------------------------------
+//
+// The pre-1.3.0 INJ-006 regex used `[^"']*` between the f-string's
+// opening and closing quotes. That character class excludes BOTH quote
+// types, so any f-string containing a literal like `WHERE name = 'admin'`
+// — which is most real-world SQL — broke the match and the rule silently
+// did nothing.
+//
+// Fix: split into two alternation branches, one for each outer quote
+// style. When the f-string is `f"..."` the inner character class
+// excludes only `"`, so single quotes are allowed. When the f-string
+// is `f'...'` the inner character class excludes only `'`, so double
+// quotes are allowed. Real-world SQL almost always contains string
+// equality literals like `'admin'` or `'active'`, and the pre-1.3.0
+// regex couldn't see any of them.
+
+describe("v1.3.0 — INJ-006 inner-quote regex fix", () => {
+  test("INJ-006 catches f\"...'{x}'...\" — double-quoted outer, single-quoted inner", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "app"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "app", "bad.py"),
+        "def get_user_by_email(email):\n" +
+        "    cur.execute(f\"SELECT * FROM users WHERE email = '{email}'\")\n",
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        hasFinding(report, "INJ-006"),
+        "INJ-006 should fire on an f\"...\" SQL that contains a single-quoted literal inside"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("INJ-006 catches f'...\"{x}\"...' — single-quoted outer, double-quoted inner", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "app"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "app", "bad.py"),
+        "def find_items(keyword):\n" +
+        "    cur.execute(f'SELECT * FROM items WHERE title LIKE \"%{keyword}%\"')\n",
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        hasFinding(report, "INJ-006"),
+        "INJ-006 should fire on an f'...' SQL that contains a double-quoted literal inside"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("INJ-006 still catches the simple no-inner-quotes form (regression guard)", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "app"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "app", "bad.py"),
+        "def get_user(user_id):\n" +
+        "    cur.execute(f\"SELECT * FROM users WHERE id = {user_id}\")\n",
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        hasFinding(report, "INJ-006"),
+        "INJ-006 must still fire on the original simple form with no inner quoted literal"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("INJ-006 does NOT fire on parameterized Python query", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+    try {
+      mkdirSync(path.join(dir, "app"), { recursive: true });
+      writeFileSync(
+        path.join(dir, "app", "ok.py"),
+        "def get_user(user_id):\n" +
+        "    cur.execute(\"SELECT * FROM users WHERE id = %s\", (user_id,))\n",
+        "utf8"
+      );
+      const report = runAuditOn(dir);
+      assert.ok(
+        !hasFinding(report, "INJ-006"),
+        "INJ-006 must not fire on a parameterized %s query passed as separate arg"
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

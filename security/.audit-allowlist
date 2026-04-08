@@ -31,3 +31,5 @@ security/02-code-security.js       # reason: structured logger module — must c
 security/03-audit.js               # reason: audit script — its own pattern definitions match themselves (eval, dangerouslySetInnerHTML, console.log)
 tests/injection-guard.test.js      # reason: test fixtures contain deliberate fake secrets (sk-abcdef...) to prove guardOutput catches them
 tests/audit.test.js                # reason: 1.1.1 regression suite — fixtures deliberately contain sk-proj-/sk-ant-/SQL-concat/ERR-001 to prove the new rules fire
+security/04-sql-guard.js           # reason: SQL helper — JSDoc/example strings contain `SELECT ... ${id}` patterns that the new INJ-005b rule (1.3.0) would otherwise flag; the helper EXISTS to make the safe form easy
+tests/sql-guard.test.js            # reason: SQL helper test suite — every test fixture demonstrates an unsafe `SELECT ... ${id}` pattern that the helper rewrites; INJ-005b would flag the entire file

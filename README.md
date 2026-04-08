@@ -6,7 +6,7 @@ Free and open source · MIT License · Built by [onthelevelconcepts.com](https:/
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-cyan.svg)](LICENSE)
 [![Node: 22+](https://img.shields.io/badge/Node-22%2B-green.svg)](https://nodejs.org)
-[![Version: 1.2.4](https://img.shields.io/badge/version-1.2.4-blue.svg)](package.json)
+[![Version: 1.3.0](https://img.shields.io/badge/version-1.3.0-blue.svg)](package.json)
 
 ---
 

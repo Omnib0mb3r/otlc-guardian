@@ -1,5 +1,5 @@
 # OTLC Guardian — Gemini CLI Instructions
-<!-- onthelevelconcepts.com · Version 1.2.4 -->
+<!-- onthelevelconcepts.com · Version 1.3.0 -->
 <!-- Read by Google Gemini CLI and any agent that looks for GEMINI.md. -->
 <!-- For Codex/Cursor/Aider/Continue/Windsurf see AGENTS.md.            -->
 <!-- For Claude Code see CLAUDE.md.                                     -->
@@ -67,4 +67,4 @@ no external dependencies.
 
 See `README.md` for a full walkthrough and the agent compatibility table.
 
-<!-- OTLC Guardian · onthelevelconcepts.com · 1.2.4 -->
+<!-- OTLC Guardian · onthelevelconcepts.com · 1.3.0 -->

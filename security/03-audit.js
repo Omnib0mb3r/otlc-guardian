@@ -470,13 +470,70 @@ const AUDIT_RULES = [
     fileTypes: [".js", ".ts", ".jsx", ".tsx"],
     wholeFile: true,
   },
+  //
+  // INJ-005b (new in 1.3.0) — variable-indirection companion to INJ-005.
+  //
+  // The pre-1.3.0 INJ-005 required the backtick template to be the first
+  // argument of `query|execute|exec|raw|prepare`. A simple two-line refactor
+  // bypassed the rule entirely:
+  //
+  //   const sql = `SELECT * FROM users WHERE id = ${userId}`;
+  //   db.query(sql);
+  //
+  // The SQL is still unparameterized; the user input is still spliced into
+  // the query text; the injection surface is identical — but the old regex
+  // only saw `db.query(sql)` (no backtick, no match) and the bug sailed
+  // through the audit.
+  //
+  // INJ-005b catches the DECLARATION SITE instead of the CALL site. Writing
+  //   `SELECT ... ${x}`
+  // anywhere in a source file is independently dangerous: if that line
+  // exists, the code is broken whether the variable is then passed directly
+  // to `db.query(sql)` or through ten more levels of indirection.
+  //
+  // Both rules are kept. A single vulnerable line like
+  //   db.query(`SELECT * FROM u WHERE id = ${id}`)
+  // fires both INJ-005 and INJ-005b — slightly redundant but harmless,
+  // and splitting them lets the two match independently so a project
+  // using only one form still gets caught. Running INJ-005b as a
+  // `wholeFile` rule means a multi-line template literal split across
+  // several physical lines is still detected.
+  {
+    id: "INJ-005b", category: "Injection Risk", severity: "CRITICAL",
+    description: "Template-literal SQL with ${} interpolation — SQL injection risk (variable form)",
+    pattern: /`[^`]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[^`]*\$\{[^`]*`/i,
+    fileTypes: [".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs", ".mts", ".cts"],
+    wholeFile: true,
+    // This rule is very noisy on documentation files that show the pattern
+    // as an example of what NOT to do (e.g. STANDARDS.md, an ORM README).
+    // The global doc-exempt marker `otlc-guardian:doc` plus the per-file
+    // `otlc-guardian:audit-exempt` marker both already short-circuit it
+    // at the scanner layer, so no per-rule exclude list is needed here.
+  },
   {
     id: "INJ-006", category: "Injection Risk", severity: "CRITICAL",
     description: "Python SQL with f-string or % formatting — SQL injection risk",
     // Python equivalents: f"SELECT ... {user}" and "SELECT ... %s" % (user,).
     // cursor.execute is the standard entry point; sqlalchemy's
     // session.execute(text(...)) with f-strings is also caught here.
-    pattern: /\bexecute\s*\(\s*(?:f["'][^"']*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[^"']*\{[^"']*["']|["'][^"']*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[^"']*%[sd][^"']*["']\s*%)/i,
+    //
+    // Pre-1.3.0 the inner character class was `[^"']*` which excluded BOTH
+    // quote styles. That meant any real-world f-string containing a literal
+    // like `WHERE name = 'admin'` broke the match and the rule silently
+    // did nothing on most production-shaped SQL.
+    //
+    // Fix (1.3.0): split into quote-specific alternation branches so each
+    // outer quote style allows the opposite inner quote style through.
+    //
+    //   Branch 1: f"..."  — inner class is `[^"]` (allows `'`)
+    //   Branch 2: f'...'  — inner class is `[^']` (allows `"`)
+    //   Branch 3: "..." % (user,) / '...' % (user,)  — legacy % formatting
+    //             (same two inner classes for the same reason)
+    //
+    // The third branch also catches `.execute("SELECT ... %s" % user)` via
+    // the trailing `%` operator — the old regex had this branch as well,
+    // now split into two quote-specific sub-branches.
+    pattern: /\bexecute\s*\(\s*(?:f"[^"]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[^"]*\{[^"]*"|f'[^']*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[^']*\{[^']*'|"[^"]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[^"]*%[sd][^"]*"\s*%|'[^']*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[^']*%[sd][^']*'\s*%)/i,
     fileTypes: [".py"],
     wholeFile: true,
   },

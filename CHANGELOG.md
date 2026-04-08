@@ -4,6 +4,146 @@ All notable changes to OTLC Guardian. The format follows [Keep a Changelog](http
 
 ---
 
+## [1.3.0] — 2026-04-08
+
+Audit blind-spot fixes plus release-readiness improvements. Two new
+audit tests cover bypass patterns the pre-1.3.0 ruleset silently
+missed; one new audit rule (`INJ-005b`) catches the variable-indirection
+form of template-literal SQL; the existing `INJ-006` Python rule was
+rewritten so it actually fires on real-world SQL containing inner
+quoted literals (the most common case). Plus npm publish hygiene and
+a GitHub Actions Node 20 deprecation fix.
+
+Minor version bump (`1.2.4` → `1.3.0`) because rule additions and
+behavior changes are not patches under semver — adding a new rule
+that fires on previously-clean code is a feature, not a bugfix.
+
+### Added
+
+- **`INJ-005b`** — new CRITICAL rule that catches template-literal
+  SQL with `${}` interpolation **regardless of how the variable is
+  used**. The pre-1.3.0 `INJ-005` rule required the backtick template
+  to be the first argument of `query|execute|exec|raw|prepare`, so a
+  trivial two-line refactor bypassed it:
+    ```js
+    const sql = `SELECT * FROM users WHERE id = ${userId}`;
+    db.query(sql);   // INJ-005 misses this — no backtick at the call site
+    ```
+  Writing the dangerous template literal anywhere in source is
+  independently a bug, whether the variable is then passed directly
+  to `db.query(sql)` or through ten more levels of indirection.
+  `INJ-005b` catches the **declaration site** instead of the call
+  site. Both rules are kept; they're complementary. A direct call
+  fires both — slightly redundant but harmless.
+
+- **`package.json` `files` field** — explicit allowlist of what
+  `npm publish` actually ships. Pre-1.3.0 the package fell back to
+  `.gitignore` (which is the wrong tool for the job — `.gitignore`
+  excludes things from git, not from npm). The new field ships:
+  `bin/`, `security/`, `.claude/`, `.github/`, all the markdown
+  docs, the LICENSE, the `.env.example`, and `.gitleaks.toml`.
+  Tarball size: 148.3 kB unpacked, 39 files. Tests are still
+  shipped because `guardian init` copies them into target projects
+  as part of the setup.
+
+### Fixed
+
+- **`INJ-006` (Python f-string SQL) regex rewritten to handle inner
+  quoted literals.** The pre-1.3.0 character class `[^"']*` excluded
+  BOTH quote styles, so an f-string containing a literal like
+  `WHERE name = 'admin'` — which is most real-world SQL — broke
+  the match and the rule silently did nothing. Real-world Python
+  code is full of these patterns and the audit was missing every
+  one of them. New regex splits into quote-specific alternation
+  branches: `f"..."` allows `'` inside, `f'...'` allows `"` inside.
+  Same fix applied to the legacy `% formatting` branch.
+
+- **GitHub Actions Node 20 deprecation warnings.** Bumped
+  `actions/checkout@v4` → `@v6` (released Nov 2025) and
+  `actions/setup-node@v4` → `@v6` (released Dec 2025). Both v6
+  releases run on Node.js 24, removing the deprecation warning
+  GitHub started emitting in late 2025. `gitleaks/gitleaks-action`
+  pinned to `@v2.3.9` (the latest v2.x as of 2026-04-08) for
+  reproducibility. GitHub's force-migration deadlines are
+  2026-06-02 (force Node 24) and 2026-09-16 (Node 20 removed).
+
+- **CI workflow now runs the full `npm test` script** instead of
+  invoking each test file individually. Pre-1.3.0 the workflow had
+  hardcoded `node tests/injection-guard.test.js` plus a few `if
+  -f` guards for the others, which silently skipped any test file
+  the workflow author forgot to add. The 1.2.4 release accidentally
+  left `tests/audit.test.js` and `tests/sql-guard.test.js` out of
+  the CI invocation list — both were running locally and via `npm
+  test`, but CI was only running 4 of the 6 test files. Switching
+  to `npm test` makes the CI invocation match what every developer
+  runs locally, eliminating an entire class of "I forgot to add
+  this test to CI" bugs.
+
+### Changed
+
+- **Audit allowlist (`security/.audit-allowlist`) gained two
+  entries:** `security/04-sql-guard.js` and `tests/sql-guard.test.js`.
+  The new `INJ-005b` rule correctly fires on the SQL helper's own
+  JSDoc examples and test fixtures (38 findings on the helper alone)
+  because they all demonstrate the unsafe `\`SELECT ... ${id}\`` form
+  the helper exists to replace. Allowlist entries include the full
+  reason field per the `.audit-allowlist` format contract — silent
+  exemptions are forbidden.
+
+### Verification
+
+- `npm test` — all 6 test files green: injection-guard, init, hook,
+  agents-md, **audit 48/48 (was 40/40 in 1.2.4)**, sql-guard 40/40
+- `node security/03-audit.js .` — `No issues found` on the Guardian
+  repo. **24 rules** (up from 23 in 1.2.4 — INJ-005b added).
+  **7 allowlisted files** (up from 5).
+- `node bin/guardian.js check` — 15 passed, 0 warnings, 0 missing
+- 12-project real-world re-audit (DevNeural, NLT, omnibomber, autolisp,
+  blkbom, Claude-Setup, conveyor-designer, conveyornum, devneural-projects,
+  dev-template, Landmark40, skill-connections) shows **zero false
+  positives from INJ-005b or the rewritten INJ-006**. The new rules
+  are correctly scoped — they catch the dangerous patterns without
+  flooding real codebases. Same finding totals as 1.2.4 across all
+  12 projects.
+
+### Not changed
+
+- The `--json` output shape. Field names, severities, and finding
+  structure are identical to 1.2.4. New rule IDs (`INJ-005b`) appear
+  in the findings array; no field renames or removals.
+- The runtime injection guard (`security/01-injection-guard.js`).
+  This release is audit-only and CI-config-only.
+- The runtime SQL helper (`security/04-sql-guard.js`). The helper
+  itself is unchanged; only its allowlist entry changed because the
+  new INJ-005b rule would otherwise flag the helper's own JSDoc
+  examples as dangerous.
+- The Python equivalent of `04-sql-guard.js`. Still deferred — Python
+  has no tagged template literals so the design needs to be different
+  (context manager or parameterized wrapper). On the roadmap for a
+  future release.
+
+### Upgrade notes
+
+If you're upgrading from 1.2.x and you have a project that legitimately
+uses template-literal SQL (e.g. you're maintaining an ORM internals
+file or a SQL builder library), the new `INJ-005b` rule will fire on
+your declaration sites. Two options:
+
+1. **The right fix:** rewrite to the parameterized form. Use the
+   bundled `security/04-sql-guard.js` `sql` tagged template:
+   ```js
+   import { sql } from 'otlc-guardian/sql';
+   const query = sql`SELECT * FROM users WHERE id = ${userId}`;
+   await db.query(query.text, query.values);
+   ```
+2. **The escape hatch:** add the per-file marker
+   `// otlc-guardian:audit-exempt` to a file that legitimately needs
+   to construct raw SQL strings, OR add the file to a project-local
+   `security/.audit-allowlist` with a reason. Both mechanisms are
+   reviewable in PR diffs.
+
+---
+
 ## [1.2.4] — 2026-04-08
 
 `DEP-001` false-positive fix. The pre-1.2.4 `DEP-001 — No health check

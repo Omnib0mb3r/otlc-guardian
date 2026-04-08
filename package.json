@@ -1,6 +1,6 @@
 {
   "name": "otlc-guardian",
-  "version": "1.2.4",
+  "version": "1.3.0",
   "description": "Production-grade AI security guardrails. Prompt injection defense, senior developer standards, and Claude Code behavior enforcement.",
   "type": "module",
   "main": "security/01-injection-guard.js",
@@ -14,6 +14,24 @@
     "guardian":       "./bin/guardian.js",
     "guardian-audit": "./security/03-audit.js"
   },
+  "files": [
+    "bin/",
+    "security/",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md",
+    "STANDARDS.md",
+    "SETUP.md",
+    "FAQ.md",
+    "SECURITY.md",
+    "CHANGELOG.md",
+    "README.md",
+    "LICENSE",
+    ".env.example",
+    ".gitleaks.toml",
+    ".claude/",
+    ".github/"
+  ],
   "scripts": {
     "audit":        "node security/03-audit.js .",
     "audit:fail":   "node security/03-audit.js . --fail-on-error",

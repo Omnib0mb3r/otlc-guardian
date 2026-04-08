@@ -12,7 +12,13 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        # Bumped to v6 (Nov 2025, latest stable as of 2026-04-08) to
+        # resolve the Node 20 deprecation warning. GitHub announced
+        # that v4 will be force-migrated to Node 24 on 2026-06-02 and
+        # Node 20 removed from runners entirely on 2026-09-16. v6 runs
+        # on Node 24 natively so the warning goes away and the action
+        # keeps working after the runner migration.
+        uses: actions/checkout@v6
         with:
           # Full history is required for gitleaks to compute the diff
           # range on pull_request events. Without this, the action
@@ -23,17 +29,22 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        # Bumped to v6 (Dec 2025, latest stable as of 2026-04-08) — same
+        # Node 24 forward path as actions/checkout@v6. The `node-version`
+        # input below (the runtime Guardian's tests run against) is a
+        # separate concern from the Node version the ACTION ITSELF runs
+        # on; the action version determines the latter.
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
 
       - name: Run Guardian unit tests
+        # All six test files run via the project's `npm test` script so the
+        # CI invocation matches what a developer runs locally. The earlier
+        # if-this-file-exists guards are gone — these test files are part
+        # of the package and any missing one is a real bug, not a soft skip.
         if: hashFiles('tests/injection-guard.test.js') != ''
-        run: |
-          node tests/injection-guard.test.js
-          if [ -f tests/init.test.js ]; then node tests/init.test.js; fi
-          if [ -f tests/hook.test.js ]; then node tests/hook.test.js; fi
-          if [ -f tests/agents-md.test.js ]; then node tests/agents-md.test.js; fi
+        run: npm test
 
       - name: Run guardian check
         if: hashFiles('bin/guardian.js') != ''
@@ -58,7 +69,13 @@ jobs:
           echo "If this number is unexpected, review security/.audit-allowlist and any files containing the per-file exempt marker." >> $GITHUB_STEP_SUMMARY
 
       - name: Check for secrets with Gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        # Pinned to v2.3.9 (the latest v2.x tag as of 2026-04-08, released
+        # Apr 2025) rather than the floating @v2. The floating tag would
+        # also work today but pinning to an exact version gives us a
+        # reproducible build and catches silent upstream regressions.
+        # When v3 ships (or v2 gains a further Node bump), re-verify
+        # against github.com/gitleaks/gitleaks-action/releases and bump.
+        uses: gitleaks/gitleaks-action@v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

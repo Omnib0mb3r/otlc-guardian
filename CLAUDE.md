@@ -1,6 +1,6 @@
 # OTLC Guardian — Claude Behavior Rules
 # // claude behavior layer · onthelevelconcepts.com
-# Version: 1.2.4
+# Version: 1.3.0
 #
 # This file is read automatically by Claude Code on every session.
 # It enforces production-grade, security-forward development standards.
