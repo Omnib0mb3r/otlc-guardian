@@ -421,6 +421,29 @@ httpClient.interceptors.response.use(
 }
 ```
 
+### Child Processes (Windows)
+- **Always pass `windowsHide: true`** to every `child_process.spawn`, `spawnSync`, `execSync`, and `exec`. Default behavior allocates a visible console window for each subprocess on Windows; polling loops or per-request shell-outs flash console windows onto the user's desktop multiple times per minute.
+- The option is ignored on POSIX, so include it unconditionally — never gate behind `if (process.platform === 'win32')`.
+- For long-running detached processes, combine `windowsHide: true` + `detached: true` + redirected `stdio`. `detached: true` alone allocates a fresh console; `windowsHide` is what hides it.
+- For Windows scheduled tasks invoking PowerShell, action arguments must include `-WindowStyle Hidden` AND `-NonInteractive`. Without `-WindowStyle Hidden`, the task host briefly shows the console.
+- For hooks where a parent harness controls spawn (Claude Code, Stream Deck, etc.), wrap the command in a `wscript.exe` + VBS shim doing `WshShell.Run cmd, 0, False`. Defense in depth because the parent's spawn behavior is not under your control.
+- Audit-before-merge: `grep -rn 'spawn\|execSync\|spawnSync' src/` and verify every result has the flag. Add an eslint custom rule if the project's lint config supports it.
+
+```ts
+// correct
+import { spawn, execSync } from 'node:child_process';
+execSync('powershell -NoProfile -Command "..."', {
+  encoding: 'utf-8',
+  stdio: ['ignore', 'pipe', 'ignore'],
+  windowsHide: true,                           // never omit
+});
+const child = spawn(node, [entry], {
+  detached: true,
+  stdio: ['ignore', out, err],
+  windowsHide: true,                           // ditto
+});
+```
+
 ---
 
 ## PART 4 — PYTHON STACK
