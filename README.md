@@ -6,7 +6,7 @@ Free and open source · MIT License · Built by [onthelevelconcepts.com](https:/
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-cyan.svg)](LICENSE)
 [![Node: 22+](https://img.shields.io/badge/Node-22%2B-green.svg)](https://nodejs.org)
-[![Version: 1.3.1](https://img.shields.io/badge/version-1.3.1-blue.svg)](package.json)
+[![Version: 1.4.0](https://img.shields.io/badge/version-1.4.0-blue.svg)](package.json)
 
 ---
 
@@ -240,9 +240,10 @@ Same behavior as `init` (safe to re-run any time). Use this after pulling a new 
 guardian update
 ```
 
-**`guardian audit`** — Scan your project for security and quality problems. 24 rules
-in 1.3.x (the rule set grows; check `node bin/guardian.js help` or `CHANGELOG.md` for
-the current count). Run regularly.
+**`guardian audit`** — Scan your project for security and quality problems. 33 rules
+in 1.4.x — 28 regex patterns, 3 per-file analyzers, 2 project-level checks. The audit
+prints the live breakdown on every run, so that line is always the authoritative count.
+Run regularly.
 ```bash
 guardian audit
 guardian audit ./src              # scope to a subdirectory
@@ -305,8 +306,13 @@ Claude Code.
 
 **Audit CLI — scan any codebase:**
 - `guardian audit` scans for hardcoded secrets, silent errors, raw SQL, console.log in
-  prod paths, missing `/health`, and more (24 rules in 1.3.x — every finding should be
+  prod paths, missing `/health`, and more (33 rules in 1.4.x — every finding should be
   reviewed; the tool is advisory)
+- Finds the two bugs AI coding tools generate most, which no regex can express:
+  endpoints that perform side effects with no authentication (`AUTHZ-001`) and
+  authenticated handlers that act on any object by ID with no ownership check
+  (`AUTHZ-003`, IDOR). Both use a per-file route-handler analyzer. See
+  [`guides/INDEX.md`](guides/INDEX.md)
 - JSON output mode for CI integration
 - Works on any project — Python, TypeScript, JavaScript, mixed
 
@@ -441,6 +447,8 @@ start a [discussion](https://github.com/Omnib0mb3r/otlc-guardian/discussions).
 | `FAQ.md` | Common questions answered |
 | `CHANGELOG.md` | Version history |
 | `CONTRIBUTING.md` | How to contribute patterns, rules, or fixes |
+| `guides/INDEX.md` | Field guides for the bug classes AI tools generate most, mapped to the rules that catch them |
+| `skill/SKILL.md` | Guardian as an invocable agent skill, for projects that do not install the package |
 
 ---
 

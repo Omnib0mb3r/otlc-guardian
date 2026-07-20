@@ -4,6 +4,84 @@ All notable changes to OTLC Guardian. The format follows [Keep a Changelog](http
 
 ---
 
+## [1.4.0] — 2026-07-20
+
+Authorization and validation coverage. Guardian could already find a
+leaked key, a silent catch, and a concatenated SQL string. It could not
+find the two bugs AI coding assistants generate most: an endpoint with no
+authentication, and an endpoint that authenticates but never checks
+whether the caller may touch the object they named.
+
+Neither is expressible as a regular expression. Both are *absence*
+conditions scoped to a block — "nowhere inside these braces is there an
+auth check" — and negative matching across an arbitrarily nested block is
+not something a regular language can do. So the audit engine gained a
+third rule kind rather than shipping a regex approximation that would fire
+on unrelated files.
+
+### Added
+
+- **Per-file analyzer rule kind.** Rules may now supply
+  `fileCheckFn(content, filePath) -> [{ line, content }]` alongside the
+  existing `pattern` (regex) and `checkFn` (project-level predicate)
+  kinds. The analyzer extracts route-handler bodies by string- and
+  comment-aware brace matching, then tests for the presence or absence of
+  authentication, side effects, caller-supplied object IDs, ownership
+  checks, and schema parsing. Handler signatures are recognised across
+  Express/Fastify route registration, Next.js App Router route handlers,
+  Next.js Pages Router / Vercel serverless default exports, and arrow-form
+  exports. Exemptions (`otlc-guardian:audit-exempt` marker and the central
+  `security/.audit-allowlist`) apply to analyzer rules identically to
+  pattern rules. An analyzer that throws on a malformed file warns and
+  continues rather than aborting the run.
+
+- **Seven rules across two new categories.**
+
+  | Rule | Severity | Kind | Detects |
+  |---|---|---|---|
+  | `AUTHZ-001` | CRITICAL | analyzer | Handler performs a side effect with no authentication check |
+  | `AUTHZ-002` | CRITICAL | pattern | Identity read from request body/query instead of a verified session |
+  | `AUTHZ-003` | CRITICAL | analyzer | IDOR — authenticated handler acts on a caller-supplied object ID with no ownership check |
+  | `AUTHZ-004` | HIGH | pattern | Secret compared with `===` rather than `crypto.timingSafeEqual` |
+  | `AUTHZ-005` | HIGH | pattern | Cache key not scoped to the requesting user, so a cache hit bypasses authorization |
+  | `VAL-001` | HIGH | analyzer | Request body reaches a side effect without a schema parse |
+  | `VAL-002` | CRITICAL | pattern | Raw email header built by interpolation — CRLF injection makes it an open relay |
+
+  Detection is deliberately conservative. `AUTHZ-001` only fires when the
+  handler contains a real side effect, so a read-only or computational
+  route is never flagged. `AUTHZ-003` only fires when the handler *does*
+  authenticate, so an unauthenticated route is reported once by
+  `AUTHZ-001` rather than twice under two rule IDs.
+
+- **`guides/` — three field guides, stored verbatim.**
+  `securing-endpoints.md`, `authorization-idor.md`, and
+  `form-validation.md`, sourced from
+  [The Lazy Developer](https://www.thelazydeveloper.org/resources).
+  Every new rule carries a comment pointing back at the guide section it
+  was written against, and `guides/INDEX.md` maps each finding to the
+  guide that explains the fix.
+
+- **`skill/SKILL.md` — Guardian as an invocable skill.** Any project can
+  now reach the standards without installing the package, via a junction
+  at `~/.claude/skills/OTLC-Guardian`. The skill runs the audit, maps
+  findings to guides, and enforces the self-audit checklist.
+
+- **Audit status line reports all three rule kinds**, e.g.
+  `Rules : 28 pattern · 3 analyzer · 2 project`.
+
+### Testing
+
+24 new tests in `tests/audit.test.js` (70 total, up from 46). Every new
+rule has both a firing fixture and a silent fixture — a security rule that
+cannot be quieted by writing correct code is a rule people switch off.
+Additional coverage for brace-matching inside string literals (a `}` in a
+string must not truncate a handler body) and for exemption handling on
+analyzer rules. Verified against a synthetic well-written Next.js API
+surface (zero findings) and its vulnerable twin (all seven rules firing on
+the correct lines).
+
+---
+
 ## [1.3.1] — 2026-04-08
 
 Comprehensive pre-release adversarial review pass. Codex CLI was tasked

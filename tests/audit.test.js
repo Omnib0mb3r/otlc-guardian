@@ -1350,6 +1350,304 @@ describe("v1.3.1 — projectRoot vs scanRoot (subdirectory audit scoping)", () =
 });
 
 // ---------------------------------------------------------------------------
+// AUTHORIZATION + VALIDATION RULES — v1.4.0
+// ---------------------------------------------------------------------------
+//
+// AUTHZ-001/003 and VAL-001 run through the per-file analyzer, not a
+// regex, so each rule needs BOTH a positive fixture (the bug fires) and a
+// negative fixture (the correct code stays silent). A security rule that
+// cannot be silenced by writing correct code is a rule people disable.
+
+describe("AUTHZ-001 — unauthenticated side-effecting handler", () => {
+  test("fires on a send-email handler with no auth check", () => {
+    const dir = makeFixture(
+      "api/send-welcome-email.ts",
+      `export default async function handler(req, res) {\n` +
+      `  const { customerEmail, customerName } = req.body;\n` +
+      `  await sendEmail({ to: customerEmail, subject: "Welcome" });\n` +
+      `  return res.status(200).json({ sent: true });\n` +
+      `}\n`
+    );
+    try {
+      assert.ok(hasFinding(runAuditOn(dir), "AUTHZ-001"), "AUTHZ-001 should fire on an unauthenticated email endpoint");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("stays silent when the handler verifies an internal secret", () => {
+    const dir = makeFixture(
+      "api/send-welcome-email.ts",
+      `export default async function handler(req, res) {\n` +
+      `  if (!verifyInternalSecret(req)) return res.status(401).json({ error: "Unauthorized" });\n` +
+      `  const parsed = welcomeSchema.safeParse(req.body);\n` +
+      `  if (!parsed.success) return res.status(400).json({ error: "Invalid" });\n` +
+      `  await sendEmail({ to: parsed.data.customerEmail, subject: "Welcome" });\n` +
+      `  return res.status(200).json({ sent: true });\n` +
+      `}\n`
+    );
+    try {
+      assert.ok(!hasFinding(runAuditOn(dir), "AUTHZ-001"), "AUTHZ-001 must not fire when auth is present");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("stays silent on a read-only handler with no side effect", () => {
+    const dir = makeFixture(
+      "api/version.ts",
+      `export async function GET() {\n` +
+      `  return Response.json({ version: "1.0.0" });\n` +
+      `}\n`
+    );
+    try {
+      assert.ok(!hasFinding(runAuditOn(dir), "AUTHZ-001"), "AUTHZ-001 must not fire on a public read-only route");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("AUTHZ-002 — identity trusted from the request", () => {
+  test("fires on req.body.userId used for a write", () => {
+    const dir = makeFixture(
+      "api/profile.ts",
+      `const { userId } = req.body;\n` +
+      `await db.profiles.update({ where: { id: req.body.userId }, data: { marketing: true } });\n`
+    );
+    try {
+      assert.ok(hasFinding(runAuditOn(dir), "AUTHZ-002"), "AUTHZ-002 should fire on body-supplied userId");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("stays silent when identity comes from the verified session", () => {
+    const dir = makeFixture(
+      "api/profile.ts",
+      `const user = await getUser(req);\n` +
+      `await db.profiles.update({ where: { id: user.id }, data: { marketing: true } });\n`
+    );
+    try {
+      assert.ok(!hasFinding(runAuditOn(dir), "AUTHZ-002"), "AUTHZ-002 must not fire on session-derived identity");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("AUTHZ-003 — IDOR, authenticated but not authorized", () => {
+  test("fires on a DELETE that only checks authentication", () => {
+    const dir = makeFixture(
+      "api/documents/route.ts",
+      `export async function DELETE(req, { params }) {\n` +
+      `  const user = await getUser(req);\n` +
+      `  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });\n` +
+      `  await db.documents.delete({ where: { id: params.id } });\n` +
+      `  return Response.json({ success: true });\n` +
+      `}\n`
+    );
+    try {
+      assert.ok(hasFinding(runAuditOn(dir), "AUTHZ-003"), "AUTHZ-003 should fire on an ownership-free delete");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("stays silent when an object-level access check is present", () => {
+    const dir = makeFixture(
+      "api/documents/route.ts",
+      `export async function DELETE(req, { params }) {\n` +
+      `  const user = await getUser(req);\n` +
+      `  if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });\n` +
+      `  await assertObjectAccess(user.id, user.role, params.id, "delete");\n` +
+      `  await db.documents.delete({ where: { id: params.id } });\n` +
+      `  return Response.json({ success: true });\n` +
+      `}\n`
+    );
+    try {
+      assert.ok(!hasFinding(runAuditOn(dir), "AUTHZ-003"), "AUTHZ-003 must not fire when access control runs");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not double-report an unauthenticated handler as IDOR", () => {
+    // A handler with no auth at all is AUTHZ-001's finding. Reporting it
+    // as AUTHZ-003 too would inflate counts and split one fix across two
+    // rule IDs.
+    const dir = makeFixture(
+      "api/documents/route.ts",
+      `export async function DELETE(req, { params }) {\n` +
+      `  await db.documents.delete({ where: { id: params.id } });\n` +
+      `  return Response.json({ success: true });\n` +
+      `}\n`
+    );
+    try {
+      const report = runAuditOn(dir);
+      assert.ok(hasFinding(report, "AUTHZ-001"), "AUTHZ-001 should own the no-auth case");
+      assert.ok(!hasFinding(report, "AUTHZ-003"), "AUTHZ-003 must not also fire on the no-auth case");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("AUTHZ-004 — non-constant-time secret comparison", () => {
+  test("fires on === against an env secret", () => {
+    const dir = makeFixture(
+      "api/auth.ts",
+      `if (req.headers["x-internal-secret"] === process.env.INTERNAL_API_SECRET) { return true; }\n`
+    );
+    try {
+      assert.ok(hasFinding(runAuditOn(dir), "AUTHZ-004"), "AUTHZ-004 should fire on === secret compare");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("stays silent when timingSafeEqual is used", () => {
+    const dir = makeFixture(
+      "api/auth.ts",
+      `return timingSafeEqual(Buffer.from(provided), Buffer.from(process.env.INTERNAL_API_SECRET));\n`
+    );
+    try {
+      assert.ok(!hasFinding(runAuditOn(dir), "AUTHZ-004"), "AUTHZ-004 must not fire on timingSafeEqual");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("AUTHZ-005 — cache key not scoped to the user", () => {
+  test("fires on a cache key built only from an object ID", () => {
+    const dir = makeFixture(
+      "lib/thumbnails.ts",
+      "const cached = await redis.get(`thumbnail:${videoId}`);\n"
+    );
+    try {
+      assert.ok(hasFinding(runAuditOn(dir), "AUTHZ-005"), "AUTHZ-005 should fire on an unscoped cache key");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("stays silent when the key is scoped to userId", () => {
+    const dir = makeFixture(
+      "lib/thumbnails.ts",
+      "const cached = await redis.get(`thumbnail:${userId}:${videoId}`);\n"
+    );
+    try {
+      assert.ok(!hasFinding(runAuditOn(dir), "AUTHZ-005"), "AUTHZ-005 must not fire on a user-scoped key");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("VAL-001 — request body without schema validation", () => {
+  test("fires when req.body reaches a write unvalidated", () => {
+    const dir = makeFixture(
+      "api/contact.ts",
+      `export default async function handler(req, res) {\n` +
+      `  const user = await getUser(req);\n` +
+      `  await db.messages.create({ data: req.body });\n` +
+      `  return res.status(201).json({ ok: true });\n` +
+      `}\n`
+    );
+    try {
+      assert.ok(hasFinding(runAuditOn(dir), "VAL-001"), "VAL-001 should fire on an unvalidated body write");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("stays silent when the body goes through safeParse", () => {
+    const dir = makeFixture(
+      "api/contact.ts",
+      `export default async function handler(req, res) {\n` +
+      `  const user = await getUser(req);\n` +
+      `  const parsed = contactSchema.safeParse(req.body);\n` +
+      `  if (!parsed.success) return res.status(400).json({ error: "Invalid" });\n` +
+      `  await db.messages.create({ data: parsed.data });\n` +
+      `  return res.status(201).json({ ok: true });\n` +
+      `}\n`
+    );
+    try {
+      assert.ok(!hasFinding(runAuditOn(dir), "VAL-001"), "VAL-001 must not fire on a Zod-validated body");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("VAL-002 — email header injection", () => {
+  test("fires on a raw header built by interpolation", () => {
+    const dir = makeFixture(
+      "lib/mail.ts",
+      "const message = `From: \"${name}\" <noreply@example.com>\\r\\nSubject: ${subject}`;\n"
+    );
+    try {
+      assert.ok(hasFinding(runAuditOn(dir), "VAL-002"), "VAL-002 should fire on interpolated email headers");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("stays silent on a structured send call with no raw headers", () => {
+    const dir = makeFixture(
+      "lib/mail.ts",
+      `await sendEmail({ to: parsed.data.email, subject: sanitizeHeaderValue(parsed.data.subject) });\n`
+    );
+    try {
+      assert.ok(!hasFinding(runAuditOn(dir), "VAL-002"), "VAL-002 must not fire on a structured send");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Analyzer robustness", () => {
+  test("a brace inside a string literal does not truncate the handler body", () => {
+    // If brace matching were naive, the `}` inside the string would close
+    // the block early, the auth check below it would fall outside the
+    // extracted body, and AUTHZ-001 would false-positive.
+    const dir = makeFixture(
+      "api/webhook.ts",
+      `export default async function handler(req, res) {\n` +
+      `  const template = "payload: { id }";\n` +
+      `  const user = await getUser(req);\n` +
+      `  if (!user) return res.status(401).end();\n` +
+      `  await db.events.create({ data: { template } });\n` +
+      `  return res.status(200).end();\n` +
+      `}\n`
+    );
+    try {
+      assert.ok(!hasFinding(runAuditOn(dir), "AUTHZ-001"), "brace-in-string must not truncate the handler body");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("audit-exempt marker suppresses analyzer rules too", () => {
+    const dir = makeFixture(
+      "api/legacy.ts",
+      `// otlc-guardian:audit-exempt — legacy route, tracked in BUGS.md\n` +
+      `export default async function handler(req, res) {\n` +
+      `  await sendEmail({ to: req.body.to });\n` +
+      `  return res.status(200).end();\n` +
+      `}\n`
+    );
+    try {
+      const report = runAuditOn(dir);
+      assert.ok(!hasFinding(report, "AUTHZ-001"), "exemption must apply to analyzer rules, not only regex rules");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

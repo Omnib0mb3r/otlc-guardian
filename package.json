@@ -1,6 +1,6 @@
 {
   "name": "otlc-guardian",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "Production-grade AI security guardrails for any AI coding agent (Claude Code, Codex, Cursor, Aider, Continue, Windsurf, Gemini). Prompt injection defense, parameterized SQL helper, audit CLI, and senior developer standards.",
   "type": "module",
   "main": "security/01-injection-guard.js",
@@ -17,6 +17,8 @@
   "files": [
     "bin/",
     "security/",
+    "guides/",
+    "skill/",
     "AGENTS.md",
     "CLAUDE.md",
     "GEMINI.md",

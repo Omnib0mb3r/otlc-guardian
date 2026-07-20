@@ -3,7 +3,7 @@
  * ============================================================
  * OTLC GUARDIAN — Safety Audit Tool
  * // security · onthelevelconcepts.com
- * Version: 1.3.1
+ * Version: 1.4.0
  * ============================================================
  *
  * Scans an existing codebase for security and quality violations.
@@ -262,8 +262,358 @@ function looksLikeHttpServer(rootDir, files) {
 }
 
 // ---------------------------------------------------------------------------
+// ROUTE HANDLER ANALYZER (1.4.0)
+// ---------------------------------------------------------------------------
+//
+// Missing authentication and IDOR (missing object-level authorization) are
+// the two highest-impact bugs AI coding assistants generate, and NEITHER can
+// be expressed as a regex. Both are *absence* conditions scoped to a block:
+//
+//   AUTHZ-001  "this handler performs a side effect and nowhere inside it
+//               is there an authentication check"
+//   AUTHZ-003  "this handler authenticates, then reads/writes an object by
+//               a caller-supplied ID without ever checking that the caller
+//               may touch THAT object"
+//
+// A regex can see a handler, and a regex can see an auth call. It cannot
+// see that the auth call is missing from within the handler's braces —
+// negative lookahead across an arbitrarily nested block is not something a
+// regular language can do. Shipping a regex approximation would mean
+// findings that fire on unrelated files, and a security tool that cries
+// wolf gets switched off. So the engine grows a third rule kind.
+//
+// Rule kinds, after this change:
+//   pattern      — regex, line-by-line or wholeFile. Cheap, most rules.
+//   checkFn      — project-level predicate, one finding, no line number.
+//   fileCheckFn  — per-file analyzer, returns [{ line, content }]. This one.
+//
+// Detection is deliberately CONSERVATIVE. Every gate below narrows the
+// candidate set, because a false positive on a security rule costs more
+// trust than a false negative costs coverage:
+//
+//   * only files whose content contains a recognised handler signature
+//   * AUTHZ-001 only fires when the handler contains a real SIDE EFFECT
+//     (db write, email send, outbound fetch, payment call) — a read-only
+//     or purely computational handler is not flagged
+//   * AUTHZ-003 only fires when the handler DOES authenticate (so it is
+//     clearly a protected route, not a public one) AND touches a
+//     caller-supplied ID AND has no ownership signal anywhere in the block
+//
+// Handler bodies are extracted by brace matching from the handler's opening
+// `{`. Brace matching is string- and comment-aware so a `}` inside a string
+// literal, template literal, or comment cannot terminate the block early.
+
+// Handler signatures across the stacks Guardian targets: Express/Fastify
+// route registration, Next.js App Router route handlers, Next.js Pages
+// Router / Vercel serverless default export, and Hono/Elysia style chains.
+// `skipParams` says where the handler BODY starts relative to the `(` the
+// signature ends on:
+//
+//   skipParams: true  — the `(` opens a PARAMETER LIST, so the body is the
+//                       first block after the matching `)`. Required for
+//                       function declarations, because a destructured
+//                       parameter (`function DELETE(req, { params })`) puts
+//                       a `{` before the body. Scanning for the first `{`
+//                       would capture `{ params }` as the entire handler,
+//                       every content check would come back empty, and the
+//                       rule would silently never fire.
+//
+//   skipParams: false — the `(` opens an ARGUMENT LIST and the body is a
+//                       callback inside it (`app.post('/x', async (req, res) => {`),
+//                       so the first block after the `(` is the right one.
+const HANDLER_SIGNATURES = [
+  // app.post('/x', ...) / router.delete('/x', ...) / server.patch(...)
+  { re: /\b(?:app|router|server|api)\.(?:get|post|put|patch|delete|all)\s*\(/g, skipParams: false },
+  // export async function POST(req) — Next.js App Router
+  { re: /\bexport\s+(?:async\s+)?function\s+(?:GET|POST|PUT|PATCH|DELETE)\s*\(/g, skipParams: true },
+  // export const POST = async (req) => — App Router, arrow form
+  { re: /\bexport\s+const\s+(?:GET|POST|PUT|PATCH|DELETE)\s*=\s*(?:async\s*)?\(/g, skipParams: true },
+  // export default async function handler(req, res) — Pages Router / Vercel
+  { re: /\bexport\s+default\s+(?:async\s+)?function\s+\w*\s*\(/g, skipParams: true },
+];
+
+// HTTP method extracted from the handler signature, used to weight
+// severity: DELETE and PATCH/PUT are the highest-impact IDOR shapes
+// because they are destructive, not merely a read leak.
+const DESTRUCTIVE_METHOD = /\b(?:DELETE|PATCH|PUT)\b|\.(?:delete|patch|put)\s*\(/;
+
+// Evidence that the handler establishes WHO is calling. Broad on purpose:
+// a false "auth is present" reading suppresses a finding, which is the
+// safe direction for a rule whose failure mode is noise.
+const AUTH_PATTERNS = [
+  /\brequireAuth\b/, /\bverifyToken\b/, /\bverifyUser\b/, /\bverifyAuth\b/,
+  /\bgetUser\s*\(/, /\bgetSession\s*\(/, /\bgetServerSession\s*\(/,
+  /\bcurrentUser\s*\(/, /\bauthenticate\b/, /\bwithAuth\b/, /\bisAuthenticated\b/,
+  /\bjwt\.verify\s*\(/, /\bverifyIdToken\s*\(/, /\bverifyInternalSecret\b/,
+  /\bsupabase[\w.]*\.auth\b/, /\bauth\(\)/, /\bclerkClient\b/, /\bgetAuth\s*\(/,
+  /\bpassport\./, /\breq\.user\b/, /\bctx\.session\b/, /\bauth\.uid\s*\(/,
+  /\bheaders\[?["'`]?authorization/i, /\bx-internal-secret\b/i, /\bapi[_-]?key\b/i,
+];
+
+// Evidence the handler CHANGES something or spends money/reputation.
+// AUTHZ-001 requires one of these — an unauthenticated handler that only
+// computes or returns a constant is not a finding worth raising.
+const SIDE_EFFECT_PATTERNS = [
+  /\.(?:create|createMany|update|updateMany|upsert|delete|deleteMany|destroy|insert|save|remove)\s*\(/,
+  /\bsendEmail\b/i, /\bsendMail\b/i, /\bnodemailer\b/, /\bresend\.emails\b/i,
+  /\bsgMail\b/, /\bses\.send/i, /\bpostmark\b/i,
+  /\bstripe\.[\w.]+\.(?:create|update|del)\b/,
+  /\bfetch\s*\(/, /\baxios\.(?:post|put|patch|delete)\s*\(/,
+  /\bexecute\s*\(/, /\bquery\s*\(/,
+  /\bwriteFile(?:Sync)?\s*\(/,
+];
+
+// A caller-supplied object identifier reaching the handler. This is the
+// IDOR surface: the value the attacker increments or swaps.
+const OBJECT_ID_PATTERNS = [
+  /\bparams\s*\.\s*id\b/, /\bparams\s*\[\s*["'`]id["'`]\s*\]/,
+  /\breq\.params\.\w*[Ii]d\b/, /\bsearchParams\.get\s*\(\s*["'`]\w*[Ii]d["'`]/,
+  /\breq\.query\.\w*[Ii]d\b/, /\bbody\s*\.\s*\w*[Ii]d\b/,
+];
+
+// Evidence that the handler checks whether THIS caller may touch THIS
+// object. Ownership column, assignment/junction lookup, role/permission
+// gate, or a centralised access-control helper.
+const OWNERSHIP_PATTERNS = [
+  /\bowner(?:Id|_id)\b/i, /\buser(?:Id|_id)\s*[:=]/i, /\bauthor(?:Id|_id)\b/i,
+  /\btenant(?:Id|_id)\b/i, /\bteam(?:Id|_id)\b/i, /\baccount(?:Id|_id)\b/i,
+  /\bassign(?:ment|ed|ee)\b/i, /\bmembership\b/i, /\bcollaborator\b/i,
+  /\bassertObjectAccess\b/, /\bcanAccess\b/, /\bauthorize\w*\s*\(/, /\bability\b/,
+  /\bpermission\b/i, /\bisOwner\b/i, /\bhasAccess\b/i, /\bforbidden\b/i,
+  /\bstatus\s*:\s*403\b/, /\bstatus\s*\(\s*403\s*\)/, /\brole\b/i,
+];
+
+/**
+ * Extract the body of the block whose opening `{` is at or after `from`.
+ * String-, template-, and comment-aware so a brace inside `"}"`, a
+ * template literal, or a comment cannot close the block early.
+ *
+ * Returns { body, start, end } or null if no balanced block was found
+ * (truncated file, syntax error, or a signature that is not followed by
+ * a block at all).
+ */
+function extractBlock(content, from) {
+  const open = content.indexOf("{", from);
+  if (open === -1) return null;
+
+  let depth = 0;
+  let i = open;
+  // Cap the scan so a pathological or minified file cannot dominate a run.
+  const limit = Math.min(content.length, open + 40000);
+
+  while (i < limit) {
+    const ch = content[i];
+    const next = content[i + 1];
+
+    if (ch === "/" && next === "/") {
+      const nl = content.indexOf("\n", i);
+      i = nl === -1 ? limit : nl + 1;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      const close = content.indexOf("*/", i + 2);
+      i = close === -1 ? limit : close + 2;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      const quote = ch;
+      i += 1;
+      while (i < limit) {
+        if (content[i] === "\\") { i += 2; continue; }
+        if (content[i] === quote) { i += 1; break; }
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return { body: content.slice(open, i + 1), start: open, end: i + 1 };
+    }
+    i += 1;
+  }
+
+  return null;
+}
+
+/**
+ * Given the index of an opening `(`, return the index just past its
+ * matching `)`. String- and comment-aware for the same reason
+ * extractBlock is: a parenthesis inside a default-value string literal
+ * must not be counted. Returns -1 if unbalanced.
+ */
+function skipParenGroup(content, openParen) {
+  if (content[openParen] !== "(") return -1;
+
+  let depth = 0;
+  let i = openParen;
+  const limit = Math.min(content.length, openParen + 4000);
+
+  while (i < limit) {
+    const ch = content[i];
+    const next = content[i + 1];
+
+    if (ch === "/" && next === "/") {
+      const nl = content.indexOf("\n", i);
+      i = nl === -1 ? limit : nl + 1;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      const close = content.indexOf("*/", i + 2);
+      i = close === -1 ? limit : close + 2;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      const quote = ch;
+      i += 1;
+      while (i < limit) {
+        if (content[i] === "\\") { i += 2; continue; }
+        if (content[i] === quote) { i += 1; break; }
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === "(") depth += 1;
+    if (ch === ")") {
+      depth -= 1;
+      if (depth === 0) return i + 1;
+    }
+    i += 1;
+  }
+
+  return -1;
+}
+
+/**
+ * Find every route handler in a file and return its body plus the line the
+ * handler is declared on. Overlapping matches (a signature that lands
+ * inside a block already captured) are dropped so a nested arrow function
+ * is not reported as a second handler.
+ */
+function findRouteHandlers(content) {
+  const handlers = [];
+
+  for (const signature of HANDLER_SIGNATURES) {
+    const re = new RegExp(signature.re.source, signature.re.flags);
+    let match;
+    while ((match = re.exec(content)) !== null) {
+      // Every signature regex ends on the `(` it opened.
+      const openParen = match.index + match[0].length - 1;
+
+      let bodyFrom = match.index;
+      if (signature.skipParams) {
+        const afterParams = skipParenGroup(content, openParen);
+        if (afterParams === -1) continue; // unbalanced — not a handler we can read
+        bodyFrom = afterParams;
+      }
+
+      const block = extractBlock(content, bodyFrom);
+      if (!block) continue;
+      handlers.push({
+        signature: match[0],
+        line: content.slice(0, match.index).split("\n").length,
+        body: block.body,
+        start: match.index,
+        end: block.end,
+      });
+      if (match.index === re.lastIndex) re.lastIndex += 1;
+    }
+  }
+
+  // Sort by position, then drop any handler fully contained in an earlier
+  // one — that is an inner callback, not a distinct route.
+  handlers.sort((a, b) => a.start - b.start);
+  const top = [];
+  for (const h of handlers) {
+    if (top.some((prev) => h.start >= prev.start && h.end <= prev.end && h.start !== prev.start)) continue;
+    top.push(h);
+  }
+  return top;
+}
+
+const matchesAny = (patterns, text) => patterns.some((p) => p.test(text));
+
+/**
+ * AUTHZ-001 — handler performs a side effect with no authentication check
+ * anywhere in its body.
+ */
+function checkMissingAuth(content) {
+  const findings = [];
+  for (const handler of findRouteHandlers(content)) {
+    if (!matchesAny(SIDE_EFFECT_PATTERNS, handler.body)) continue;
+    if (matchesAny(AUTH_PATTERNS, handler.body)) continue;
+    findings.push({
+      line: handler.line,
+      content: handler.signature.replace(/\s+/g, " ").trim().slice(0, 120),
+    });
+  }
+  return findings;
+}
+
+/**
+ * AUTHZ-003 — handler authenticates, then acts on a caller-supplied object
+ * ID with no ownership, assignment, or role check. Classic IDOR.
+ */
+function checkMissingObjectAuthz(content) {
+  const findings = [];
+  for (const handler of findRouteHandlers(content)) {
+    // Must be a protected route — an unauthenticated route is AUTHZ-001's
+    // problem, and reporting both on the same handler is just noise.
+    if (!matchesAny(AUTH_PATTERNS, handler.body)) continue;
+    // Must actually take an object ID from the caller.
+    if (!matchesAny(OBJECT_ID_PATTERNS, handler.body)) continue;
+    // Must do something with it beyond validating shape.
+    if (!matchesAny(SIDE_EFFECT_PATTERNS, handler.body)) continue;
+    // An ownership signal anywhere in the block clears it.
+    if (matchesAny(OWNERSHIP_PATTERNS, handler.body)) continue;
+    const destructive = DESTRUCTIVE_METHOD.test(handler.signature) || DESTRUCTIVE_METHOD.test(handler.body);
+    findings.push({
+      line: handler.line,
+      content: `${destructive ? "[destructive] " : ""}${handler.signature.replace(/\s+/g, " ").trim()}`.slice(0, 120),
+    });
+  }
+  return findings;
+}
+
+/**
+ * VAL-001 — handler reads the request body and passes it onward without
+ * running it through a schema parser first. Guardian's standard is Zod
+ * (Node) / Pydantic (Python); hand-rolled `if (!x) return 400` chains do
+ * not count, and neither does client-side validation.
+ */
+const SCHEMA_PARSE_PATTERNS = [
+  /\.safeParse\s*\(/, /\.parse\s*\(/, /\.parseAsync\s*\(/, /\.safeParseAsync\s*\(/,
+  /\bvalidateRequest\b/, /\bzodResolver\b/, /\b\w*Schema\s*\.\s*\w*parse/i,
+  /\bajv\b/, /\byup\b/, /\bjoi\./i, /\bvalibot\b/, /\bmodel_validate\b/,
+];
+
+const BODY_READ_PATTERNS = [
+  /\breq\.body\b/, /\brequest\.body\b/, /\bawait\s+req(?:uest)?\.json\s*\(\)/,
+  /\bctx\.request\.body\b/, /\bc\.req\.json\s*\(\)/,
+];
+
+function checkUnvalidatedBody(content) {
+  const findings = [];
+  for (const handler of findRouteHandlers(content)) {
+    if (!matchesAny(BODY_READ_PATTERNS, handler.body)) continue;
+    if (matchesAny(SCHEMA_PARSE_PATTERNS, handler.body)) continue;
+    // Reading the body and only echoing it back is not a validation bug
+    // worth raising — require the value to reach a side effect.
+    if (!matchesAny(SIDE_EFFECT_PATTERNS, handler.body)) continue;
+    findings.push({
+      line: handler.line,
+      content: handler.signature.replace(/\s+/g, " ").trim().slice(0, 120),
+    });
+  }
+  return findings;
+}
+
+// ---------------------------------------------------------------------------
 // AUDIT RULES
-// Each rule: { id, category, severity, description, pattern, fileTypes }
+// Each rule is one of three kinds:
+//   { id, category, severity, description, pattern, fileTypes }      regex
+//   { id, ..., checkFn(files, projectRoot) -> boolean }              project
+//   { id, ..., fileCheckFn(content, filePath) -> [{line, content}] } per-file
 // ---------------------------------------------------------------------------
 
 const AUDIT_RULES = [
@@ -607,6 +957,121 @@ const AUDIT_RULES = [
     checkFn: (files) => files.some((f) => path.basename(f) === ".env"),
   },
 
+  // --- AUTHORIZATION (1.4.0) ---
+  //
+  // Sourced from two field guides stored verbatim in guides/:
+  //   guides/securing-endpoints.md  — unauthenticated + under-authenticated routes
+  //   guides/authorization-idor.md  — "authenticated" is not "authorized"
+  //
+  // AUTHZ-001 and AUTHZ-003 use the per-file analyzer above rather than a
+  // regex, because both describe the ABSENCE of a check inside a block.
+  // AUTHZ-002 and AUTHZ-004 are genuine line patterns and stay regexes.
+  {
+    id: "AUTHZ-001", category: "Authorization", severity: "CRITICAL",
+    description: "Route handler performs a side effect with no authentication check",
+    pattern: null,
+    fileTypes: JS_TS_EXTS,
+    excludePatterns: TEST_FILE_EXCLUDES,
+    fileCheckFn: checkMissingAuth,
+  },
+  {
+    // The impersonation bug: identity read from the request instead of
+    // derived from a verified session. `req.body.userId` is attacker-
+    // controlled by definition — anyone can send any value.
+    //
+    // Excludes the assignment direction (`req.body.userId = user.id`),
+    // which is code WRITING a verified identity into the payload before
+    // forwarding it, not code trusting an inbound one.
+    id: "AUTHZ-002", category: "Authorization", severity: "CRITICAL",
+    description: "User identity read from request body/query — derive it from the verified session instead",
+    pattern: /\b(?:req|request)\.(?:body|query)\.(?:userId|user_id|email|role|isAdmin|is_admin|accountId|tenantId)\b(?!\s*=[^=])/,
+    fileTypes: JS_TS_EXTS,
+    excludePatterns: TEST_FILE_EXCLUDES,
+  },
+  {
+    id: "AUTHZ-003", category: "Authorization", severity: "CRITICAL",
+    description: "IDOR — authenticated handler acts on a caller-supplied object ID with no ownership check",
+    pattern: null,
+    fileTypes: JS_TS_EXTS,
+    excludePatterns: TEST_FILE_EXCLUDES,
+    fileCheckFn: checkMissingObjectAuthz,
+  },
+  {
+    // Shared-secret comparison with `===` is not constant time. String
+    // equality short-circuits on the first differing byte, which leaks
+    // the secret one byte at a time to an attacker who can time the
+    // response. The correct primitive is crypto.timingSafeEqual.
+    //
+    // excludeLinePatterns clears the line when timingSafeEqual is
+    // already present — that is the length pre-check the correct
+    // implementation performs before the constant-time compare.
+    // The secret can sit on EITHER side of the operator — both
+    //   provided === process.env.INTERNAL_API_SECRET
+    //   process.env.INTERNAL_API_SECRET === provided
+    // are the same bug, and real code writes it both ways. A
+    // left-hand-only pattern missed the first form entirely. The
+    // operand alternation also covers bracket access
+    // (`req.headers["x-internal-secret"]`), which is how header
+    // secrets are almost always read.
+    id: "AUTHZ-004", category: "Authorization", severity: "HIGH",
+    description: "Secret compared with === — not constant time, use crypto.timingSafeEqual",
+    pattern: /(?:process\.env\.\w*(?:SECRET|TOKEN|KEY|PASSWORD)\w*|\[\s*["'`][^"'`]*(?:secret|token|api[_-]?key|password)[^"'`]*["'`]\s*\]|\b\w*(?:[sS]ecret|[tT]oken|[aA]pi[_-]?[kK]ey|PASSWORD)\w*)\s*[!=]==?\s*(?!undefined|null|""|''|`)\S|[!=]==?\s*(?:process\.env\.\w*(?:SECRET|TOKEN|KEY|PASSWORD)\w*|\b\w*(?:[sS]ecret|[tT]oken|[aA]pi[_-]?[kK]ey|PASSWORD)\w*)\b/,
+    fileTypes: JS_TS_EXTS,
+    excludePatterns: TEST_FILE_EXCLUDES,
+    excludeLinePatterns: [
+      /timingSafeEqual/,
+      /\.length\s*[!=]==?\s*/,   // length pre-check, not the secret compare
+    ],
+  },
+  {
+    // Cache key built from an object ID with no requesting-user scope.
+    // A cache HIT returns the cached value without ever reaching the
+    // authorization check below it, so an unscoped key silently
+    // downgrades every protected read to public.
+    // The user-scope check must span the WHOLE key template, not the
+    // first interpolation. An earlier form put the negative lookahead
+    // after `[^`]*`, so on `thumbnail:${userId}:${videoId}` the greedy
+    // class walked past the user-scoped segment to `${videoId}`, the
+    // lookahead passed, and correctly-written code got flagged. The
+    // lookahead now sits immediately after the opening backtick and
+    // asserts that no user-scoping token appears anywhere in the key.
+    id: "AUTHZ-005", category: "Authorization", severity: "HIGH",
+    description: "Cache key not scoped to the requesting user — a cache hit bypasses authorization",
+    pattern: /\b(?:redis|cache|kv|memcached)\.(?:get|set|setex)\s*\(\s*`(?![^`]*(?:userId|user_id|user\.id|session\.user|currentUser|tenantId|orgId))[^`]*\$\{/,
+    fileTypes: JS_TS_EXTS,
+    excludePatterns: TEST_FILE_EXCLUDES,
+  },
+
+  // --- INPUT VALIDATION (1.4.0) ---
+  //
+  // Sourced from guides/form-validation.md. The standard is a schema
+  // parser at the trust boundary (Zod in Node, Pydantic in Python), not
+  // hand-rolled if-chains and not client-side validation — the client is
+  // not a trust boundary at all.
+  {
+    id: "VAL-001", category: "Validation", severity: "HIGH",
+    description: "Request body reaches a side effect without schema validation (use Zod safeParse)",
+    pattern: null,
+    fileTypes: JS_TS_EXTS,
+    excludePatterns: TEST_FILE_EXCLUDES,
+    fileCheckFn: checkUnvalidatedBody,
+  },
+  {
+    // Email header injection. Interpolating unsanitised input into a raw
+    // From/To/Cc/Bcc/Subject/Reply-To header lets an attacker append
+    // `\r\nBcc: ...` and turn a contact form into a spam relay.
+    //
+    // Fires on a template literal that contains an email header followed
+    // by an interpolation. The strip helper (`replace(/[\r\n]/g, "")`)
+    // on the same line clears it.
+    id: "VAL-002", category: "Validation", severity: "CRITICAL",
+    description: "Raw email header built by interpolation — CRLF injection turns this into an open relay",
+    pattern: /`[^`]*\b(?:From|To|Cc|Bcc|Subject|Reply-To)\s*:[^`]*\$\{/i,
+    fileTypes: JS_TS_EXTS,
+    excludePatterns: TEST_FILE_EXCLUDES,
+    wholeFile: true,
+  },
+
   // --- TYPESCRIPT ---
   {
     id: "TS-001", category: "TypeScript", severity: "LOW",
@@ -942,7 +1407,11 @@ function runAudit(targetDir, options = {}) {
     // and helps debug "wrong project root" detection issues.
     status(`    Project : ${projectRoot}`);
   }
-  status(`    Rules   : ${AUDIT_RULES.filter((r) => r.pattern).length} pattern rules`);
+  status(
+    `    Rules   : ${AUDIT_RULES.filter((r) => r.pattern).length} pattern` +
+    ` · ${AUDIT_RULES.filter((r) => r.fileCheckFn).length} analyzer` +
+    ` · ${AUDIT_RULES.filter((r) => r.checkFn).length} project`
+  );
 
   // ── Load exemption state once, up front ──────────────────────────────
   // 1.3.1: load from projectRoot, not scanRoot. Pre-1.3.1 a subdir
@@ -1015,6 +1484,57 @@ function runAudit(targetDir, options = {}) {
     for (const file of relevantFiles) {
       const findings = scanFile(file, rule, exemptionState);
       allFindings.push(...findings);
+    }
+  }
+
+  // Per-file analyzer rules (1.4.0). Signature:
+  //   fileCheckFn(content, filePath) -> [{ line, content }]
+  //
+  // These exist for findings that are an ABSENCE inside a block — a
+  // handler with no auth check, an authenticated handler with no
+  // ownership check, a body that never meets a schema parser. A regex
+  // cannot express "X is missing from within these braces", so the
+  // analyzer walks the handler bodies directly. See the ROUTE HANDLER
+  // ANALYZER block above for why the gates are as conservative as they
+  // are.
+  //
+  // Exemptions are honoured identically to pattern rules: the shared
+  // exemptPaths set is checked here too, so a file carrying the
+  // `otlc-guardian:audit-exempt` marker or sitting in the central
+  // allowlist is skipped by every rule kind, not just the regex ones.
+  for (const rule of AUDIT_RULES) {
+    if (!rule.fileCheckFn) continue;
+
+    const relevantFiles = files.filter((f) =>
+      rule.fileTypes.length === 0 || rule.fileTypes.includes(path.extname(f).toLowerCase())
+    );
+
+    for (const file of relevantFiles) {
+      if (exemptPaths.has(file)) continue;
+      if (rule.excludePatterns?.some((ep) => ep.test(file))) continue;
+
+      let content;
+      try { content = fs.readFileSync(file, "utf8"); }
+      catch { continue; }
+
+      let hits;
+      try {
+        hits = rule.fileCheckFn(content, file);
+      } catch (err) {
+        // A malformed source file must never abort the whole audit —
+        // report the analyzer failure and keep scanning. Silently
+        // swallowing it would mean a file that crashes the parser is
+        // indistinguishable from a file that is clean.
+        console.warn(
+          `⚠️  [OTLC GUARDIAN] ${rule.id} analyzer failed on ` +
+          `${path.relative(scanRoot, file).replace(/\\/g, "/")}: ${err.message}`
+        );
+        continue;
+      }
+
+      for (const hit of hits) {
+        allFindings.push({ file, line: hit.line, content: hit.content, rule });
+      }
     }
   }
 
