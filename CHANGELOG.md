@@ -4,6 +4,84 @@ All notable changes to OTLC Guardian. The format follows [Keep a Changelog](http
 
 ---
 
+## [1.4.1] — 2026-07-20
+
+`INJ-005b` precision. The rule was reporting ordinary UI strings as CRITICAL
+SQL injection, which is the worst failure mode a security tool has: the fix
+users reach for is switching it off.
+
+### Fixed
+
+- **`INJ-005b` no longer fires on English prose (BUG-001).** The 1.3.0
+  pattern required only a lone SQL verb plus an interpolation. `SELECT`,
+  `INSERT`, `UPDATE`, `DELETE`, `DROP`, and `ALTER` are also ordinary
+  English words, so ordinary UI strings matched:
+
+  ```js
+  window.confirm(`Delete asset ${asset.name}?`)          // was CRITICAL
+  console.error(`Failed to update record ${record.id}:`) // was CRITICAL
+  ```
+
+  A real audit of a Base44-generated project returned 6 CRITICAL findings,
+  **all six false positives from this single rule**. In any codebase on an
+  ORM with no direct SQL, every match was noise.
+
+  Each SQL verb must now appear with its mandatory companion keyword:
+  `SELECT`..`FROM`, `INSERT INTO`, `UPDATE`..`SET`, `DELETE FROM`, and
+  `DROP`/`ALTER`/`TRUNCATE` with `TABLE`/`DATABASE`/`INDEX`/`VIEW`/`SCHEMA`.
+  Real SQL has clause structure; prose does not. "Delete asset" has no
+  `FROM`; "failed to update record" has no `SET`. Valid SQL essentially
+  always carries the companion clause, so precision rose with no meaningful
+  coverage loss.
+
+  The internal handoff had proposed inverting the rule to a call-site match
+  instead. That was rejected: a call-site match is exactly what `INJ-005`
+  already does, so `INJ-005b` would have become a duplicate and the
+  variable-indirection bypass it exists to close (see 1.3.0) would have
+  reopened. Declaration-site detection is the point of the rule. A
+  regression test now fails if anyone makes that change.
+
+  Two details the fix had to get right. The interpolation check is a
+  lookahead asserting `${` appears anywhere in the template rather than
+  after the clause pair, because `` `SELECT ${columns} FROM users` `` is a
+  genuinely unparameterized query whose only interpolation sits between the
+  verb and its clause. And a `(?<!\bsql)` lookbehind clears the sql-guard
+  tagged template from `security/04-sql-guard.js` — that tag is the
+  auto-parameterizing remediation for this bug class, and flagging the fix
+  is how you teach people to stop applying it. The exclusion is narrow
+  enough that `mysql\`` and an untagged sibling on the next line both still
+  fire.
+
+  No secondary lower-severity hint was added for near-misses. A MEDIUM
+  noise channel would reinstate the exact problem this fix removes, and the
+  clause-pair test is orthogonal to the call site — a custom DB wrapper is
+  still caught as long as the SQL it builds is really SQL.
+
+- **Rule id collision in the audit-improvements plan (BUG-004).** The
+  internal handoff specified `DEP-001` for a planned npm-version-drift rule.
+  That id already belongs to `DEP-001 — No health check endpoint found`,
+  shipped since 1.2.4 and covered by tests. Implementing as written would
+  have put two rules under one id and broken per-id filtering for JSON
+  consumers and CI gates. Reassigned to `DEP-003` with a correction note in
+  the document. No shipped behavior changed; this is a planning defect
+  caught before it reached code.
+
+### Added
+
+- **`BUGS.md`** — persistent bug tracker, seeded with a consolidated sweep
+  of 20 known bugs (4 OPEN, 3 DEFERRED, 13 RESOLVED) drawn from the git
+  log, CHANGELOG, code comments, and the audit-improvements handoff.
+
+### Testing
+
+13 new tests for `INJ-005b` (83 in `audit.test.js`, 246 across the suite).
+Positive fixtures cover all five verb/clause pairs plus the
+interpolation-before-clause case; negative fixtures are the exact shapes
+that misfired in the real-world run. Includes a BUG-017 regression guard
+that keeps the variable-indirection bypass closed.
+
+---
+
 ## [1.4.0] — 2026-07-20
 
 Authorization and validation coverage. Guardian could already find a

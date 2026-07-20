@@ -1350,6 +1350,146 @@ describe("v1.3.1 — projectRoot vs scanRoot (subdirectory audit scoping)", () =
 });
 
 // ---------------------------------------------------------------------------
+// INJ-005b PRECISION — v1.4.1 (BUG-001)
+// ---------------------------------------------------------------------------
+//
+// The 1.3.0 rule required only a lone SQL verb plus an interpolation, so
+// ordinary UI strings ("Delete asset ${name}?") were reported as CRITICAL
+// SQL injection. A real audit returned 6 CRITICALs, all six false
+// positives from this rule alone.
+//
+// The negative fixtures below are the exact shapes that misfired. They are
+// the point of the rule now: a security rule that cannot be quieted by
+// writing correct code is a rule people switch off.
+
+describe("INJ-005b — still catches real SQL (regression guard)", () => {
+  test("fires on SELECT ... FROM with interpolation", () => {
+    const dir = makeFixture(
+      "db.js",
+      "const id = req.params.id;\n" +
+      "const q = `SELECT * FROM users WHERE id = ${id}`;\n" +
+      "await db.query(q);\n"
+    );
+    try {
+      assert.ok(hasFinding(runAuditOn(dir), "INJ-005b"), "INJ-005b must still catch SELECT..FROM");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("fires on UPDATE ... SET with interpolation", () => {
+    const dir = makeFixture(
+      "db.js",
+      "const sqlText = `UPDATE accounts SET balance = ${amount} WHERE id = ${userId}`;\n" +
+      "await pool.execute(sqlText);\n"
+    );
+    try {
+      assert.ok(hasFinding(runAuditOn(dir), "INJ-005b"), "INJ-005b must still catch UPDATE..SET");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("fires on DELETE FROM and INSERT INTO", () => {
+    const dir = makeFixture(
+      "db.js",
+      "const a = `DELETE FROM sessions WHERE token = ${token}`;\n" +
+      "const b = `INSERT INTO audit (actor) VALUES ('${actor}')`;\n"
+    );
+    try {
+      const report = runAuditOn(dir);
+      const hits = report.findings.filter((f) => f.rule?.id === "INJ-005b");
+      assert.equal(hits.length, 2, `expected both DELETE FROM and INSERT INTO to fire, got ${hits.length}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("fires when the only interpolation sits before the companion clause", () => {
+    // `SELECT ${columns} FROM users` — a pattern that required `${` to
+    // appear AFTER the clause pair would miss this genuinely
+    // unparameterized query.
+    const dir = makeFixture(
+      "db.js",
+      "const q = `SELECT ${columns} FROM users`;\nawait db.query(q);\n"
+    );
+    try {
+      assert.ok(hasFinding(runAuditOn(dir), "INJ-005b"), "interpolation before the clause pair must still fire");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("variable-indirection bypass stays closed (BUG-017 guard)", () => {
+    // The entire reason INJ-005b exists. If a precision fix ever turns
+    // this rule into a call-site match, this test fails.
+    const dir = makeFixture(
+      "db.js",
+      "const sqlText = `SELECT * FROM users WHERE id = ${userId}`;\n" +
+      "db.query(sqlText);\n"
+    );
+    try {
+      assert.ok(hasFinding(runAuditOn(dir), "INJ-005b"), "declaration-site detection must survive the precision fix");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("INJ-005b — no longer fires on English prose (BUG-001)", () => {
+  const CLEAN = {
+    "window.confirm with the word Delete": "if (!window.confirm(`Delete ${count} items? This cannot be undone.`)) return;\n",
+    "console.error with the word update": "console.error(`Failed to update record ${record.id}:`, err);\n",
+    "JSX label with the word Delete": "const label = `Delete ${asset.name}`;\n",
+    "thrown Error with the word Select": "throw new Error(`Select a quote ${quoteId} before continuing`);\n",
+    "alert with the word Drop": "window.alert(`Drop ${file.name} here to upload`);\n",
+    "plain greeting": "const greeting = `Hello ${name}`;\n",
+  };
+
+  for (const [name, source] of Object.entries(CLEAN)) {
+    test(`stays silent: ${name}`, () => {
+      const dir = makeFixture("ui.jsx", source);
+      try {
+        assert.ok(!hasFinding(runAuditOn(dir), "INJ-005b"), `INJ-005b must not fire on ${name}`);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("stays silent on the sql-guard tagged template", () => {
+    // security/04-sql-guard.js's `sql` tag auto-parameterizes. It is the
+    // remediation for this bug class, not an instance of it — flagging
+    // the fix teaches people to stop applying it.
+    const dir = makeFixture(
+      "db.js",
+      "import { sql } from './security/04-sql-guard.js';\n" +
+      "const query = sql`SELECT * FROM users WHERE id = ${userId}`;\n"
+    );
+    try {
+      assert.ok(!hasFinding(runAuditOn(dir), "INJ-005b"), "the sql-guard safe tag must not be flagged");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an untagged template still fires even next to a sql-tagged one", () => {
+    // Guard against the sql-tag exclusion being over-broad.
+    const dir = makeFixture(
+      "db.js",
+      "const safe = sql`SELECT * FROM a WHERE id = ${id}`;\n" +
+      "const unsafe = `SELECT * FROM b WHERE id = ${id}`;\n"
+    );
+    try {
+      const hits = runAuditOn(dir).findings.filter((f) => f.rule?.id === "INJ-005b");
+      assert.equal(hits.length, 1, `only the untagged template should fire, got ${hits.length}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // AUTHORIZATION + VALIDATION RULES — v1.4.0
 // ---------------------------------------------------------------------------
 //

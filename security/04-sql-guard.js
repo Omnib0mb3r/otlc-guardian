@@ -1,7 +1,7 @@
 // ============================================================
 // OTLC Guardian — SQL injection defense (tagged-template helper)
 // // onthelevelconcepts.com
-// Version: 1.4.0
+// Version: 1.4.1
 // ============================================================
 //
 // OWASP SQL Injection Prevention Cheat Sheet, defense #1:

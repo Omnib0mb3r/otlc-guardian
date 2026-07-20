@@ -3,7 +3,7 @@
  * ============================================================
  * OTLC GUARDIAN — Safety Audit Tool
  * // security · onthelevelconcepts.com
- * Version: 1.4.0
+ * Version: 1.4.1
  * ============================================================
  *
  * Scans an existing codebase for security and quality violations.
@@ -879,10 +879,62 @@ const AUDIT_RULES = [
   // using only one form still gets caught. Running INJ-005b as a
   // `wholeFile` rule means a multi-line template literal split across
   // several physical lines is still detected.
+  //
+  // ── 1.4.1 PRECISION REWRITE (BUG-001) ──────────────────────────────
+  //
+  // The 1.3.0 pattern required only a lone SQL verb plus an
+  // interpolation. `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `DROP`, and
+  // `ALTER` are also ordinary English words, so ordinary UI strings
+  // matched and were reported as CRITICAL SQL injection:
+  //
+  //   window.confirm(`Delete asset ${asset.name}?`)
+  //   console.error(`Failed to update record ${record.id}:`, err)
+  //   <span>{`Delete ${count} items`}</span>
+  //
+  // A real audit of a Base44-generated project returned 6 CRITICAL
+  // findings, all six false positives from this one rule. In any
+  // codebase on an ORM with no direct SQL, every match was noise. For a
+  // security tool that is the worst failure mode there is: the fix
+  // users reach for is switching the tool off.
+  //
+  // The handoff doc proposed inverting this rule to a call-site match
+  // (only flag templates passed to `.query(`/`.execute(`/`.raw(`). That
+  // would be wrong. A call-site match is precisely what INJ-005 already
+  // does, so INJ-005b would become a duplicate and the variable-
+  // indirection bypass it exists to close would reopen. The declaration
+  // site is the whole point of this rule and has to stay.
+  //
+  // Fix instead by raising the EVIDENCE BAR for what counts as SQL.
+  // Real SQL has clause structure; English prose does not. Requiring
+  // each verb to appear with its mandatory companion keyword
+  // (SELECT..FROM, INSERT INTO, UPDATE..SET, DELETE FROM, DROP TABLE,
+  // ALTER TABLE, TRUNCATE TABLE) removes the false positives without
+  // losing real coverage, because valid SQL essentially always carries
+  // the companion clause. "Delete asset" has no FROM; "failed to
+  // update record" has no SET.
+  //
+  // No secondary lower-severity hint is emitted for near-misses. The
+  // handoff suggested one, but a MEDIUM noise channel reinstates the
+  // exact problem this fix exists to remove, and the clause-pair test
+  // is orthogonal to the call site — a custom DB wrapper is still
+  // caught as long as the SQL it builds is really SQL.
   {
     id: "INJ-005b", category: "Injection Risk", severity: "CRITICAL",
     description: "Template-literal SQL with ${} interpolation — SQL injection risk (variable form)",
-    pattern: /`[^`]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[^`]*\$\{[^`]*`/i,
+    // The leading `(?<!\bsql)` clears the sql-guard tagged template
+    // (`sql\`SELECT * FROM users WHERE id = ${id}\``). That tag is
+    // security/04-sql-guard.js's auto-parameterizing helper — it is the
+    // remediation for this bug class, not an instance of it, and
+    // flagging the fix is how you teach people to stop applying it.
+    //
+    // The `(?=[^`]*\$\{)` lookahead asserts the template contains an
+    // interpolation SOMEWHERE, rather than requiring it to sit after
+    // the clause pair. Position matters: in
+    //   `SELECT ${columns} FROM users`
+    // the only interpolation appears between the verb and its
+    // companion clause, and a pattern demanding `${` after `FROM`
+    // would miss a genuinely unparameterized query.
+    pattern: /(?<!\bsql)`(?=[^`]*\$\{)[^`]*(?:\bSELECT\b[^`]*?\bFROM\b|\bINSERT\s+INTO\b|\bUPDATE\b[^`]*?\bSET\b|\bDELETE\s+FROM\b|\b(?:DROP|ALTER|TRUNCATE)\s+(?:TABLE|DATABASE|INDEX|VIEW|SCHEMA)\b)[^`]*`/i,
     fileTypes: JS_TS_EXTS,
     wholeFile: true,
     // This rule is very noisy on documentation files that show the pattern

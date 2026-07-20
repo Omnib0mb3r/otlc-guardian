@@ -12,12 +12,12 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 
 | ID | Status | Summary |
 |---|---|---|
-| BUG-001 | OPEN | `INJ-005b` fires CRITICAL on any template literal containing a SQL-looking word, including `window.confirm` and JSX labels |
+| BUG-001 | RESOLVED | `INJ-005b` fires CRITICAL on any template literal containing a SQL-looking word, including `window.confirm` and JSX labels |
 | BUG-002 | OPEN | Audit has zero rules covering what AI agents can write to, despite the README claiming AI-attack coverage |
 | BUG-003 | OPEN | `INJ-003` fires HIGH on stock shadcn `chart.jsx` boilerplate that every shadcn user inherits |
-| BUG-004 | OPEN | Planned rule id `DEP-001` for npm version drift collides with the existing `DEP-001` health-check rule |
+| BUG-004 | RESOLVED | Planned rule id `DEP-001` for npm version drift collides with the existing `DEP-001` health-check rule |
 | BUG-005 | DEFERRED | No detection of `setTimeout`-before-query race conditions (planned `RACE-001`) |
-| BUG-006 | DEFERRED | No detection of inconsistent `npm:` import versions across Deno-style project files |
+| BUG-006 | DEFERRED | No detection of inconsistent `npm:` import versions across Deno-style project files (now `DEP-003`) |
 | BUG-007 | DEFERRED | No file-size/decomposition rule (planned `QUAL-001`); changes Guardian's identity toward style-linter |
 | BUG-008 | RESOLVED | `SEC-001` missed current-format OpenAI (`sk-proj-`) and Anthropic (`sk-ant-api03-`) keys |
 | BUG-009 | RESOLVED | `ERR-001` missed comment-only catch bodies, the most common silent-failure form |
@@ -41,8 +41,9 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 
 ### BUG-001 — `INJ-005b` fires CRITICAL on non-SQL template literals
 
-**Status:** OPEN
+**Status:** RESOLVED
 **Found:** 2026-07-20 (originally observed 2026-04-27 against Guardian 1.3.1)
+**Fixed:** 2026-07-20 (1.4.1)
 **Area:** `security/03-audit.js` — `INJ-005b`
 
 `INJ-005b` matches any template literal containing `${}` and one or more SQL-looking
@@ -63,11 +64,49 @@ false positive. This burns first-run trust, which is the worst possible failure 
 for a security tool.
 
 The rule was added in 1.3.0 for a genuine reason (BUG-017, variable-indirection
-bypass), so it cannot simply be deleted. It needs call-site awareness: require the
-template to reach a database entry point, or require stronger SQL evidence than a
-single English word (a `FROM`/`WHERE`/`INTO` clause alongside the verb).
+bypass), so it could not simply be deleted.
 
-Full proposal in `HANDOFF-AUDIT-IMPROVEMENTS.md` § Item 1.
+**Fix (1.4.1).** The handoff proposed inverting the rule to a call-site match (only
+flag templates passed to `.query(`/`.execute(`/`.raw(`). That would have been wrong:
+a call-site match is exactly what `INJ-005` already does, so `INJ-005b` would have
+become a duplicate and the variable-indirection bypass it exists to close would have
+reopened. Declaration-site detection is the whole point of the rule.
+
+Fixed instead by raising the evidence bar for what counts as SQL. Real SQL has clause
+structure; English prose does not. Each verb now has to appear with its mandatory
+companion keyword:
+
+| Verb | Required companion |
+|---|---|
+| `SELECT` | `FROM` |
+| `INSERT` | `INTO` |
+| `UPDATE` | `SET` |
+| `DELETE` | `FROM` |
+| `DROP` / `ALTER` / `TRUNCATE` | `TABLE` / `DATABASE` / `INDEX` / `VIEW` / `SCHEMA` |
+
+"Delete asset" has no `FROM`. "Failed to update record" has no `SET`. Valid SQL
+essentially always carries the companion clause, so precision rose with no real
+coverage loss.
+
+Two further points the fix had to get right:
+
+- The interpolation check is a lookahead asserting `${` appears *anywhere* in the
+  template, not after the clause pair. Requiring it after `FROM` would have missed
+  `` `SELECT ${columns} FROM users` ``, a genuinely unparameterized query.
+- A `(?<!\bsql)` lookbehind clears the sql-guard tagged template. That tag is the
+  auto-parameterizing remediation for this bug class, and flagging the fix is how you
+  teach people to stop applying it. The exclusion is narrow enough that `mysql\`` and
+  an untagged sibling on the next line both still fire.
+
+No secondary lower-severity hint was added. The handoff suggested one, but a MEDIUM
+noise channel reinstates the exact problem the fix removes, and the clause-pair test
+is orthogonal to the call site — a custom DB wrapper is still caught as long as the
+SQL it builds is really SQL.
+
+13 tests in `tests/audit.test.js`, including a BUG-017 guard that fails if anyone ever
+converts this rule to a call-site match.
+
+Original proposal in `HANDOFF-AUDIT-IMPROVEMENTS.md` § Item 1.
 
 ---
 
@@ -111,8 +150,9 @@ Proposal in `HANDOFF-AUDIT-IMPROVEMENTS.md` § Item 5.
 
 ### BUG-004 — Planned `DEP-001` rule id collides with the existing one
 
-**Status:** OPEN
+**Status:** RESOLVED
 **Found:** 2026-07-20
+**Fixed:** 2026-07-20
 **Area:** `HANDOFF-AUDIT-IMPROVEMENTS.md` § Item 4
 
 The handoff document proposes `DEP-001 — inconsistent npm: import versions`. That id
@@ -123,10 +163,11 @@ Implementing the handoff as written would either silently overwrite an existing 
 or produce two rules reporting under one id, which breaks per-id filtering in JSON
 consumers and CI.
 
-The npm-drift rule needs a fresh id (`DEP-003` is free; `DEP-002` is the committed
-`.env` rule). Fix the handoff doc before implementing, not after.
+**Fix.** All six `DEP-001` references in the handoff rewritten to `DEP-003`, with a
+correction note at the top of Item 4 recording what changed and why. `DEP-002` remains
+the committed-`.env` rule.
 
-Related: BUG-006.
+Unblocks BUG-006.
 
 ---
 
@@ -157,7 +198,7 @@ In Deno-based projects (Base44, Supabase Edge Functions, Deno Deploy), `npm:` im
 pin a version inline, so the same package can drift across entry files. The Zion CMMS
 had `@base44/sdk` at `0.8.23` and `0.8.25` across three functions.
 
-Blocked on BUG-004 (id collision) before implementation.
+Unblocked: BUG-004 reassigned this rule to `DEP-003`.
 
 Proposal in `HANDOFF-AUDIT-IMPROVEMENTS.md` § Item 4.
 
@@ -309,8 +350,10 @@ db.query(sql);
 Added `INJ-005b`, which matches the declaration site rather than the call site. Both
 rules are kept so a project using either form is caught.
 
-**Caused BUG-001.** The declaration-site match has no call-site context, which is
-exactly why it now over-fires.
+**Caused BUG-001.** The declaration-site match has no call-site context, which is why
+it over-fired on English prose until the 1.4.1 precision rewrite. The regression guard
+in BUG-001's test block exists to keep this bypass closed if anyone tries to fix the
+precision problem by reverting to a call-site match.
 
 ---
 

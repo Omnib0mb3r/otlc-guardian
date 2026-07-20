@@ -268,7 +268,13 @@ for (const item of items) {
 
 The negative-second case is tricky because the rule will likely fire on it. Decide: either accept the false positive and rely on the exempt marker, or tighten the rule so it requires the query to use the same variable that flowed into the preceding write/call. The simpler version (accept FP, use marker) is fine for a first cut.
 
-## Item 4 - SDK version drift (new rule, DEP-001)
+## Item 4 - SDK version drift (new rule, DEP-003)
+
+> **Corrected 2026-07-20.** This item originally specified rule id `DEP-001`, which is
+> already in use by `DEP-001 - No health check endpoint found` (shipped since 1.2.4,
+> covered by tests). Implementing as originally written would have put two rules under
+> one id and broken per-id filtering for JSON consumers and CI gates. Reassigned to
+> `DEP-003`; `DEP-002` is the committed-`.env` rule. Tracked as BUG-004.
 
 ### Problem
 
@@ -276,14 +282,14 @@ In Deno-based projects (Base44, Supabase Edge Functions, Deno Deploy), `npm:` im
 
 ### Proposed rule
 
-New rule: `DEP-001 - inconsistent npm: import versions across project files`. Severity: MEDIUM.
+New rule: `DEP-003 - inconsistent npm: import versions across project files`. Severity: MEDIUM.
 
-Scan all `.ts`, `.tsx`, `.js`, `.mjs`, `.jsx` files for imports matching the pattern `from ['"]npm:([^'"@]+)@([^'"]+)['"]`. Group by package name. If a package appears at more than one version across the scanned files, raise `DEP-001` once per package, listing every file and pinned version.
+Scan all `.ts`, `.tsx`, `.js`, `.mjs`, `.jsx` files for imports matching the pattern `from ['"]npm:([^'"@]+)@([^'"]+)['"]`. Group by package name. If a package appears at more than one version across the scanned files, raise `DEP-003` once per package, listing every file and pinned version.
 
 ### Output shape
 
 ```
-[DEP-001] Inconsistent npm: import version for @base44/sdk
+[DEP-003] Inconsistent npm: import version for @base44/sdk
   Found 2 distinct versions across 3 files:
     @base44/sdk@0.8.23
       base44/functions/inviteUser/entry.ts:1
@@ -384,7 +390,7 @@ CHANGELOG entry shape:
 ### Added
 - AGT-001: AI agent permission audit. Flags agent configs that grant write/delete access to high-risk entities (Quote, Invoice, Inventory, etc.) without an approval gate.
 - RACE-001: setTimeout-before-query race condition detection.
-- DEP-001: inconsistent npm: import version detection across Deno projects.
+- DEP-003: inconsistent npm: import version detection across Deno projects.
 - QUAL-001 (opt-in via --enable-quality): file size limits.
 
 ### Changed
@@ -401,7 +407,7 @@ CHANGELOG entry shape:
 1. For `AGT-001` (item 2), is the high-risk entity name list canonical or community-contributed? If community-contributed, where does it live? (Recommendation: ship a hardcoded list in `security/03-audit.js` with a comment pointing at a future `agent-risk-entities.json` config file. Keep it zero-dependency.)
 2. For `INJ-005b` Option B (inverted positive match), what about custom DB wrappers? Decide whether to ship a configurable allowlist of "things that mean SQL execution in your project."
 3. For `RACE-001`, should the rule fire on `setInterval` too, or only `setTimeout`? Recommendation: both, but `setInterval` is rare enough in modern code that the FP risk is low.
-4. For `DEP-001`, should it also catch CDN imports (`https://esm.sh/...`, `https://deno.land/x/...`)? Probably yes, same logic, different regex.
+4. For `DEP-003`, should it also catch CDN imports (`https://esm.sh/...`, `https://deno.land/x/...`)? Probably yes, same logic, different regex.
 5. CHANGELOG format - the current `CHANGELOG.md` is 64KB. Confirm the existing format and style before writing the 1.4.0 entry.
 
 ## Files to read before starting

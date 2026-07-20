@@ -2,7 +2,7 @@
  * ============================================================
  * OTLC GUARDIAN — Code Security Standards
  * // security · onthelevelconcepts.com
- * Version: 1.4.0
+ * Version: 1.4.1
  * ============================================================
  * Note: this file is exempted from `guardian audit` via the
  * central allowlist at security/.audit-allowlist (logger module —
