@@ -764,6 +764,14 @@ Content-Security-Policy: default-src 'self'; ...
 Permissions-Policy: camera=(), microphone=(), geolocation=()
 ```
 
+### Scope shared-docroot headers, and verify you did not break sibling apps
+
+A header set at the root of a shared document root (Apache `public_html/.htaccess`, an Nginx `server` block, a CDN "apply to whole zone" rule) applies to **every** site and path served below it, not just the one you are deploying. A strict `Content-Security-Policy: script-src 'self'` set this way silently breaks any sibling site or subdirectory that relies on inline scripts.
+
+- **Real incident (2026-07-21):** a strict apex CSP in `public_html/.htaccess` cascaded onto two other sites sharing the docroot (`academy.…`, `lml40.com`) and onto an inline-script `/tools/` subdir on the apex host. All of their JavaScript was blocked; the academy's "Start the course" did nothing. The apex itself looked perfect. Root cause was invisible from the apex and from a header dump.
+- **Rule:** scope restrictive headers to exactly the paths/hosts built for them (Apache `Header always set … "expr=%{HTTP_HOST} =~ … && %{REQUEST_URI} !~ m#^/legacy/#"`). Give inline-script areas their own header block that `unset`s the inherited policy first, or the browser enforces the **intersection** of the two CSPs and the strict one still wins.
+- **Verify in a real browser, not `curl`.** A header dump can show the permissive policy while a second strict policy (or a CDN-injected one) is also present; only a real page load reveals that inline scripts are blocked. After any shared-header change, load every affected site/subdir and confirm zero CSP/console errors AND that the interactive feature works. A green primary site is not proof the deploy was safe.
+
 ### JWT Standards
 - RS256 (asymmetric) preferred over HS256 for distributed systems
 - Access tokens: 15 minutes
