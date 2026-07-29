@@ -1132,6 +1132,49 @@ const AUDIT_RULES = [
     fileTypes: TS_EXTS,
     excludePatterns: TEST_FILE_EXCLUDES,
   },
+
+  // --- REPUTATION (AV / URL-filter heuristics) ---
+  //
+  // Added 2026-07-29 after the Material Handling Academy incidents
+  // (BUG-002 Verizon filter 2026-07-15, BUG-011 AVG URL:Mal 2026-07-27):
+  // twice, shipped pages that pattern-matched malware got the whole domain
+  // blocklisted and the site blocked for real users, with days of vendor
+  // delisting to undo. None of these shapes is a vulnerability by itself;
+  // each is a shape AV reputation engines score, and a static site has no
+  // reason to ship any of them. Rules target SHIPPED web content; the
+  // thresholds mirror academy/tools/test_inline_js.py in that project.
+  {
+    id: "REP-001", category: "Reputation", severity: "HIGH",
+    description: "Large inline <script> blob in HTML (20KB+) — reads as an injected payload to AV reputation engines; ship JS as external hash-versioned files",
+    pattern: /<script(?![^>]*\bsrc=)[^>]*>[\s\S]{20000,}?<\/script>/,
+    fileTypes: [".html", ".htm"],
+    wholeFile: true,
+  },
+  {
+    id: "REP-002", category: "Reputation", severity: "HIGH",
+    description: "Single-line packed payload — a JS line over 24K chars reads as obfuscated/packed to scanners; emit data files with newlines",
+    pattern: /^.{24001,}$/m,
+    fileTypes: [".js", ".mjs", ".cjs"],
+    wholeFile: true,
+  },
+  {
+    id: "REP-003", category: "Reputation", severity: "MEDIUM",
+    description: "Static inline event handler (on*=) in shipped HTML — wire listeners from external JS instead",
+    pattern: /<[^>]{0,300}\son(?:click|load|error|mouseover|submit|focus|input|change)\s*=/i,
+    fileTypes: [".html", ".htm"],
+  },
+  {
+    id: "REP-004", category: "Reputation", severity: "MEDIUM",
+    description: "javascript: URL in markup — classic injected-redirect shape; use a real element with a listener",
+    pattern: /(?:href|src)\s*=\s*["']\s*javascript:/i,
+    fileTypes: [".html", ".htm", ".js"],
+  },
+  {
+    id: "REP-005", category: "Reputation", severity: "MEDIUM",
+    description: "Large base64 payload embedded in JS (4KB+ data URI) — reads as a packed resource; ship the asset as a real file",
+    pattern: /data:[a-z0-9\/+.-]+;base64,[A-Za-z0-9+\/=]{4000,}/i,
+    fileTypes: JS_TS_EXTS,
+  },
 ];
 
 // ---------------------------------------------------------------------------
