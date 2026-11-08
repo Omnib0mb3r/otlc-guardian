@@ -45,6 +45,6 @@ DevNeural runs the weekly cycle as a scheduled job and files results; this repo 
 
 ### Open points
 
-- Guardian is not run in every project today. The global rule invokes it for backend and full-stack code (auth, endpoints, input, secrets, SQL, deploy) before a commit; only 3 project CLAUDE.md files name it. Decide whether every project runs it at commit.
+- **Decided (Michael, 2026-11-08 02:58Z): Guardian runs on every change in every project**, not only backend code ("Guardians should run every time we're doing something to make sure we're not doing stupid shit"). Today it does not: the global rule invokes it only for backend and full-stack code before a commit, and only 3 project CLAUDE.md files name it. Make it enforced, not remembered: a commit hook every project gets (the dev-template for new projects, an installer for the existing ones), so it runs whether or not a session thinks to call it. A HIGH finding blocks the commit; lower ones are reported. Michael's global CLAUDE.md line on Guardian changes to match (his file: proposed wording goes to him).
 - Related open bugs here: BUG-002 (no rules for what AI agents can write to) is the first gap the AI/agent source list should close.
 - Guardian has no manual yet; this work should start one.
