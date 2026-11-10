@@ -380,7 +380,7 @@ session with permission prompts bypassed each of these is denied, so
 an agent's edits to Guardian's own code need a session that prompts.
 `guardian update` writes the files from its own process, which the hook
 does not see; run it yourself. Routes the hook cannot see are listed in
-`SECURITY.md`, "What the PreToolUse hook cannot see".
+`SECURITY.md`, "What the hook is, and what it is not".
 
 ### Unattended runs
 

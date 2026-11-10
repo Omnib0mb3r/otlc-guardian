@@ -201,6 +201,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **SECURITY.md states the boundary (re-probe 3 D9).** The threat model now
+  says what the hooks are (a tripwire against injected instructions, not
+  a sandbox), what they do not see once `staging/` is applied (commands
+  that do not name a guarded file, programs and cmdlets outside the
+  list, destruction of anything that is not Guardian's, settings values
+  Claude Code rejects for other reasons), and how to contain an agent
+  for real: Claude Code `permissions.deny` rules and operating system
+  file permissions. The list of gaps in 1.5.0 as published is updated
+  with the re-probe 3 items.
+
 - **npm writing `security/package.json` asks (BUG-063, re-probe 3 D8).**
   `npm pkg set type=commonjs` run in `security/` (or with
   `--prefix security`) switches the scanner off in a CommonJS project,
@@ -286,7 +296,7 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
   with markdown inside it (`ig**no**re all previous instructions`) or as
   base64 can be moved from a code fence onto a live line without a
   finding; the same text in a new file is denied. Not fixed: listed in
-  SECURITY.md, "What the PreToolUse hook cannot see".
+  SECURITY.md, "What the hook is, and what it is not".
 
 - **A line separator or an empty HTML comment no longer splits a pattern
   (BUG-071, re-probe 2 S11).** U+2028 and U+2029 were in the set of
