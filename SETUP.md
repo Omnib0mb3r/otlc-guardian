@@ -276,8 +276,11 @@ async def chat(body: ChatRequest, request: Request):
 > those agents, you still get the full runtime guard and the audit CLI
 > (Tier 1 in the README). Jump to Step 7.
 
-Guardian installs two Claude Code hooks. They are advisory only — they
-**never block** a tool call, only surface a warning. Both are wired up
+Guardian installs two Claude Code hooks. The PreToolUse hook denies a
+write that carries a CRITICAL injection pattern into a watched file and
+warns on lower severities. The PostToolUse hook runs after the fetch, so
+it can only warn. If a hook itself fails, the tool call is not blocked,
+but the failure is printed and reported as a hook error. Both are wired up
 automatically by `guardian init` and registered in `.claude/settings.json`.
 
 ### Hook 1 — `injection-guard-hook.mjs` (PreToolUse on Write/Edit)
@@ -328,12 +331,23 @@ Both hooks honor an `otlcGuardian` config block in `.claude/settings.json`:
 - `ignorePaths` — paths to exclude from scanning
 - `extendDefaults: false` — replace the default list entirely with your own
 
-### Exempting a doc file
+### Hook exemptions
 
 If you keep prompt-injection documentation in a watched directory (e.g.
-a security spec in `.planning/specs/injection-defense.md`), add the
-marker `otlc-guardian:doc` anywhere in the file and the hook will skip
-it. No more false-positive warnings on your own security docs.
+a security spec in `.planning/specs/injection-defense.md`), there are
+two ways to stop the hook from blocking it. Both are steps a person
+takes; neither can be triggered by the content of a write.
+
+1. **Marker on disk.** Put `otlc-guardian:doc` in the first 4 KB of the
+   file yourself (create the file with only the marker, then let the
+   agent edit it). Findings in that file are then reported as warnings
+   and are not blocked. They are never silenced.
+2. **`ignorePaths`.** List the path under `otlcGuardian.ignorePaths` in
+   `.claude/settings.json`. The hook asks for confirmation when an agent
+   tries to add an entry there.
+
+The marker inside the content being written does nothing. Before 1.5.0
+it exempted the write, which meant any payload could exempt itself.
 
 ```markdown
 <!-- otlc-guardian:doc -->
@@ -649,7 +663,7 @@ Remove from `hooks.PreToolUse`:
 
 ```json
 {
-  "matcher": "Write|Edit",
+  "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
   "hooks": [
     { "type": "command", "command": "node .claude/hooks/injection-guard-hook.mjs" }
   ]
@@ -660,14 +674,14 @@ Remove from `hooks.PostToolUse`:
 
 ```json
 {
-  "matcher": "WebFetch|WebSearch",
+  "matcher": "WebFetch|WebSearch|mcp__firecrawl__crawl|mcp__exa__search",
   "hooks": [
     { "type": "command", "command": "node .claude/hooks/web-content-guard.mjs" }
   ]
 }
 ```
 
-If your existing matcher block (`Write|Edit` / `Edit|Write`) had other hooks
+If the matcher block had other hooks
 in it, **leave those other hooks in place** and remove only Guardian's
 command entry from the `hooks` array. If the matcher block becomes empty after
 removing Guardian's entry, you can drop the empty block.

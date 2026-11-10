@@ -64,6 +64,7 @@ generate it, why it is dangerous, how to check, and the fix. Stored verbatim fro
 |---|---|
 | `AUTHZ-001`, `AUTHZ-002`, `AUTHZ-004`, `VAL-002` | `guides/securing-endpoints.md` |
 | `AUTHZ-003`, `AUTHZ-005` | `guides/authorization-idor.md` |
+| `AUTHZ-011`, `AUTHZ-013` | `guides/tenant-isolation-tests.md` |
 | `VAL-001` | `guides/form-validation.md` |
 
 Do not paraphrase a fix from memory when the guide has the exact pattern. The guides

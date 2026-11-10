@@ -32,6 +32,14 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-018 | RESOLVED | Subdirectory audits ignored the project-root manifest and central allowlist |
 | BUG-019 | RESOLVED | Claude Code hooks bypassed the runtime guard's normalization and decode passes |
 | BUG-020 | RESOLVED | Python FastAPI dependency returned unsanitized input to the caller |
+| BUG-021 | SMOKE-TESTING | Hook: a payload carrying `otlc-guardian:doc` exempted itself from scanning |
+| BUG-022 | SMOKE-TESTING | Hook: advisory only and silent on its own failure; could not stop a poisoned write |
+| BUG-023 | SMOKE-TESTING | `INJ-027`/`INJ-028` cubic backtracking stalled both hooks on a comment flood (ReDoS) |
+| BUG-024 | SMOKE-TESTING | Scanner bypassed by tag characters, U+2060, lookalike letters, stray `%`, embedded base64, entities, markdown, filler padding |
+| BUG-025 | SMOKE-TESTING | `guardian update` never overwrote anything, so fixes never reached existing installs |
+| BUG-026 | SMOKE-TESTING | Secret rules missed OpenSSH/EC keys, `github_pat_`, `ghs_`, Slack, Stripe live, Anthropic OAuth |
+| BUG-027 | OPEN | Hook files and scanner are writable by the agent they guard (only settings.json is protected) |
+| BUG-028 | OPEN | Hook command path is cwd-relative; `$CLAUDE_PROJECT_DIR` form untested on Windows |
 
 <!-- INDEX END -->
 
@@ -392,5 +400,42 @@ The Python FastAPI dependency scanned input but returned the original value rath
 than the sanitized one, so callers received unsanitized text while believing it had
 been through the guard. Soft-breaking change for FastAPI users; see the 1.3.1
 CHANGELOG entry.
+
+---
+
+### BUG-021 to BUG-026 — 2026-11-10 review (fixed in 1.5.0, awaiting live verification)
+
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10 · **Fix applied:** 2026-11-10 (1.5.0, uncommitted)
+
+Found in one review pass and reproduced against 1.4.1 before any change. Full write-up
+per item in the `CHANGELOG.md` 1.5.0 entry. Regression tests: `tests/hook.test.js`
+(1.5.0 blocks), `tests/injection-guard.test.js` (1.5.0 blocks), `tests/init.test.js`
+(migration and refresh).
+
+Still to verify outside the test suite before marking RESOLVED:
+
+- In a live Claude Code session on Windows: a CRITICAL write to `CLAUDE.md` is denied,
+  a Bash append to it prompts, and an edit that removes the hook from
+  `.claude/settings.json` prompts.
+- `guardian update` run in one real project, diff reviewed, then the rest.
+
+### BUG-027 — Hook files and scanner are not write-protected
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+`.claude/settings.json` edits that weaken Guardian now ask for confirmation. The hook
+files (`.claude/hooks/*.mjs`) and `security/01-injection-guard.js` do not. An agent that
+is already compromised can rewrite them, or write any file through a script. Belongs with
+the hard-no hook in the Self-Growing Gate spec (Lane 5), and with the DevNeural write
+guard boundary noted in `TODO.md`.
+
+### BUG-028 — Hook command path is cwd-relative
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+`.claude/settings.json` registers `node .claude/hooks/injection-guard-hook.mjs`. Claude
+Code's documented form is `"$CLAUDE_PROJECT_DIR"/.claude/hooks/...`. Not changed in 1.5.0
+because the expansion was not tested on Windows. The hook itself now resolves the project
+root from `CLAUDE_PROJECT_DIR`, so only the launch path is affected.
 
 <!-- DETAILS END -->

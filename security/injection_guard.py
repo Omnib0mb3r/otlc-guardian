@@ -2,7 +2,7 @@
 ============================================================
 OTLC GUARDIAN — Prompt Injection Guard (Python)
 // security · onthelevelconcepts.com
-Version: 1.3.1
+Version: 1.5.0
 ============================================================
 
 Runtime input sanitizer for Python AI-powered applications.
@@ -50,6 +50,36 @@ class InjectionPattern:
     pattern: re.Pattern
     severity: str  # CRITICAL, HIGH, MEDIUM, LOW
     description: str
+    # Optional linear-time matcher used instead of `pattern` (see _comment_matcher).
+    matcher: Optional[Callable[[str], Optional[str]]] = None
+
+
+def _comment_matcher(open_tok: str, close_tok: str) -> Callable[[str], Optional[str]]:
+    """
+    Linear-time matcher for "comment containing a control word".
+
+    Replaces the regex form of INJ-027/INJ-028, which backtracked
+    cubically on input made of many unterminated comment openers.
+    Returns the full comment on a hit, else None.
+    """
+    keyword = re.compile(r"ignore|override|system", re.I)
+
+    def match(text: str) -> Optional[str]:
+        pos = 0
+        while True:
+            start = text.find(open_tok, pos)
+            if start < 0:
+                return None
+            end = text.find(close_tok, start + len(open_tok))
+            # No closer after this opener means no later opener can close either.
+            if end < 0:
+                return None
+            comment = text[start:end + len(close_tok)]
+            if keyword.search(comment):
+                return comment
+            pos = end + len(close_tok)
+
+    return match
 
 
 INJECTION_PATTERNS: list[InjectionPattern] = [
@@ -82,12 +112,43 @@ INJECTION_PATTERNS: list[InjectionPattern] = [
     # Context poisoning via markup — lazy quantifiers + DOTALL so the
     # pattern can span lines and does not ReDoS on long inputs without
     # a closing delimiter. Mirrors the JS module's INJ-027 / INJ-028.
-    InjectionPattern("INJ-027", re.compile(r"<!--.*?(?:ignore|override|system).*?-->",    re.I | re.S), "MEDIUM", "HTML-comment context poisoning"),
-    InjectionPattern("INJ-028", re.compile(r"/\*.*?(?:ignore|override|system).*?\*/",     re.I | re.S), "MEDIUM", "Block-comment context poisoning"),
+    InjectionPattern("INJ-027", re.compile(r"<!--"), "MEDIUM", "HTML-comment context poisoning",  _comment_matcher("<!--", "-->")),
+    InjectionPattern("INJ-028", re.compile(r"/\*"), "MEDIUM", "Block-comment context poisoning", _comment_matcher("/*", "*/")),
 ]
 
 # Invisible unicode used in steganographic attacks
-INVISIBLE_UNICODE_PATTERN = re.compile(r"[\u200B-\u200F\u2028-\u202F\uFEFF\u00AD]")
+# Reported as INJ-UNICODE when present: zero-width and bidi controls, the
+# word joiner family, Mongolian vowel separator, Arabic letter mark, and
+# the Unicode tag block (the "ASCII smuggling" channel).
+INVISIBLE_UNICODE_PATTERN = re.compile(
+    "[\u00AD\u061C\u180E\u200B-\u200F\u2028-\u202F\u2060-\u2064\u2066-\u206F\uFEFF\U000E0000-\U000E007F]"
+)
+
+# Removed before pattern matching. Superset of the above: also covers
+# invisible characters that are common in honest text (variation
+# selectors after emoji, Hangul fillers), which are stripped so they
+# cannot split a keyword but do not raise a finding by themselves.
+INVISIBLE_STRIP_PATTERN = re.compile(
+    "[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u2028-\u202F\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\U000E0000-\U000E0FFF]"
+)
+
+TAG_CHAR_PATTERN = re.compile("[\U000E0020-\U000E007E]")
+
+# Cyrillic and Greek letters that render like Latin ones. NFKC does not
+# fold these, so "ignore" spelled with a Cyrillic o passed every pattern.
+CONFUSABLES = str.maketrans({
+    "а": "a", "с": "c", "ԁ": "d", "е": "e", "һ": "h", "і": "i", "ј": "j", "о": "o",
+    "р": "p", "ѕ": "s", "у": "y", "х": "x", "ԛ": "q", "ԝ": "w", "ѵ": "v", "ӏ": "l",
+    "А": "A", "В": "B", "С": "C", "Е": "E", "Н": "H", "І": "I", "Ј": "J", "К": "K",
+    "М": "M", "О": "O", "Р": "P", "Ѕ": "S", "Т": "T", "У": "Y", "Х": "X",
+    "α": "a", "ο": "o", "ρ": "p", "ν": "v", "ι": "i", "υ": "u", "τ": "t", "ϲ": "c",
+    "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H", "Ι": "I", "Κ": "K", "Μ": "M",
+    "Ν": "N", "Ο": "O", "Ρ": "P", "Τ": "T", "Υ": "Y", "Χ": "X",
+})
+
+BASE64_RUN_PATTERN    = re.compile(r"[A-Za-z0-9+/_-]{24,20000}={0,2}")
+MAX_BASE64_CANDIDATES = 64
+PRINTABLE_PATTERN     = re.compile(r"^[\x20-\x7E\s]{10,}$")
 
 # Hard cap on raw input to `scan()`. `guard_input()` enforces its own
 # `max_length` (default 4000), but `scan()` is imported and used directly
@@ -96,7 +157,7 @@ INVISIBLE_UNICODE_PATTERN = re.compile(r"[\u200B-\u200F\u2028-\u202F\uFEFF\u00AD
 # appends URL-decoded + base64-decoded copies onto the original). 100 KB
 # is well above any legitimate injection payload and stays in the
 # millisecond range on modern hardware.
-MAX_SCAN_LENGTH = 100_000
+MAX_SCAN_LENGTH = 1_000_000
 
 # ---------------------------------------------------------------------------
 # SECRET LEAK PATTERNS — Python parity with security/01-injection-guard.js
@@ -127,17 +188,21 @@ class SecretPattern:
 # full matrix of examples the rule must and must not fire on.
 SECRET_PATTERNS: list[SecretPattern] = [
     SecretPattern("SEC-001",  re.compile(r"sk-proj-[a-zA-Z0-9_-]{20,}"),          "OpenAI Project API Key"),
-    SecretPattern("SEC-010",  re.compile(r"sk-ant-api\d{2}-[a-zA-Z0-9_-]{20,}"),  "Anthropic API Key"),
+    SecretPattern("SEC-010",  re.compile(r"sk-ant-(?:api|oat|admin)\d{2}-[a-zA-Z0-9_-]{20,}"),  "Anthropic API Key"),
     SecretPattern("SEC-001b", re.compile(r"sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}"), "OpenAI API Key (legacy)"),
     SecretPattern("SEC-002",  re.compile(r"AIza[0-9A-Za-z\-_]{35}"),              "Google API Key"),
     SecretPattern("SEC-003",  re.compile(r"ghp_[a-zA-Z0-9]{36}"),                 "GitHub Token"),
     SecretPattern("SEC-004",  re.compile(r"gho_[a-zA-Z0-9]{36}"),                 "GitHub OAuth Token"),
     SecretPattern("SEC-005",  re.compile(r"AKIA[0-9A-Z]{16}"),                    "AWS Access Key"),
     SecretPattern("SEC-006",  re.compile(r"(?:secret|token|key|password|auth)\s*[:=]\s*[\"']?[A-Za-z0-9+/]{40,}[\"']?", re.I), "Context-Adjacent Base64 Secret"),
-    SecretPattern("SEC-007",  re.compile(r"-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----"), "Private Key"),
+    SecretPattern("SEC-007",  re.compile(r"-----BEGIN\s+(?:[A-Z0-9]+\s+){0,3}PRIVATE\s+KEY-----"), "Private Key"),
     SecretPattern("SEC-008",  re.compile(r"password\s*[:=]\s*[\"']?[^\s\"']{8,}",  re.I), "Inline Password"),
     SecretPattern("SEC-009",  re.compile(r"api[_-]?key\s*[:=]\s*[\"']?[^\s\"']{8,}", re.I), "Inline API Key"),
-    SecretPattern("SEC-011",  re.compile(r"(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqps?)://[^:@/\s\"'`]*:[^@\s\"'`]+@", re.I), "Connection String with Embedded Credentials"),
+    SecretPattern("SEC-011",  re.compile(r"(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqps?)://[^:@/\s\"'`]{0,256}:[^@\s\"'`]{1,512}@", re.I), "Connection String with Embedded Credentials"),
+    SecretPattern("SEC-012",  re.compile(r"github_pat_[A-Za-z0-9_]{40,}"),        "GitHub Fine-Grained Token"),
+    SecretPattern("SEC-013",  re.compile(r"gh[sur]_[A-Za-z0-9]{36,}"),            "GitHub App/Server Token"),
+    SecretPattern("SEC-014",  re.compile(r"xox[abprs]-[A-Za-z0-9-]{10,}"),        "Slack Token"),
+    SecretPattern("SEC-015",  re.compile(r"[sr]k_live_[A-Za-z0-9]{20,}"),         "Stripe Live Key"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -161,37 +226,59 @@ class Violation:
 # - URL-decode and base64-decode candidates so encoded payloads are scanned
 # ---------------------------------------------------------------------------
 
-def _normalize_for_scan(text: str) -> str:
-    """Normalize before scanning. Returns text ready for pattern matching."""
-    import unicodedata, base64, urllib.parse
-
-    normalized = unicodedata.normalize("NFKC", text)
-    normalized = INVISIBLE_UNICODE_PATTERN.sub("", normalized)
-
-    # URL-decode — catches %69%67%6E%6F%72%65 style payloads
+def _decode_base64_printable(candidate: str) -> Optional[str]:
+    import base64, binascii
+    standard = candidate.replace("-", "+").replace("_", "/")
+    standard += "=" * (-len(standard) % 4)
     try:
-        url_decoded = urllib.parse.unquote(normalized)
-        if url_decoded != normalized:
-            normalized = f"{normalized}\n{url_decoded}"
-    except Exception:
-        pass
-
-    # Base64 decode — only on strings that look like valid base64
-    candidate = re.sub(r"\s", "", text)
-    if re.match(r"^[A-Za-z0-9+/]{20,}={0,2}$", candidate):
-        try:
-            decoded = base64.b64decode(candidate, validate=True).decode("utf-8", errors="ignore")
-            if re.match(r"^[\x20-\x7E\s]{10,}$", decoded):
-                normalized = f"{normalized}\n{decoded}"
-        except Exception:
-            pass
-
-    return normalized
+        decoded = base64.b64decode(standard).decode("utf-8", errors="ignore")
+    except (binascii.Error, ValueError):
+        return None  # not base64, which is not a finding
+    return decoded if PRINTABLE_PATTERN.match(decoded) else None
 
 
-# ---------------------------------------------------------------------------
-# SCAN FUNCTION
-# ---------------------------------------------------------------------------
+def _normalize_for_scan(text: str) -> str:
+    """
+    Normalize before scanning. Returns every decoded view of the text,
+    newline-joined, so the patterns run over all of them in one pass.
+    Mirrors normalizeForScan() in 01-injection-guard.js:
+
+      1. NFKC with invisible characters removed
+      2. Unicode tag characters mapped back to the ASCII they shadow
+      3. Cyrillic/Greek lookalikes folded to Latin
+      4. Percent-decoded
+      5. HTML entities decoded
+      6. Markdown emphasis markers removed
+      7. Each embedded base64 run that decodes to printable text
+    """
+    import unicodedata, urllib.parse, html
+
+    base = INVISIBLE_STRIP_PATTERN.sub("", unicodedata.normalize("NFKC", text))
+    views = [base]
+
+    def add_view(view: Optional[str]) -> None:
+        if view and view != base and view not in views:
+            views.append(view)
+
+    tag_run = TAG_CHAR_PATTERN.findall(text)
+    if tag_run:
+        add_view("".join(chr(ord(ch) - 0xE0000) for ch in tag_run))
+
+    add_view(base.translate(CONFUSABLES))
+    add_view(urllib.parse.unquote(base))
+    add_view(html.unescape(base))
+    add_view(re.sub(r"[*_`~]+", "", base))
+
+    compact = re.sub(r"\s", "", text)
+    if len(compact) <= 20000 and re.match(r"^[A-Za-z0-9+/_-]{20,}={0,2}$", compact):
+        add_view(_decode_base64_printable(compact))
+    for count, run in enumerate(BASE64_RUN_PATTERN.finditer(text)):
+        if count >= MAX_BASE64_CANDIDATES:
+            break
+        add_view(_decode_base64_printable(run.group(0)))
+
+    return "\n".join(views)
+
 
 def scan(text: str, mode: str = "all") -> list[Violation]:
     """
@@ -211,10 +298,12 @@ def scan(text: str, mode: str = "all") -> list[Violation]:
     if not isinstance(text, str):
         return []
 
+    unscanned = 0
     if len(text) > MAX_SCAN_LENGTH:
         logger.warning(
             f"⚠️  [OTLC GUARDIAN] scan() input truncated: {len(text)} chars > {MAX_SCAN_LENGTH} limit"
         )
+        unscanned = len(text) - MAX_SCAN_LENGTH
         text = text[:MAX_SCAN_LENGTH]
 
     normalized = _normalize_for_scan(text)
@@ -222,17 +311,31 @@ def scan(text: str, mode: str = "all") -> list[Violation]:
 
     if mode in ("injection", "all"):
         for rule in INJECTION_PATTERNS:
-            match = rule.pattern.search(normalized)
-            if match:
+            if rule.matcher is not None:
+                matched = rule.matcher(normalized)
+            else:
+                found = rule.pattern.search(normalized)
+                matched = found.group(0) if found else None
+            if matched is not None:
                 violations.append(Violation(
                     type="injection",
                     id=rule.id,
                     severity=rule.severity,
-                    matched=match.group(0),
+                    matched=matched,
                     description=rule.description,
                 ))
 
-        # Scan original text for invisible unicode (normalizer strips it)
+        # Truncation is a finding. Content past the cap was not scanned,
+        # so a payload hidden behind filler must never read as clean.
+        if unscanned > 0:
+            violations.append(Violation(
+                type="injection",
+                id="INJ-OVERSIZE",
+                severity="MEDIUM",
+                matched=f"{unscanned} characters past the {MAX_SCAN_LENGTH} scan limit were not scanned",
+                description="Input exceeds scan limit",
+            ))
+
         if INVISIBLE_UNICODE_PATTERN.search(text):
             violations.append(Violation(
                 type="injection",
@@ -294,7 +397,7 @@ SANITIZE_PATTERNS = [
     re.compile(r"<<\s*SYS\s*>>",                       re.I),
     re.compile(r"###\s*(?:System|Instruction|Prompt)", re.I),
     re.compile(r"---\s*SYSTEM",                        re.I),
-    INVISIBLE_UNICODE_PATTERN,
+    INVISIBLE_STRIP_PATTERN,
 ]
 
 def sanitize(text: str) -> str:

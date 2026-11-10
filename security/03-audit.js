@@ -616,6 +616,205 @@ function checkUnvalidatedBody(content) {
 //   { id, ..., fileCheckFn(content, filePath) -> [{line, content}] } per-file
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// PYTHON ROUTE-HANDLER ANALYZER (1.5.0)
+// ---------------------------------------------------------------------------
+//
+// AUTHZ-001 and AUTHZ-003 only read JS/TS, because the analyzer above
+// walks brace-delimited blocks. Python backends (FastAPI, Flask,
+// Starlette) got no authorization coverage at all. This is the same
+// "absence inside a handler" analysis for indentation-delimited code.
+//
+// A handler is a function under a route decorator:
+//
+//     @router.post("/documents/{doc_id}")
+//     async def replace(doc_id: int, user = Depends(current_user)):
+//         ...
+//
+// In Python the auth check usually lives in the decorator stack or the
+// signature (Depends(...), @login_required), not in the body. So auth and
+// ownership are searched across the whole handler (decorators, signature,
+// body) and side effects only in the body.
+//
+// Known limits, stated so nobody over-trusts a clean result:
+//   - Auth applied in another file (app.include_router(..., dependencies=...),
+//     middleware) is invisible here. A router-level `dependencies=[...]` in
+//     the SAME file is honored and treated as auth for every handler in it.
+//   - Django class-based views and URLconf routing are not recognized.
+//   - This finds a handler that never mentions an owner or tenant. It does
+//     not prove that a tenant check that IS present is correct.
+
+const PY_ROUTE_DECORATOR = /^([ \t]*)@[\w.]+\.(?:get|post|put|patch|delete|route|api_route)\s*\(/;
+const PY_DEF_LINE        = /^[ \t]*(?:async\s+)?def\s+\w+/;
+const PY_MAX_DECORATOR_SPAN = 40;
+
+const PY_AUTH_PATTERNS = [
+  /\bDepends\s*\(\s*[\w.]*(?:user|auth|token|session|principal|customer|staff|login|require|verify|permission|role|identity|account|tenant)\w*/i,
+  /\bSecurity\s*\(/, /\bHTTPBearer\b/, /\bOAuth2PasswordBearer\b/, /\boauth2_scheme\b/,
+  /@[\w.]*(?:login_required|jwt_required|auth_required|requires_auth|permission_required|token_required|authenticated)\b/,
+  /@[\w.]*require[sd]?_\w+/,
+  /\bcurrent_user\b/, /\brequest\.user\b/, /\bg\.user\b/, /\bget_current_\w+/,
+  /\bverify_(?:token|jwt|session|api_key|signature)\b/, /\bcheck_(?:auth|token|session|api_key)\w*/,
+  /\bjwt\.decode\s*\(/, /\bauthenticate\w*\s*\(/,
+  /\bheaders(?:\.get\s*\(\s*|\s*\[\s*)["']authorization/i, /\bx-api-key\b/i, /\bapi[_-]?key\b/i,
+];
+
+const PY_ROUTER_LEVEL_AUTH = /\bdependencies\s*=\s*\[\s*Depends\s*\(/;
+
+const PY_SIDE_EFFECT_PATTERNS = [
+  /\b(?:db|session|conn|connection|cursor|cur|tx|engine|database)\w*\.(?:add|add_all|delete|merge|commit|execute|executemany|flush|bulk_\w+)\s*\(/i,
+  /\.objects\.(?:create|update|delete|bulk_create|bulk_update|get_or_create|update_or_create)\s*\(/,
+  /\.(?:save|insert_one|insert_many|update_one|update_many|delete_one|delete_many|replace_one)\s*\(/,
+  /\b(?:send_mail|send_email|sendmail)\b/i, /\bsmtplib\b/,
+  /\b(?:requests|httpx)\.(?:post|put|patch|delete)\s*\(/,
+  /\bopen\s*\([^)]*["'][wax]b?\+?["']/, /\.write_(?:text|bytes)\s*\(/,
+  /\bshutil\.(?:copy|move|rmtree)\w*\s*\(/, /\bos\.(?:remove|unlink|rename|replace)\s*\(/,
+  /\bsubprocess\./,
+];
+
+// Routes that are public on purpose. Flagging a login endpoint for having
+// no auth check is noise that teaches people to ignore the rule.
+const PY_PUBLIC_ROUTE = /["'][^"']*(?:login|logout|sign-?in|sign-?up|register|health|ping|metrics|token|magic|otp|verify|reset|callback|webhook)[^"']*["']/i;
+
+const PY_OBJECT_ID_PATTERNS = [
+  /\{\w*id\w*\}/i,                     // FastAPI/Starlette path param: "/docs/{doc_id}"
+  /<(?:\w+:)?\w*id\w*>/i,              // Flask path param: "/docs/<int:doc_id>"
+  /\b\w+_id\s*[:,=)]/,                 // signature parameter: doc_id: int
+  /\brequest\.(?:args|form|json|query_params|path_params)[\w.]*(?:\.get\s*\(|\[)\s*["']\w*id["']/i,
+];
+
+const PY_OWNERSHIP_PATTERNS = [
+  ...OWNERSHIP_PATTERNS,
+  /\bcustomer(?:Id|_id)\b/i, /\borg(?:anization)?(?:Id|_id)\b/i, /\bworkspace(?:Id|_id)\b/i,
+  /\btenan(?:t|cy)\b/i, /\bscope[ds]?\b/i,
+  /\bstatus_code\s*=\s*40[34]\b/, /\bHTTP_40[34]\w*/, /\babort\s*\(\s*40[34]\b/,
+];
+
+/** Drop `#` comments so a "# TODO: add auth" note does not count as auth. */
+function stripPyComments(text) {
+  return text.split("\n").map((line) => {
+    const hash = line.indexOf("#");
+    if (hash === -1) return line;
+    // Keep the line whole when the hash sits inside a quoted string.
+    const before = line.slice(0, hash);
+    const quotes = (before.match(/["']/g) ?? []).length;
+    return quotes % 2 === 0 ? before : line;
+  }).join("\n");
+}
+
+const leadingWidth = (line) => line.match(/^[ \t]*/)[0].length;
+
+function findPythonHandlers(content) {
+  const lines = content.split("\n");
+  const handlers = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const decorator = PY_ROUTE_DECORATOR.exec(lines[i]);
+    if (!decorator) continue;
+    const indent = decorator[1].length;
+
+    // Walk down through any further decorators to the `def` line.
+    let defLine = i;
+    while (defLine < lines.length && defLine - i <= PY_MAX_DECORATOR_SPAN && !PY_DEF_LINE.test(lines[defLine])) defLine++;
+    if (defLine >= lines.length || defLine - i > PY_MAX_DECORATOR_SPAN) continue;
+    if (leadingWidth(lines[defLine]) !== indent) continue;
+
+    // The signature may span lines; it ends where the brackets balance.
+    let depth = 0;
+    let sigEnd = defLine;
+    for (; sigEnd < lines.length; sigEnd++) {
+      for (const ch of lines[sigEnd]) {
+        if (ch === "(" || ch === "[" || ch === "{") depth++;
+        else if (ch === ")" || ch === "]" || ch === "}") depth--;
+      }
+      if (depth <= 0) break;
+    }
+
+    // The body is every following line indented deeper than the `def`.
+    let end = sigEnd + 1;
+    for (; end < lines.length; end++) {
+      if (lines[end].trim() === "") continue;
+      if (leadingWidth(lines[end]) <= indent) break;
+    }
+
+    // Decorators stacked above the route decorator belong to the handler too.
+    let start = i;
+    while (start > 0 && /^[ \t]*@/.test(lines[start - 1]) && leadingWidth(lines[start - 1]) === indent) start--;
+
+    handlers.push({
+      signature: lines[i].trim(),
+      line: i + 1,
+      head: stripPyComments(lines.slice(start, sigEnd + 1).join("\n")),
+      body: stripPyComments(lines.slice(sigEnd + 1, end).join("\n")),
+    });
+    i = end - 1;
+  }
+
+  return handlers;
+}
+
+function checkPyMissingAuth(content) {
+  if (PY_ROUTER_LEVEL_AUTH.test(content)) return [];
+  const findings = [];
+  for (const handler of findPythonHandlers(content)) {
+    if (PY_PUBLIC_ROUTE.test(handler.signature)) continue;
+    if (!matchesAny(PY_SIDE_EFFECT_PATTERNS, handler.body)) continue;
+    if (matchesAny(PY_AUTH_PATTERNS, `${handler.head}\n${handler.body}`)) continue;
+    findings.push({ line: handler.line, content: handler.signature.slice(0, 120) });
+  }
+  return findings;
+}
+
+function checkPyMissingObjectAuthz(content) {
+  const routerAuth = PY_ROUTER_LEVEL_AUTH.test(content);
+  const findings = [];
+  for (const handler of findPythonHandlers(content)) {
+    const whole = `${handler.head}\n${handler.body}`;
+    if (!routerAuth && !matchesAny(PY_AUTH_PATTERNS, whole)) continue; // AUTHZ-011 reports that case
+    if (!matchesAny(PY_OBJECT_ID_PATTERNS, whole)) continue;
+    if (!matchesAny(PY_SIDE_EFFECT_PATTERNS, handler.body)) continue;
+    if (matchesAny(PY_OWNERSHIP_PATTERNS, whole)) continue;
+    findings.push({ line: handler.line, content: handler.signature.slice(0, 120) });
+  }
+  return findings;
+}
+
+// ---------------------------------------------------------------------------
+// WEB-002 SUPPORT: nginx server block with no Content-Security-Policy (1.5.0)
+// ---------------------------------------------------------------------------
+
+const NGINX_FILE_HINT   = /(?:nginx|sites-(?:available|enabled)|conf\.d)[^\n]*$|\.conf(?:\.template)?$/i;
+const NGINX_SERVER_BLOCK = /\bserver\s*\{[\s\S]*?\b(?:listen|server_name)\b/;
+const CSP_ANYWHERE = /content-security-policy|\bhelmet\s*\(|\bTalisman\s*\(|flask_talisman|\bCSP_DEFAULT_SRC\b|django[-_]csp|\bcsp\.middleware\b|ContentSecurityPolicy/i;
+const CONFIG_SCAN_SIZE_CAP = 512 * 1024;
+
+function readSmallText(file) {
+  try {
+    if (fs.statSync(file).size > CONFIG_SCAN_SIZE_CAP) return "";
+    return fs.readFileSync(file, "utf8");
+  } catch (err) {
+    // Unreadable (permissions, vanished mid-scan): it cannot count as
+    // evidence either way, so it contributes nothing.
+    return "";
+  }
+}
+
+/**
+ * True when the project ships an nginx server block and nothing in the
+ * project sets a Content-Security-Policy (not nginx, not app middleware,
+ * not a meta tag). nginx config files usually have no code extension, so
+ * they are collected here and not through the rule's fileTypes.
+ */
+function nginxWithoutCsp(files, projectRoot) {
+  const nginxConfigs = collectFiles(projectRoot, [])
+    .filter((f) => NGINX_FILE_HINT.test(f.replace(/\\/g, "/")))
+    .map(readSmallText)
+    .filter((text) => NGINX_SERVER_BLOCK.test(text));
+  if (nginxConfigs.length === 0) return false;
+  if (nginxConfigs.some((text) => CSP_ANYWHERE.test(text))) return false;
+  return !files.some((f) => CSP_ANYWHERE.test(readSmallText(f)));
+}
+
 const AUDIT_RULES = [
   // --- SECRETS ---
   //
@@ -1122,6 +1321,55 @@ const AUDIT_RULES = [
     fileTypes: JS_TS_EXTS,
     excludePatterns: TEST_FILE_EXCLUDES,
     wholeFile: true,
+  },
+
+  // --- AUTHORIZATION, PYTHON (1.5.0) ---
+  //
+  // Python counterparts of AUTHZ-001 and AUTHZ-003, on the indentation-
+  // aware analyzer above. Separate ids because they are separate rules
+  // with their own blind spots (see the analyzer comment), and HIGH, not
+  // CRITICAL, until they have been run against more real Python projects:
+  // auth wired up in another file is invisible to a per-file analyzer.
+  // Guide: guides/tenant-isolation-tests.md covers what no scanner can.
+  {
+    id: "AUTHZ-011", category: "Authorization", severity: "HIGH",
+    description: "Python route handler performs a side effect with no authentication check",
+    pattern: null,
+    fileTypes: [".py"],
+    excludePatterns: TEST_FILE_EXCLUDES,
+    fileCheckFn: checkPyMissingAuth,
+  },
+  {
+    id: "AUTHZ-013", category: "Authorization", severity: "HIGH",
+    description: "Python route handler acts on a caller-supplied ID with no owner or tenant check",
+    pattern: null,
+    fileTypes: [".py"],
+    excludePatterns: TEST_FILE_EXCLUDES,
+    fileCheckFn: checkPyMissingObjectAuthz,
+  },
+
+  // --- WEB CLIENT (1.5.0) ---
+  //
+  // WEB-001: CLAUDE.md has always said "never store tokens in
+  // localStorage, use httpOnly cookies". Nothing enforced it. Anything in
+  // browser storage is readable by any script on the page, so one XSS bug
+  // becomes account takeover. Matches the three ways a token gets there:
+  // setItem("...token..."), storage.token = ..., storage["...token..."] = ...
+  {
+    id: "WEB-001", category: "Web Client", severity: "HIGH",
+    description: "Auth token kept in browser storage (localStorage/sessionStorage). Use an httpOnly cookie",
+    pattern: /\b(?:localStorage|sessionStorage)(?:\.setItem\s*\(\s*["'`][^"'`]*(?:token|jwt|bearer|credential|api[_-]?key|session[_-]?id|access[_-]?key|refresh)[^"'`]*["'`]|\.\w*(?:token|jwt|bearer|credential|apiKey|sessionId)\w*\s*=[^=]|\[\s*["'`][^"'`]*(?:token|jwt|bearer|credential|api[_-]?key|session[_-]?id)[^"'`]*["'`]\s*\]\s*=[^=])/i,
+    fileTypes: [...JS_TS_EXTS, ".html", ".vue", ".svelte"],
+    excludePatterns: TEST_FILE_EXCLUDES,
+  },
+  // WEB-002: project-level. An nginx server block ships with the project
+  // and nothing anywhere sets a Content-Security-Policy.
+  {
+    id: "WEB-002", category: "Web Client", severity: "MEDIUM",
+    description: "nginx server block with no Content-Security-Policy header anywhere in the project",
+    pattern: null,
+    fileTypes: [],
+    checkFn: nginxWithoutCsp,
   },
 
   // --- TYPESCRIPT ---

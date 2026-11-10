@@ -16,6 +16,7 @@
 |---|---|---|
 | [securing-endpoints.md](securing-endpoints.md) | Endpoints with no auth check, identity trusted from the request body, internal endpoints assumed private, email header injection | `AUTHZ-001` `AUTHZ-002` `AUTHZ-004` `VAL-002` |
 | [authorization-idor.md](authorization-idor.md) | Authenticated-but-not-authorized handlers, object-level access control, cache keys that skip authorization | `AUTHZ-003` `AUTHZ-005` |
+| [tenant-isolation-tests.md](tenant-isolation-tests.md) | Cross-customer reads and writes, customer uploads replacing staff records, account shapes that escape tenant scoping, sign-in limits that reset. Test templates, because no scanner sees these. Original to this repo | `AUTHZ-011` `AUTHZ-013` |
 | [form-validation.md](form-validation.md) | Zod schemas, XSS sanitization, server-side re-validation, structured error responses | `VAL-001` |
 
 ## How these connect to the audit
@@ -30,6 +31,10 @@ always has somewhere to send you.
 | `AUTHZ-003` | CRITICAL | analyzer | IDOR — authenticated handler acts on a caller-supplied object ID with no ownership check |
 | `AUTHZ-004` | HIGH | pattern | Secret compared with `===` instead of `crypto.timingSafeEqual` |
 | `AUTHZ-005` | HIGH | pattern | Cache key not scoped to the requesting user, so a cache hit bypasses authorization |
+| `AUTHZ-011` | HIGH | analyzer | Python (FastAPI/Flask) handler performs a side effect with no authentication check |
+| `AUTHZ-013` | HIGH | analyzer | Python handler acts on a caller-supplied ID with no owner or tenant check |
+| `WEB-001` | HIGH | pattern | Auth token written to `localStorage` / `sessionStorage` |
+| `WEB-002` | MEDIUM | project | nginx server block with no Content-Security-Policy anywhere in the project |
 | `VAL-001` | HIGH | analyzer | Request body reaches a side effect without a schema parse |
 | `VAL-002` | CRITICAL | pattern | Raw email header built by interpolation — CRLF injection makes it an open relay |
 

@@ -1788,6 +1788,230 @@ describe("Analyzer robustness", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 1.5.0 — Python authorization analyzer, WEB-001, WEB-002
+// ---------------------------------------------------------------------------
+
+/** Like makeFixture, for a project with several files. */
+function makeProject(files) {
+  const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
+  for (const [name, content] of Object.entries(files)) {
+    const file = path.join(dir, name);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, content, "utf8");
+  }
+  return dir;
+}
+
+function auditFires(files, ruleId) {
+  const dir = makeProject(files);
+  try {
+    return hasFinding(runAuditOn(dir), ruleId);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe("AUTHZ-011 — Python handler with a side effect and no auth (1.5.0)", () => {
+  test("fires on a FastAPI handler that writes with no auth anywhere", () => {
+    assert.ok(auditFires({ "portal/documents.py": [
+      `from fastapi import APIRouter`,
+      `router = APIRouter()`,
+      ``,
+      `@router.post("/documents")`,
+      `async def create_document(payload: dict, db = Depends(get_db)):`,
+      `    db.add(Document(**payload))`,
+      `    db.commit()`,
+      `    return {"ok": True}`,
+      ``,
+    ].join("\n") }, "AUTHZ-011"));
+  });
+
+  test("silent when auth is a Depends in the signature", () => {
+    assert.ok(!auditFires({ "portal/documents.py": [
+      `@router.post("/documents")`,
+      `async def create_document(`,
+      `    payload: dict,`,
+      `    db = Depends(get_db),`,
+      `    user = Depends(get_current_user),`,
+      `):`,
+      `    db.add(Document(owner_id=user.id, **payload))`,
+      `    db.commit()`,
+      ``,
+    ].join("\n") }, "AUTHZ-011"));
+  });
+
+  test("silent when auth is a decorator (Flask)", () => {
+    assert.ok(!auditFires({ "app.py": [
+      `@app.route("/notes", methods=["POST"])`,
+      `@login_required`,
+      `def add_note():`,
+      `    db.session.add(Note(text=request.form["text"]))`,
+      `    db.session.commit()`,
+      `    return "ok"`,
+      ``,
+    ].join("\n") }, "AUTHZ-011"));
+  });
+
+  test("silent when the router declares auth for every route in the file", () => {
+    assert.ok(!auditFires({ "api.py": [
+      `router = APIRouter(dependencies=[Depends(require_staff)])`,
+      ``,
+      `@router.delete("/things/{thing_id}")`,
+      `def remove(thing_id: int, db = Depends(get_db)):`,
+      `    db.delete(db.get(Thing, thing_id))`,
+      `    db.commit()`,
+      ``,
+    ].join("\n") }, "AUTHZ-011"));
+  });
+
+  test("silent on a login route (public on purpose)", () => {
+    assert.ok(!auditFires({ "auth.py": [
+      `@router.post("/login")`,
+      `def login(body: LoginBody, db = Depends(get_db)):`,
+      `    db.add(LoginAttempt(email=body.email))`,
+      `    db.commit()`,
+      ``,
+    ].join("\n") }, "AUTHZ-011"));
+  });
+
+  test("a comment mentioning auth does not count as auth", () => {
+    assert.ok(auditFires({ "api.py": [
+      `@router.post("/items")`,
+      `def add_item(payload: dict, db = Depends(get_db)):`,
+      `    # TODO: require current_user here`,
+      `    db.add(Item(**payload))`,
+      `    db.commit()`,
+      ``,
+    ].join("\n") }, "AUTHZ-011"));
+  });
+
+  test("silent on a read-only handler", () => {
+    assert.ok(!auditFires({ "api.py": [
+      `@router.get("/status")`,
+      `def status():`,
+      `    return {"up": True}`,
+      ``,
+    ].join("\n") }, "AUTHZ-011"));
+  });
+});
+
+describe("AUTHZ-013 — Python handler acts on an ID with no owner or tenant check (1.5.0)", () => {
+  const unsafe = [
+    `@router.put("/documents/{doc_id}")`,
+    `async def replace(doc_id: int, body: DocBody, db = Depends(get_db), user = Depends(get_current_user)):`,
+    `    doc = db.get(Document, doc_id)`,
+    `    doc.content = body.content`,
+    `    db.commit()`,
+    `    return doc`,
+    ``,
+  ].join("\n");
+
+  test("fires when an authenticated handler mutates by ID with no ownership", () => {
+    assert.ok(auditFires({ "portal/documents.py": unsafe }, "AUTHZ-013"));
+  });
+
+  test("does not double-report the same handler as AUTHZ-011", () => {
+    assert.ok(!auditFires({ "portal/documents.py": unsafe }, "AUTHZ-011"));
+  });
+
+  test("silent when the query is scoped to the caller's customer", () => {
+    assert.ok(!auditFires({ "portal/documents.py": [
+      `@router.put("/documents/{doc_id}")`,
+      `async def replace(doc_id: int, body: DocBody, db = Depends(get_db), user = Depends(get_current_user)):`,
+      `    doc = db.query(Document).filter(Document.id == doc_id, Document.customer_id == user.customer_id).first()`,
+      `    if doc is None:`,
+      `        raise HTTPException(status_code=404)`,
+      `    doc.content = body.content`,
+      `    db.commit()`,
+      ``,
+    ].join("\n") }, "AUTHZ-013"));
+  });
+
+  test("fires on a Flask path parameter too", () => {
+    assert.ok(auditFires({ "app.py": [
+      `@app.route("/tickets/<int:ticket_id>", methods=["DELETE"])`,
+      `@login_required`,
+      `def delete_ticket(ticket_id):`,
+      `    db.session.delete(Ticket.query.get(ticket_id))`,
+      `    db.session.commit()`,
+      `    return "", 204`,
+      ``,
+    ].join("\n") }, "AUTHZ-013"));
+  });
+
+  test("silent when the handler takes no object ID", () => {
+    assert.ok(!auditFires({ "app.py": [
+      `@router.post("/profile")`,
+      `def update_profile(body: ProfileBody, db = Depends(get_db), user = Depends(get_current_user)):`,
+      `    user.name = body.name`,
+      `    db.commit()`,
+      ``,
+    ].join("\n") }, "AUTHZ-013"));
+  });
+});
+
+describe("WEB-001 — auth token in browser storage (1.5.0)", () => {
+  const fires = {
+    "setItem with a token key":     `localStorage.setItem("customer_token", data.token);\n`,
+    "property assignment":          `localStorage.authToken = res.token;\n`,
+    "bracket assignment":           `sessionStorage["jwt"] = res.jwt;\n`,
+    "refresh token via setItem":    `window.localStorage.setItem('refresh', r);\n`,
+  };
+  for (const [name, code] of Object.entries(fires)) {
+    test(`fires: ${name}`, () => assert.ok(auditFires({ "src/auth.js": code }, "WEB-001")));
+  }
+
+  const silent = {
+    "a UI preference":              `localStorage.setItem("theme", "dark");\n`,
+    "reading, not writing":         `const t = localStorage.getItem("token");\n`,
+    "comparison, not assignment":   `if (localStorage.token === undefined) redirect();\n`,
+    "removing the token":           `localStorage.removeItem("token");\n`,
+  };
+  for (const [name, code] of Object.entries(silent)) {
+    test(`silent: ${name}`, () => assert.ok(!auditFires({ "src/ui.js": code }, "WEB-001")));
+  }
+});
+
+describe("WEB-002 — nginx server block with no CSP (1.5.0)", () => {
+  const nginx = (extra = "") => [
+    `server {`,
+    `    listen 443 ssl;`,
+    `    server_name portal.example.com;`,
+    `    add_header X-Frame-Options DENY;`,
+    extra,
+    `    location / { proxy_pass http://app:8000; }`,
+    `}`,
+    ``,
+  ].join("\n");
+
+  test("fires when nginx serves the app and nothing sets a CSP", () => {
+    assert.ok(auditFires({ "deploy/nginx.conf": nginx(), "app/main.py": `app = FastAPI()\n` }, "WEB-002"));
+  });
+
+  test("silent when nginx sets the header", () => {
+    assert.ok(!auditFires({
+      "deploy/nginx.conf": nginx(`    add_header Content-Security-Policy "default-src 'self'" always;`),
+      "app/main.py": `app = FastAPI()\n`,
+    }, "WEB-002"));
+  });
+
+  test("silent when the application sets it", () => {
+    assert.ok(!auditFires({
+      "deploy/nginx.conf": nginx(),
+      "app/main.py": `response.headers["Content-Security-Policy"] = "default-src 'self'"\n`,
+    }, "WEB-002"));
+  });
+
+  test("silent when the project has no nginx config", () => {
+    assert.ok(!auditFires({ "app/main.py": `app = FastAPI()\n` }, "WEB-002"));
+  });
+
+  test("silent on a .conf file that is not an nginx server block", () => {
+    assert.ok(!auditFires({ "tool.conf": `[section]\nkey = value\n`, "app/main.py": `x = 1\n` }, "WEB-002"));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

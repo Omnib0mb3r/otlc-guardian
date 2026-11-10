@@ -175,6 +175,7 @@ export const logger = {
 // ---------------------------------------------------------------------------
 
 const rateLimitStore = new Map();
+const RATE_LIMIT_SWEEP_THRESHOLD = Number.parseInt(process.env.RATE_LIMIT_SWEEP_THRESHOLD ?? "10000", 10) || 10000;
 
 /**
  * Checks rate limit for a given key.
@@ -194,6 +195,15 @@ export function checkRateLimit(key, limit = 20, windowMs = 60_000) {
 
   record.count += 1;
   rateLimitStore.set(key, record);
+
+  // Bound the store. Without this every distinct key (every client IP,
+  // or every value an attacker cycles through) stayed in memory for the
+  // life of the process. Expired windows are swept once the map is large.
+  if (rateLimitStore.size > RATE_LIMIT_SWEEP_THRESHOLD) {
+    for (const [storedKey, stored] of rateLimitStore) {
+      if (now > stored.resetAt) rateLimitStore.delete(storedKey);
+    }
+  }
 
   return {
     allowed:   record.count <= limit,

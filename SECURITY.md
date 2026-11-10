@@ -41,7 +41,7 @@ OTLC Guardian is **defense in depth, not a single line of defense**. The runtime
 Specifically:
 
 - **The runtime guard** (`guardInput`/`guardOutput`) is the strongest layer. It runs at request time on every input/output, scans against 28 injection patterns and 9 secret patterns with NFKC normalization plus invisible-Unicode stripping plus URL/base64 decoding to defeat encoded bypasses. The output guard catches secrets the AI may inadvertently include in its response.
-- **The Claude Code hooks** (`injection-guard-hook.mjs` + `web-content-guard.mjs`) are advisory only. They never block tool execution. They surface warnings into Claude's context so the model can choose to disregard hostile instructions in fetched web content or planning artifacts. By design they fail open — a broken hook never blocks legitimate work.
+- **The Claude Code hooks** (`injection-guard-hook.mjs` + `web-content-guard.mjs`) are a detection layer, not a sandbox. Since 1.5.0 the PreToolUse hook denies a write that carries a CRITICAL injection pattern into a watched file and asks before `.claude/settings.json` is weakened; everything else is a warning in Claude's context. Detection is pattern-based, so a reworded instruction with no known pattern passes. An agent that is already compromised can still reach files through routes the hook does not parse (a script that writes the file, for example). When a hook itself fails it does not block the tool call, and it reports the failure on stderr as a hook error.
 - **The audit script** (`guardian audit`) is a static-analysis pass meant for code review and CI. It is not a runtime defense.
 - **The standards files** (`CLAUDE.md`, `STANDARDS.md`) shape Claude's behavior at session start. They are not a runtime defense.
 

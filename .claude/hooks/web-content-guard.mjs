@@ -2,7 +2,7 @@
 // ============================================================
 // OTLC GUARDIAN — Web Content Guard (PostToolUse)
 // // security · onthelevelconcepts.com
-// Version: 1.3.1
+// Version: 1.5.0
 // ============================================================
 //
 // Indirect prompt injection arrives via WebFetch and WebSearch results
@@ -47,19 +47,25 @@ const guardModulePath = path.resolve(__dirname, "..", "..", "security", "01-inje
 
 let scan = null;
 
-try {
-  if (existsSync(guardModulePath)) {
-    const mod = await import(pathToFileURL(guardModulePath).href);
-    scan = typeof mod.scan === "function" ? mod.scan : null;
-  }
-} catch {
-  process.exit(0);
+// 1.5.0: failures are never silent. A PostToolUse hook cannot block (the
+// tool already ran), so the hook still exits without blocking, but it
+// says on stderr that the fetched content was NOT scanned and exits 1,
+// which Claude Code reports as a non-blocking hook error.
+function failOpenLoudly(reason) {
+  process.stderr.write(`[OTLC GUARDIAN] web-content-guard did not run: ${reason}. This web result was NOT scanned.\n`);
+  process.exit(1);
 }
 
-// If the main module is missing or `scan` isn't exported (older Guardian
-// install), exit silently. The runtime guards in security/* are the
-// primary defense; the hook is advisory.
-if (!scan) process.exit(0);
+if (!existsSync(guardModulePath)) {
+  failOpenLoudly(`scanner missing at ${guardModulePath} (run: guardian update)`);
+}
+try {
+  const mod = await import(pathToFileURL(guardModulePath).href);
+  scan = typeof mod.scan === "function" ? mod.scan : null;
+} catch (err) {
+  failOpenLoudly(`scanner failed to load (${err?.message ?? "unknown error"})`);
+}
+if (!scan) failOpenLoudly("scanner module does not export scan() (run: guardian update)");
 
 // ---------------------------------------------------------------------------
 // WATCHED TOOLS
@@ -82,21 +88,17 @@ const WATCHED_TOOLS = new Set([
 // SCANNER WRAPPER
 // ---------------------------------------------------------------------------
 //
-// Web content can be huge. Cap the scan window before handing it to
-// scan(); the first ~64 KB of fetched content is where prompt injection
-// payloads almost always sit (header, intro, metadata) — the long tail
-// is rarely the attack vector. scan() also has its own MAX_SCAN_LENGTH
-// cap (256 KB), but capping here first means we never send a 10 MB
-// fetch through the normalizer.
-
-const SCAN_BYTE_CAP = 65_536;
+// 1.5.0: no local window. This hook used to scan only the first 64 KB,
+// so a payload placed after 64 KB of filler was never looked at. scan()
+// is linear in its input and enforces its own cap (MAX_SCAN_LENGTH), and
+// it reports anything past that cap as an INJ-OVERSIZE finding instead
+// of dropping it silently.
 
 function scanContent(text) {
-  const window = text.length > SCAN_BYTE_CAP ? text.slice(0, SCAN_BYTE_CAP) : text;
   // Use the runtime scanner so we get NFKC normalization, URL decode,
   // base64 decode, and INJ-UNICODE detection — all the bypass defenses
   // that the duplicated raw-pattern walk used to miss.
-  const { violations } = scan(window, "injection");
+  const { violations } = scan(text, "injection");
   return violations.map((v) => ({
     id:       v.id,
     severity: v.severity,
@@ -140,7 +142,14 @@ function extractText(toolResponse) {
 // ---------------------------------------------------------------------------
 
 let input = "";
-const stdinTimeout = setTimeout(() => process.exit(0), 5000);
+const stdinTimeout = setTimeout(() => failOpenLoudly("no input on stdin after 5 s"), 5000);
+
+// Matched text and the source URL come from the content under suspicion
+// and are echoed into the model's context. Keep them short and strip
+// anything that could act as markup or a delimiter there.
+function safeEcho(value, max = 40) {
+  return String(value).replace(/[^\x20-\x7E]/g, "?").replace(/[<>\[\]{}`]/g, "").slice(0, max);
+}
 
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => (input += chunk));
@@ -165,12 +174,12 @@ process.stdin.on("end", () => {
     const criticalCount = findings.filter((f) => f.severity === "CRITICAL").length;
     const highCount     = findings.filter((f) => f.severity === "HIGH").length;
     const detailLines   = findings
-      .map((f) => `[${f.severity}] ${f.id} — matched: "${String(f.matched).slice(0, 60)}"`)
+      .map((f) => `${f.severity} ${f.id} matched "${safeEcho(f.matched)}"`)
       .join(" | ");
 
     // The source URL helps Claude (and the user reading the warning)
     // decide whether to trust the fetched content.
-    const sourceUrl = data.tool_input?.url ?? data.tool_input?.query ?? "(unknown)";
+    const sourceUrl = safeEcho(data.tool_input?.url ?? data.tool_input?.query ?? "(unknown)", 200);
 
     const output = {
       hookSpecificOutput: {
@@ -188,7 +197,7 @@ process.stdin.on("end", () => {
     };
 
     process.stdout.write(JSON.stringify(output));
-  } catch {
-    process.exit(0);
+  } catch (err) {
+    failOpenLoudly(`unexpected error (${err?.message ?? "unknown"})`);
   }
 });

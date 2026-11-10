@@ -147,9 +147,12 @@ ${c.bold}COMMANDS${c.reset}
     Safe to run on existing projects — will not overwrite existing CLAUDE.md.
 
   ${c.cyan}guardian update${c.reset}
-    Re-merge the latest Guardian files into the current project. Same
-    behavior as init — safe to re-run any time. Use this after pulling
-    a new Guardian release to refresh patterns and standards.
+    Bring an existing install up to the current Guardian version.
+    Replaces Guardian-owned files (security/*, .claude/hooks/*) and the
+    Guardian section between the markers in CLAUDE.md, AGENTS.md,
+    GEMINI.md and STANDARDS.md. Your own content, your settings, your
+    .github/ files and security/.audit-allowlist are not overwritten.
+    Local edits to Guardian-owned files ARE replaced; git is the undo.
 
   ${c.cyan}guardian list-watched${c.reset}
     Print the effective hook watch list for this project. Shows the
@@ -166,7 +169,7 @@ ${c.bold}QUICK START${c.reset}
   3. In any project: guardian init
   4. guardian audit
 
-${c.dim}Version 1.3.1 · MIT License${c.reset}
+${c.dim}Version 1.5.0 · MIT License${c.reset}
 `);
 }
 
@@ -194,6 +197,7 @@ function runAudit() {
   const result = spawnSync("node", [auditScript, ...extraArgs], {
     stdio: "inherit",
     shell: false,
+    windowsHide: true,
   });
 
   if (result.error) {
@@ -347,8 +351,8 @@ function runListWatched() {
   }
 
   log("");
-  log(`${c.bold}Doc-exempt marker${c.reset} — files containing ${c.cyan}otlc-guardian:doc${c.reset} are skipped`);
-  log(`${c.dim}Use this in security spec files that legitimately discuss injection patterns.${c.reset}`);
+  log(`${c.bold}Documentation marker${c.reset}: files that already contain ${c.cyan}otlc-guardian:doc${c.reset} on disk are warn-only, never blocked`);
+  log(`${c.dim}The marker inside content being written has no effect. Create the file with the marker first, or use ignorePaths.${c.reset}`);
   log("");
 }
 
@@ -391,13 +395,16 @@ function smokeTestHook(hookPath) {
     encoding: "utf8",
     timeout:  10_000,
     shell:    false,
+    windowsHide: true,
     stdio:    ["pipe", "pipe", "pipe"],
   });
   if (result.error) {
     return { ok: false, reason: result.error.message ?? "hook execution failed" };
   }
   const combined = (result.stdout ?? "") + (result.stderr ?? "");
-  const fired = combined.includes("PROMPT INJECTION WARNING");
+  // 1.5.0: a CRITICAL payload on a watched path is denied ("BLOCKED"),
+  // lower severities still warn ("WARNING"). Either proves the hook ran.
+  const fired = combined.includes("PROMPT INJECTION BLOCKED") || combined.includes("PROMPT INJECTION WARNING");
   return fired
     ? { ok: true }
     : { ok: false, reason: "hook ran but did not fire on a known-bad payload" };
@@ -731,13 +738,42 @@ function writeFile(p, content) {
  * 1 and 2 — the only difference is whether user content precedes it.
  * That invariant is what makes double-init safe.
  */
-function mergeMd(existingPath, guardianSrcPath, label) {
-  const existing = readFile(existingPath);  // '' if file missing — readFile swallows ENOENT
-  const incoming = readFile(guardianSrcPath);
-  const marker   = `<!-- OTLC-GUARDIAN-START -->`;
+function mergeMd(existingPath, guardianSrcPath, label, { refresh = false } = {}) {
+  const existing  = readFile(existingPath);  // '' if file missing — readFile swallows ENOENT
+  const incoming  = readFile(guardianSrcPath);
+  const marker    = `<!-- OTLC-GUARDIAN-START -->`;
+  const endMarker = `<!-- OTLC-GUARDIAN-END -->`;
 
   if (existing.includes(marker)) {
-    warn(`${label} — Guardian section already present, skipping`);
+    if (!refresh) {
+      warn(`${label} — Guardian section already present, skipping`);
+      return;
+    }
+    // `guardian update`: replace what sits between the markers with the
+    // current Guardian content. Everything outside the markers is the
+    // user's and is written back byte for byte.
+    const startIdx = existing.indexOf(marker);
+    const endIdx   = existing.indexOf(endMarker, startIdx);
+    if (endIdx < 0) {
+      warn(`${label} — START marker found but END marker missing, not touching the file`);
+      return;
+    }
+    const refreshed =
+      existing.slice(0, startIdx) +
+      `${marker}\n` +
+      `---\n\n` +
+      `<!-- The section below was added by OTLC Guardian (guardian init)     -->\n` +
+      `<!-- Do not edit between the OTLC-GUARDIAN-START and END markers.      -->\n` +
+      `<!-- To update, run: guardian update                                   -->\n\n` +
+      incoming.trim() +
+      `\n\n${endMarker}` +
+      existing.slice(endIdx + endMarker.length);
+    if (refreshed === existing) {
+      ok(`${label} — Guardian section up to date`);
+      return;
+    }
+    writeFile(existingPath, refreshed);
+    ok(`${label} — Guardian section refreshed (content outside the markers untouched)`);
     return;
   }
 
@@ -811,12 +847,12 @@ function mergeClaudeSettings(existingPath, guardianSrcPath) {
   const GUARDIAN_HOOKS = [
     {
       event:   "PreToolUse",
-      matcher: "Write|Edit",
+      matcher: "Write|Edit|MultiEdit|NotebookEdit|Bash",
       command: "node .claude/hooks/injection-guard-hook.mjs",
     },
     {
       event:   "PostToolUse",
-      matcher: "WebFetch|WebSearch",
+      matcher: "WebFetch|WebSearch|mcp__firecrawl__crawl|mcp__exa__search",
       command: "node .claude/hooks/web-content-guard.mjs",
     },
   ];
@@ -837,10 +873,29 @@ function mergeClaudeSettings(existingPath, guardianSrcPath) {
 
   let added = 0;
   let already = 0;
+  let moved = 0;
 
   for (const hook of GUARDIAN_HOOKS) {
     existing.hooks[hook.event] = existing.hooks[hook.event] ?? [];
     const eventArr = existing.hooks[hook.event];
+
+    // Migration (1.5.0): the matchers above grew (Bash, MultiEdit,
+    // NotebookEdit, the MCP web tools). A project initialized by an older
+    // Guardian has the same command under the old, narrower matcher.
+    // Take Guardian's own entry out of any block with a different matcher
+    // so the command is registered once, under the current matcher. Only
+    // Guardian's entry is touched; the user's hooks in that block stay,
+    // and the block itself is dropped only if Guardian's was the last one.
+    for (let i = eventArr.length - 1; i >= 0; i--) {
+      const candidate = eventArr[i];
+      if (!Array.isArray(candidate?.hooks)) continue;
+      if (canonicalMatcher(candidate.matcher) === canonicalMatcher(hook.matcher)) continue;
+      const kept = candidate.hooks.filter((h) => h.command !== hook.command);
+      if (kept.length === candidate.hooks.length) continue;
+      moved++;
+      if (kept.length === 0) eventArr.splice(i, 1);
+      else candidate.hooks = kept;
+    }
 
     // Find or create the matcher block (set-based comparison)
     let block = findMatcherBlock(eventArr, hook.matcher);
@@ -860,13 +915,14 @@ function mergeClaudeSettings(existingPath, guardianSrcPath) {
     added++;
   }
 
-  if (added === 0) {
+  if (added === 0 && moved === 0) {
     ok(`.claude/settings.json — all ${already} Guardian hook(s) already registered`);
     return;
   }
 
   writeFile(existingPath, JSON.stringify(existing, null, 2) + "\n");
-  ok(`.claude/settings.json — merged ${added} Guardian hook(s) into existing config`);
+  ok(`.claude/settings.json — merged ${added} Guardian hook(s) into existing config` +
+     (moved > 0 ? ` (${moved} moved to the current matcher)` : ""));
 }
 
 /**
@@ -1045,11 +1101,68 @@ function copyDirSafe(srcDir, destDir, label) {
   }
 }
 
+/**
+ * Refresh a directory of Guardian-owned files (`guardian update`).
+ *
+ * `guardian update` used to be an alias for `init`, and init never
+ * overwrites an existing file. So a project that already had Guardian
+ * kept its original scanner and hooks forever, and no fix in this repo
+ * ever reached it. This function is the difference between the two
+ * commands: files Guardian owns are replaced when their content differs.
+ *
+ * Owned means "shipped by Guardian and not meant to be edited in the
+ * project". Anything a project is expected to edit goes in `skip` (the
+ * audit allowlist, for one) and is only ever copied when missing.
+ *
+ * @returns {{ copied: number, updated: number, current: number }}
+ */
+function refreshOwnedDir(srcDir, destDir, label, skip = new Set()) {
+  const totals = { copied: 0, updated: 0, current: 0 };
+  if (!existsSync(srcDir)) return totals;
+  mkdirSync(destDir, { recursive: true });
+
+  for (const entry of readdirSync(srcDir)) {
+    if (COPY_IGNORE.has(entry)) continue;
+
+    const srcPath  = path.join(srcDir, entry);
+    const destPath = path.join(destDir, entry);
+
+    if (statSync(srcPath).isDirectory()) {
+      const sub = refreshOwnedDir(srcPath, destPath, `${label}/${entry}`, skip);
+      totals.copied += sub.copied; totals.updated += sub.updated; totals.current += sub.current;
+    } else if (!existsSync(destPath)) {
+      copyFileSync(srcPath, destPath);
+      ok(`${label}/${entry} — copied`);
+      totals.copied++;
+    } else if (skip.has(entry)) {
+      ok(`${label}/${entry} — project-owned, left as is`);
+      totals.current++;
+    } else if (readFileSync(srcPath).equals(readFileSync(destPath))) {
+      ok(`${label}/${entry} — up to date`);
+      totals.current++;
+    } else {
+      copyFileSync(srcPath, destPath);
+      ok(`${label}/${entry} — UPDATED (replaced with the current Guardian version)`);
+      totals.updated++;
+    }
+  }
+  return totals;
+}
+
+/** Files under security/ that belong to the project, not to Guardian. */
+const PROJECT_OWNED_SECURITY_FILES = new Set([".audit-allowlist"]);
+
 // ---------------------------------------------------------------------------
 // INIT — merge Guardian into current project without breaking anything
 // ---------------------------------------------------------------------------
+//
+// `refresh: false` (guardian init)   never overwrites an existing file.
+// `refresh: true`  (guardian update) also replaces Guardian-owned files
+//                                    (security/, .claude/hooks/) and the
+//                                    marker-delimited sections of the
+//                                    behavior files with current content.
 
-function runInit() {
+function runInit({ refresh = false } = {}) {
   log(`\n${c.bold}[OTLC GUARDIAN] INITIALIZING PROJECT${c.reset}`);
   log(`${c.dim}Target: ${CWD}${c.reset}`);
   log(`${c.dim}Guardian source: ${ROOT}${c.reset}\n`);
@@ -1073,6 +1186,7 @@ function runInit() {
     path.join(CWD, "CLAUDE.md"),
     path.join(ROOT, "CLAUDE.md"),
     "CLAUDE.md",
+    { refresh },
   );
 
   // ── 1b. AGENTS.md ────────────────────────────────────────────────────────
@@ -1083,6 +1197,7 @@ function runInit() {
     path.join(CWD, "AGENTS.md"),
     path.join(ROOT, "AGENTS.md"),
     "AGENTS.md",
+    { refresh },
   );
 
   // ── 1c. GEMINI.md ────────────────────────────────────────────────────────
@@ -1097,6 +1212,7 @@ function runInit() {
     path.join(CWD, "GEMINI.md"),
     path.join(ROOT, "GEMINI.md"),
     "GEMINI.md",
+    { refresh },
   );
 
   // ── 2. STANDARDS.md ──────────────────────────────────────────────────────
@@ -1105,6 +1221,7 @@ function runInit() {
     path.join(CWD, "STANDARDS.md"),
     path.join(ROOT, "STANDARDS.md"),
     "STANDARDS.md",
+    { refresh },
   );
 
   // ── 3. .gitignore ─────────────────────────────────────────────────────────
@@ -1131,11 +1248,20 @@ function runInit() {
 
   // ── 5. security/ ──────────────────────────────────────────────────────────
   log(`\n${c.bold}── security/${c.reset}`);
-  copyDirSafe(
-    path.join(ROOT, "security"),
-    path.join(CWD, "security"),
-    "security"
-  );
+  if (refresh) {
+    refreshOwnedDir(
+      path.join(ROOT, "security"),
+      path.join(CWD, "security"),
+      "security",
+      PROJECT_OWNED_SECURITY_FILES,
+    );
+  } else {
+    copyDirSafe(
+      path.join(ROOT, "security"),
+      path.join(CWD, "security"),
+      "security"
+    );
+  }
 
   // NOTE (1.1.1): `tests/` is deliberately NOT copied into user projects.
   // Prior releases shipped Guardian's own test suite into every project,
@@ -1158,11 +1284,19 @@ function runInit() {
 
   // ── 7. .claude/hooks/ — copy only, never overwrite ────────────────────────
   log(`\n${c.bold}── .claude/hooks/${c.reset}`);
-  copyDirSafe(
-    path.join(ROOT, ".claude", "hooks"),
-    path.join(CWD, ".claude", "hooks"),
-    ".claude/hooks"
-  );
+  if (refresh) {
+    refreshOwnedDir(
+      path.join(ROOT, ".claude", "hooks"),
+      path.join(CWD, ".claude", "hooks"),
+      ".claude/hooks",
+    );
+  } else {
+    copyDirSafe(
+      path.join(ROOT, ".claude", "hooks"),
+      path.join(CWD, ".claude", "hooks"),
+      ".claude/hooks"
+    );
+  }
 
   // ── 8. .github/ — copy only, never overwrite ──────────────────────────────
   log(`\n${c.bold}── .github/${c.reset}`);
@@ -1245,6 +1379,7 @@ export {
   mergeEnvExample,
   copyIfNew,
   copyDirSafe,
+  refreshOwnedDir,
   canonicalMatcher,
   findMatcherBlock,
   gitignorePathToken,
@@ -1277,10 +1412,11 @@ if (isMainModule) {
       break;
 
     case "update":
-      // update is an alias for init — both are merge-safe and idempotent.
-      // Provided as a separate command because "update" is the natural verb
-      // when refreshing patterns after pulling a new Guardian release.
-      runInit();
+      // update = init + refresh. init never overwrites an existing file;
+      // update also replaces Guardian-owned files (security/, .claude/hooks/)
+      // and the marker-delimited sections of the behavior files, so a fix
+      // in this repo actually reaches a project that already has Guardian.
+      runInit({ refresh: true });
       break;
 
     case "list-watched":

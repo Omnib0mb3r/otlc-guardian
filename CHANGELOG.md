@@ -4,6 +4,114 @@ All notable changes to OTLC Guardian. The format follows [Keep a Changelog](http
 
 ---
 
+## [1.5.0] - Unreleased
+
+Hook and scanner hardening from a full review on 2026-11-10. Working tree
+only: not committed, not published, and not yet rolled out to any other
+project (each project picks it up when `guardian update` is run there).
+
+### Security
+
+- **The PreToolUse hook can now block (BUG-022).** It was advisory only.
+  A CRITICAL injection pattern in a write to a watched path is denied. A
+  Bash command that carries one and names a watched path asks for
+  confirmation. HIGH and MEDIUM findings stay advisory.
+- **A payload can no longer exempt itself (BUG-021).** The
+  `otlc-guardian:doc` marker inside the content being written used to skip
+  the scan, and the warning text told the model about the marker. The
+  marker now counts only when it is already in the file on disk, and it
+  only downgrades a block to a warning. It never silences a finding.
+- **INJ-027 / INJ-028 were cubic (BUG-023).** 44 KB of `<!--ignore `
+  took 16 s and 99 KB ran past a minute, which stalled both hooks. Both
+  rules now use a linear comment walker. SEC-011 had a quadratic case and
+  is now length-bounded.
+- **Scanner bypasses closed (BUG-024).** Each of these returned zero
+  findings before: Unicode tag characters (ASCII smuggling), word joiner
+  U+2060, Cyrillic/Greek lookalike letters, a percent-encoded payload next
+  to any stray `%`, base64 embedded in prose, HTML entities, markdown
+  emphasis inside the phrase, and a payload placed after 100 KB of filler
+  (64 KB in the web hook). Content past the scan cap (now 1 MB) raises
+  `INJ-OVERSIZE` instead of passing as clean.
+- **Coverage gaps closed.** The hook now scans MultiEdit, NotebookEdit and
+  Bash. The MCP web tools named in the web hook are now in the matcher, so
+  they actually fire.
+- **Self-protection for `.claude/settings.json`.** A change that removes a
+  Guardian hook, sets `disableAllHooks`, turns `extendDefaults` off, adds
+  to `ignorePaths`, or removes from `watchPaths` asks for confirmation.
+- **Hook failures are loud.** A missing scanner, bad input or an internal
+  error used to exit 0 with no output. The hooks still do not block on
+  their own failure, but they say on stderr that the call was not scanned
+  and exit 1.
+- **Secrets that were missed (BUG-026):** OpenSSH, EC and encrypted
+  private key headers (SEC-007), GitHub fine-grained and server tokens
+  (SEC-012, SEC-013), Slack tokens (SEC-014), Stripe live keys (SEC-015),
+  Anthropic OAuth and admin keys (SEC-010).
+- Matched text echoed into the model's context is cut to 40 printable
+  characters with markup characters removed.
+- Python module (`security/injection_guard.py`) carries the same scanner
+  changes.
+
+### Added
+
+- **`AUTHZ-011`, `AUTHZ-013`: authorization rules for Python.** `AUTHZ-001`
+  and `AUTHZ-003` only read JS/TS, so FastAPI and Flask backends had no
+  authorization coverage. A new indentation-aware analyzer finds route
+  handlers under `@router.get/post/...` and `@app.route`, and reports a
+  side effect with no auth, and a write by caller-supplied ID with no owner
+  or tenant check. HIGH, not CRITICAL: auth wired up in another file
+  (`include_router(dependencies=...)`, middleware) is invisible to a
+  per-file analyzer. Tested on fixtures only; not yet run on a real
+  Python project.
+- **`WEB-001`: auth token in `localStorage` / `sessionStorage`.** CLAUDE.md
+  has always banned this; nothing enforced it.
+- **`WEB-002`: nginx server block with no Content-Security-Policy** in
+  nginx, application code, or a meta tag.
+- **`guides/tenant-isolation-tests.md`.** Test templates for the bugs a
+  scanner cannot see: cross-customer reads and writes, a customer upload
+  replacing a staff record, account shapes that escape tenant scoping, and
+  sign-in limits that reset.
+- In `bypassPermissions` mode the hook's two "ask" decisions become "deny",
+  because prompts are off there and nobody would be asked.
+
+### Fixed
+
+- **`guardian update` did nothing for an existing install (BUG-025).** It
+  was an alias for `init`, which never overwrites a file, so no fix ever
+  reached a project that already had Guardian. `update` now replaces
+  Guardian-owned files (`security/*`, `.claude/hooks/*`) and the marker
+  sections of the behavior files, and moves Guardian's hook registration
+  to the current matcher. `security/.audit-allowlist`, `.github/` and
+  everything outside the markers are left alone.
+- The Edit branch scanned `old_string`, so removing a bad line was flagged.
+  Only added content is scanned now.
+- Project root comes from `CLAUDE_PROJECT_DIR`, then the payload `cwd`,
+  then `process.cwd()`.
+- An empty string in `ignorePaths` matched every path and turned the hook
+  off. Empty entries are skipped.
+- The in-memory rate limiter never evicted keys. Expired windows are swept
+  once the map passes `RATE_LIMIT_SWEEP_THRESHOLD` (default 10000).
+- `security/.audit-allowlist` claimed CI fails when the allowlist grows.
+  CI only prints the count; the comment now says so.
+
+### Changed (behavior you will notice)
+
+- A write that used to produce a warning can now be refused.
+- A new documentation file full of injection examples must be created
+  with the marker first, or listed in `ignorePaths`.
+- Hook matchers changed. Existing projects are migrated by `guardian update`.
+- `guardian update` overwrites local edits to Guardian-owned files.
+
+### Known limits (not fixed here)
+
+- Detection is pattern-based. A reworded instruction with no known
+  pattern still passes.
+- The hook files and the scanner are not write-protected against the
+  agent they guard. Only `.claude/settings.json` is.
+- The hook command in `.claude/settings.json` is still a relative path.
+  Whether to switch it to `$CLAUDE_PROJECT_DIR` needs a test on Windows.
+
+---
+
 ## [1.4.1] — 2026-07-20
 
 `INJ-005b` precision. The rule was reporting ordinary UI strings as CRITICAL

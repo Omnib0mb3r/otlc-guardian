@@ -31,6 +31,8 @@ import {
   mergeGitignore,
   mergeEnvExample,
   copyIfNew,
+  copyDirSafe,
+  refreshOwnedDir,
   canonicalMatcher,
   findMatcherBlock,
   gitignorePathToken,
@@ -231,9 +233,10 @@ describe("mergeClaudeSettings — JSON hook merge", () => {
       const bashBlock = result.hooks.PreToolUse.find((b) => b.matcher === "Bash");
       assert.ok(bashBlock, "User's Bash matcher block must survive");
       assert.equal(bashBlock.hooks[0].command, "node my-bash-hook.js");
-      // Guardian's Write|Edit hook must be added
-      const writeBlock = result.hooks.PreToolUse.find((b) => b.matcher === "Write|Edit");
-      assert.ok(writeBlock, "Guardian's Write|Edit block must be added");
+      assert.equal(bashBlock.hooks.length, 1, "Guardian must not join the user's Bash-only block");
+      // Guardian's own block must be added under its current matcher
+      const writeBlock = result.hooks.PreToolUse.find((b) => b.matcher === "Write|Edit|MultiEdit|NotebookEdit|Bash");
+      assert.ok(writeBlock, "Guardian's write-tools block must be added");
     });
   });
 
@@ -241,11 +244,11 @@ describe("mergeClaudeSettings — JSON hook merge", () => {
     withTempDir((dir) => {
       const userPath = path.join(dir, "settings.json");
       const srcPath  = path.join(dir, "guardian-settings.json");
-      // User has "Edit|Write" — Guardian wants "Write|Edit". Same set.
+      // Same tool set as Guardian's matcher, different order.
       writeFileSync(userPath, JSON.stringify({
         hooks: {
           PreToolUse: [{
-            matcher: "Edit|Write",
+            matcher: "Bash|NotebookEdit|MultiEdit|Edit|Write",
             hooks: [{ type: "command", command: "node my-existing-hook.js" }],
           }],
         },
@@ -257,7 +260,7 @@ describe("mergeClaudeSettings — JSON hook merge", () => {
       const result = JSON.parse(readFileSync(userPath, "utf8"));
       // There should be exactly ONE matcher block, not two
       const writeEditBlocks = result.hooks.PreToolUse.filter(
-        (b) => canonicalMatcher(b.matcher) === "Edit|Write"
+        (b) => canonicalMatcher(b.matcher) === canonicalMatcher("Write|Edit|MultiEdit|NotebookEdit|Bash")
       );
       assert.equal(writeEditBlocks.length, 1, "Must not create a duplicate parallel block");
       assert.equal(writeEditBlocks[0].hooks.length, 2, "User hook + Guardian hook");
@@ -283,10 +286,118 @@ describe("mergeClaudeSettings — JSON hook merge", () => {
 
       // Both Guardian hooks should be registered exactly once
       const parsed = JSON.parse(after2);
-      const preBlock  = parsed.hooks.PreToolUse.find((b) => canonicalMatcher(b.matcher) === "Edit|Write");
-      const postBlock = parsed.hooks.PostToolUse.find((b) => canonicalMatcher(b.matcher) === "WebFetch|WebSearch");
+      const preBlock  = parsed.hooks.PreToolUse.find((b) => canonicalMatcher(b.matcher) === canonicalMatcher("Write|Edit|MultiEdit|NotebookEdit|Bash"));
+      const postBlock = parsed.hooks.PostToolUse.find((b) => b.hooks.some((h) => h.command.includes("web-content-guard")));
       assert.equal(preBlock.hooks.filter((h) => h.command.includes("injection-guard-hook")).length, 1);
       assert.equal(postBlock.hooks.filter((h) => h.command.includes("web-content-guard")).length, 1);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 1.5.0 — matcher migration and `guardian update` refresh
+// ---------------------------------------------------------------------------
+
+describe("mergeClaudeSettings — migrates pre-1.5.0 registrations", () => {
+  test("moves Guardian's hook from the old matcher to the current one, exactly once", () => {
+    withTempDir((dir) => {
+      const userPath = path.join(dir, "settings.json");
+      const srcPath  = path.join(dir, "guardian-settings.json");
+      writeFileSync(userPath, JSON.stringify({
+        hooks: {
+          PreToolUse: [{
+            matcher: "Write|Edit",
+            hooks: [
+              { type: "command", command: "node my-existing-hook.js" },
+              { type: "command", command: "node .claude/hooks/injection-guard-hook.mjs" },
+            ],
+          }],
+          PostToolUse: [{
+            matcher: "WebFetch|WebSearch",
+            hooks: [{ type: "command", command: "node .claude/hooks/web-content-guard.mjs" }],
+          }],
+        },
+      }));
+      writeFileSync(srcPath, "{}");
+
+      mergeClaudeSettings(userPath, srcPath);
+      const result = JSON.parse(readFileSync(userPath, "utf8"));
+
+      const all = (event, needle) => result.hooks[event]
+        .flatMap((b) => b.hooks.map((h) => ({ matcher: b.matcher, command: h.command })))
+        .filter((h) => h.command.includes(needle));
+
+      const pre = all("PreToolUse", "injection-guard-hook");
+      assert.equal(pre.length, 1, "Guardian's PreToolUse hook must be registered exactly once");
+      assert.ok(pre[0].matcher.split("|").includes("Bash"), "and under the matcher that covers Bash");
+
+      const post = all("PostToolUse", "web-content-guard");
+      assert.equal(post.length, 1, "Guardian's PostToolUse hook must be registered exactly once");
+
+      // The user's hook in the old block survives; the emptied PostToolUse block is dropped.
+      const oldBlock = result.hooks.PreToolUse.find((b) => b.matcher === "Write|Edit");
+      assert.deepEqual(oldBlock.hooks, [{ type: "command", command: "node my-existing-hook.js" }]);
+      assert.equal(result.hooks.PostToolUse.length, 1);
+    });
+  });
+});
+
+describe("refreshOwnedDir — guardian update replaces stale Guardian files", () => {
+  test("stale file is replaced, missing file is copied, project-owned file is kept", () => {
+    withTempDir((dir) => {
+      const src  = path.join(dir, "src");
+      const dest = path.join(dir, "dest");
+      mkdirSync(src); mkdirSync(dest);
+      writeFileSync(path.join(src, "scanner.js"), "new scanner");
+      writeFileSync(path.join(src, "added.js"), "new file");
+      writeFileSync(path.join(src, ".audit-allowlist"), "guardian's own allowlist");
+      writeFileSync(path.join(dest, "scanner.js"), "old scanner");
+      writeFileSync(path.join(dest, ".audit-allowlist"), "project allowlist");
+
+      const totals = refreshOwnedDir(src, dest, "security", new Set([".audit-allowlist"]));
+
+      assert.equal(readFileSync(path.join(dest, "scanner.js"), "utf8"), "new scanner");
+      assert.equal(readFileSync(path.join(dest, "added.js"), "utf8"), "new file");
+      assert.equal(readFileSync(path.join(dest, ".audit-allowlist"), "utf8"), "project allowlist");
+      assert.deepEqual(totals, { copied: 1, updated: 1, current: 1 });
+    });
+  });
+
+  test("copyDirSafe (guardian init) still never overwrites", () => {
+    withTempDir((dir) => {
+      const src  = path.join(dir, "src");
+      const dest = path.join(dir, "dest");
+      mkdirSync(src); mkdirSync(dest);
+      writeFileSync(path.join(src, "scanner.js"), "new scanner");
+      writeFileSync(path.join(dest, "scanner.js"), "old scanner");
+      copyDirSafe(src, dest, "security");
+      assert.equal(readFileSync(path.join(dest, "scanner.js"), "utf8"), "old scanner");
+    });
+  });
+});
+
+describe("mergeMd — refresh replaces only the marker block", () => {
+  test("user content above and below the markers is preserved byte for byte", () => {
+    withTempDir((dir) => {
+      const dest = path.join(dir, "CLAUDE.md");
+      const src  = path.join(dir, "guardian.md");
+      writeFileSync(dest, "# My rules\n\nmine\n");
+      writeFileSync(src, "guardian v1");
+      mergeMd(dest, src, "CLAUDE.md");
+      writeFileSync(dest, readFileSync(dest, "utf8") + "\n## My footer\n");
+
+      writeFileSync(src, "guardian v2");
+      mergeMd(dest, src, "CLAUDE.md");                       // init: no-op once sealed
+      assert.ok(readFileSync(dest, "utf8").includes("guardian v1"));
+
+      mergeMd(dest, src, "CLAUDE.md", { refresh: true });    // update: block replaced
+      const after = readFileSync(dest, "utf8");
+      assert.ok(after.includes("guardian v2") && !after.includes("guardian v1"));
+      assert.ok(after.startsWith("# My rules\n\nmine\n"));
+      assert.ok(after.endsWith("\n## My footer\n"));
+
+      mergeMd(dest, src, "CLAUDE.md", { refresh: true });    // idempotent
+      assert.equal(readFileSync(dest, "utf8"), after);
     });
   });
 });

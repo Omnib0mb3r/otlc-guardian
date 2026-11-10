@@ -2,7 +2,7 @@
  * ============================================================
  * OTLC GUARDIAN — Prompt Injection Guard
  * // security · onthelevelconcepts.com
- * Version: 1.4.1
+ * Version: 1.5.0
  * ============================================================
  *
  * Runtime input sanitizer for AI-powered applications.
@@ -60,68 +60,192 @@ export const INJECTION_PATTERNS = [
   { pattern: /bypass\s+(?:your\s+)?(?:safety|filter|guideline)/i,   severity: "HIGH",     id: "INJ-026" },
 
   // Context poisoning via markup.
-  // Lazy quantifiers + explicit newline class — the previous greedy
-  // `.*` form was ReDoS-vulnerable on long inputs without a closing
-  // delimiter. `[\s\S]*?` also lets the pattern span lines so a
-  // multi-line comment doesn't slip past the scan.
-  { pattern: /<!--[\s\S]*?(?:ignore|override|system)[\s\S]*?-->/i,    severity: "MEDIUM",   id: "INJ-027" },
-  { pattern: /\/\*[\s\S]*?(?:ignore|override|system)[\s\S]*?\*\//i,   severity: "MEDIUM",   id: "INJ-028" },
+  //
+  // These two rules use a `match` function instead of a bare regex. The
+  // regex form (`<!--[\s\S]*?(?:ignore|override|system)[\s\S]*?-->`) was
+  // cubic on input made of many unterminated openers: 44 KB of
+  // "<!--ignore " took 16 seconds and 99 KB ran past a minute, which
+  // stalled both hooks. The matcher below walks comments with indexOf,
+  // so the cost is linear in the input. It is also more precise: the
+  // keyword has to sit inside one comment, where the regex could span
+  // from one comment into the next. `pattern` is kept as a cheap
+  // descriptor for callers that report `pattern.source`.
+  { pattern: /<!--/,  match: commentMatcher("<!--", "-->"), severity: "MEDIUM", id: "INJ-027" },
+  { pattern: /\/\*/,  match: commentMatcher("/*", "*/"),    severity: "MEDIUM", id: "INJ-028" },
 ];
 
+/**
+ * Builds a linear-time matcher for "comment containing a control word".
+ * Returns the full comment text on a hit, or null.
+ * @param {string} open  - comment opener, e.g. "<!--"
+ * @param {string} close - comment closer, e.g. "-->"
+ * @returns {(text: string) => string | null}
+ */
+function commentMatcher(open, close) {
+  const keyword = /ignore|override|system/i;
+  return (text) => {
+    let pos = 0;
+    for (;;) {
+      const start = text.indexOf(open, pos);
+      if (start < 0) return null;
+      const end = text.indexOf(close, start + open.length);
+      // No closer anywhere after this opener means no later opener can
+      // be closed either, so the search is over.
+      if (end < 0) return null;
+      const comment = text.slice(start, end + close.length);
+      if (keyword.test(comment)) return comment;
+      pos = end + close.length;
+    }
+  };
+}
+
 // ---------------------------------------------------------------------------
-// INVISIBLE UNICODE DETECTOR
+// INVISIBLE UNICODE
 // Used in steganographic injection attacks
 // ---------------------------------------------------------------------------
+//
+// Two sets, on purpose:
+//
+//   DETECT: characters whose presence is itself reported (INJ-UNICODE).
+//           Zero-width and bidi controls, word joiner and its invisible
+//           operator siblings, the Mongolian vowel separator, the Arabic
+//           letter mark, and the Unicode tag block (U+E0000..U+E007F).
+//           The tag block is the "ASCII smuggling" channel: every ASCII
+//           character has an invisible twin there that many models read.
+//
+//   STRIP:  everything in DETECT plus characters that are invisible but
+//           common in honest text (variation selectors after emoji,
+//           Hangul fillers). They are removed before pattern matching so
+//           they cannot split a keyword, but they do not raise a finding
+//           on their own.
 
-const INVISIBLE_UNICODE_PATTERN = /[\u200B-\u200F\u2028-\u202F\uFEFF\u00AD]/;
+const INVISIBLE_UNICODE_PATTERN =
+  /[\u00AD\u061C\u180E\u200B-\u200F\u2028-\u202F\u2060-\u2064\u2066-\u206F\uFEFF\u{E0000}-\u{E007F}]/u;
+
+const INVISIBLE_STRIP_PATTERN =
+  /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u2028-\u202F\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\u{E0000}-\u{E0FFF}]/gu;
+
+const TAG_CHAR_PATTERN = /[\u{E0020}-\u{E007E}]/gu;
+
+// ---------------------------------------------------------------------------
+// CONFUSABLES
+// ---------------------------------------------------------------------------
+//
+// NFKC folds fullwidth and other compatibility forms, but it does not
+// touch Cyrillic or Greek letters that render the same as Latin ones.
+// "ignоre" with a Cyrillic о is a different string to a regex and the
+// same string to a reader. This table covers the lookalikes that can
+// stand in for the Latin letters used by the patterns above.
+
+const CONFUSABLES = new Map(Object.entries({
+  // Cyrillic lowercase
+  "а": "a", "с": "c", "ԁ": "d", "е": "e", "һ": "h", "і": "i", "ј": "j", "о": "o",
+  "р": "p", "ѕ": "s", "у": "y", "х": "x", "ԛ": "q", "ԝ": "w", "ѵ": "v", "ӏ": "l",
+  // Cyrillic uppercase
+  "А": "A", "В": "B", "С": "C", "Е": "E", "Н": "H", "І": "I", "Ј": "J", "К": "K",
+  "М": "M", "О": "O", "Р": "P", "Ѕ": "S", "Т": "T", "У": "Y", "Х": "X",
+  // Greek
+  "α": "a", "ο": "o", "ρ": "p", "ν": "v", "ι": "i", "υ": "u", "τ": "t", "ϲ": "c",
+  "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H", "Ι": "I", "Κ": "K", "Μ": "M",
+  "Ν": "N", "Ο": "O", "Ρ": "P", "Τ": "T", "Υ": "Y", "Χ": "X",
+}));
+
+const CONFUSABLE_PATTERN = new RegExp(`[${[...CONFUSABLES.keys()].join("")}]`, "g");
+
+const HTML_NAMED_ENTITIES = { lt: "<", gt: ">", amp: "&", quot: '"', apos: "'", nbsp: " " };
+
+// Embedded base64 runs. Bounded on both ends so one giant run cannot
+// force a giant decode, and capped in count below.
+const BASE64_RUN_PATTERN   = /[A-Za-z0-9+/_-]{24,20000}={0,2}/g;
+const MAX_BASE64_CANDIDATES = 64;
+const PRINTABLE_PATTERN     = /^[\x20-\x7E\s]{10,}$/;
 
 // ---------------------------------------------------------------------------
 // PRE-SCAN NORMALIZER
-// v1.0.1 patch: normalize before scanning to defeat Unicode/encoding bypasses
 // ---------------------------------------------------------------------------
 
+function decodeBase64Printable(candidate) {
+  try {
+    const standard = candidate.replace(/-/g, "+").replace(/_/g, "/");
+    const decoded  = Buffer.from(standard, "base64").toString("utf8");
+    return PRINTABLE_PATTERN.test(decoded) ? decoded : null;
+  } catch (err) {
+    // Buffer.from is lenient and should not throw, but a decode failure
+    // only means "not base64", which is not a finding.
+    return null;
+  }
+}
+
 /**
- * Normalizes text before scanning.
- * - NFKC normalization converts fullwidth/homoglyph Unicode to ASCII equivalents
- * - Attempts base64 and URL decode to catch encoded payloads
- * - Strips invisible characters for clean comparison
+ * Percent-decodes each run of %XX on its own. `decodeURIComponent` on
+ * the whole text throws on any stray "%" ("100% sure"), and the old
+ * code then skipped URL decoding for the entire input. One literal
+ * percent sign was enough to hide a %-encoded payload.
+ */
+function percentDecodeTolerant(text) {
+  return text.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => {
+    try {
+      return decodeURIComponent(run);
+    } catch (err) {
+      // Not valid UTF-8 once decoded. Leave the run as written.
+      return run;
+    }
+  });
+}
+
+function decodeHtmlEntities(text) {
+  return text.replace(/&(?:#(\d{1,7})|#[xX]([0-9A-Fa-f]{1,6})|([A-Za-z]{2,6}));/g, (whole, dec, hex, name) => {
+    if (name) return HTML_NAMED_ENTITIES[name.toLowerCase()] ?? whole;
+    const code = dec ? Number.parseInt(dec, 10) : Number.parseInt(hex, 16);
+    return code > 0 && code <= 0x10FFFF ? String.fromCodePoint(code) : whole;
+  });
+}
+
+/**
+ * Normalizes text before scanning and returns every decoded view of it,
+ * joined by newlines, so the patterns run over all of them in one pass.
+ *
+ * Views:
+ *   1. NFKC-normalized text with invisible characters removed
+ *   2. Unicode tag characters mapped back to the ASCII they shadow
+ *   3. Cyrillic/Greek lookalikes folded to Latin
+ *   4. Percent-decoded (tolerant of stray "%")
+ *   5. HTML entities decoded
+ *   6. Markdown emphasis markers removed ("**previous**" -> "previous")
+ *   7. Each embedded base64 run that decodes to printable text
+ *
  * @param {string} text
  * @returns {string} normalized text ready for pattern scanning
  */
 function normalizeForScan(text) {
-  // NFKC: converts ｉｇｎｏｒｅ → ignore, fullwidth chars → ASCII
-  let normalized = text.normalize("NFKC");
+  const base  = text.normalize("NFKC").replace(INVISIBLE_STRIP_PATTERN, "");
+  const views = [base];
+  const addView = (view) => {
+    if (view && view !== base && !views.includes(view)) views.push(view);
+  };
 
-  // Strip invisible Unicode so zero-width bypasses don't survive
-  normalized = normalized.replace(/[\u200B-\u200F\u2028-\u202F\uFEFF\u00AD]/g, "");
-
-  // Attempt URL decode — catch %69%67%6E%6F%72%65 style payloads
-  try {
-    const urlDecoded = decodeURIComponent(normalized);
-    if (urlDecoded !== normalized) {
-      // Scan both original and decoded — return the more dangerous one
-      normalized = `${normalized}\n${urlDecoded}`;
-    }
-  } catch {
-    // Invalid URL encoding — not a bypass attempt, continue with original
+  const tagRun = text.match(TAG_CHAR_PATTERN);
+  if (tagRun) {
+    addView(tagRun.map((ch) => String.fromCodePoint(ch.codePointAt(0) - 0xE0000)).join(""));
   }
 
-  // Attempt base64 decode — catch aWdub3Jl... style payloads
-  // Only attempt on strings that look like valid base64 (no spaces, right charset)
-  const base64Candidate = text.replace(/\s/g, "");
-  if (/^[A-Za-z0-9+/]{20,}={0,2}$/.test(base64Candidate)) {
-    try {
-      const decoded = Buffer.from(base64Candidate, "base64").toString("utf8");
-      // Only append if decoded result looks like readable text (not binary garbage)
-      if (/^[\x20-\x7E\s]{10,}$/.test(decoded)) {
-        normalized = `${normalized}\n${decoded}`;
-      }
-    } catch {
-      // Not valid base64 — continue
-    }
+  addView(base.replace(CONFUSABLE_PATTERN, (ch) => CONFUSABLES.get(ch) ?? ch));
+  addView(percentDecodeTolerant(base));
+  addView(decodeHtmlEntities(base));
+  addView(base.replace(/[*_`~]+/g, ""));
+
+  // Whole-input base64 (whitespace-wrapped payloads), then embedded runs.
+  const compact = text.replace(/\s/g, "");
+  if (compact.length <= 20000 && /^[A-Za-z0-9+/_-]{20,}={0,2}$/.test(compact)) {
+    addView(decodeBase64Printable(compact));
+  }
+  let candidates = 0;
+  for (const run of text.matchAll(BASE64_RUN_PATTERN)) {
+    if (++candidates > MAX_BASE64_CANDIDATES) break;
+    addView(decodeBase64Printable(run[0]));
   }
 
-  return normalized;
+  return views.join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -149,7 +273,7 @@ function normalizeForScan(text) {
 // Test coverage in tests/injection-guard.test.js.
 const SECRET_PATTERNS = [
   { pattern: /sk-proj-[a-zA-Z0-9_-]{20,}/,               label: "OpenAI Project API Key",    id: "SEC-001" },
-  { pattern: /sk-ant-api\d{2}-[a-zA-Z0-9_-]{20,}/,       label: "Anthropic API Key",         id: "SEC-010" },
+  { pattern: /sk-ant-(?:api|oat|admin)\d{2}-[a-zA-Z0-9_-]{20,}/, label: "Anthropic API Key",  id: "SEC-010" },
   // Legacy OpenAI format (`sk-...` without a provider tag) — kept for
   // historical keys still in circulation. Negative lookahead excludes
   // the provider-tagged variants so they're reported under their
@@ -161,7 +285,9 @@ const SECRET_PATTERNS = [
   { pattern: /AKIA[0-9A-Z]{16}/,                        label: "AWS Access Key",     id: "SEC-005" },
   // SEC-006: scoped to secret-adjacent context only — avoids false positives on JWTs/images
   { pattern: /(?:secret|token|key|password|auth)\s*[:=]\s*["']?[A-Za-z0-9+/]{40,}["']?/i, label: "Context-Adjacent Base64 Secret", id: "SEC-006" },
-  { pattern: /-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----/, label: "Private Key",   id: "SEC-007" },
+  // SEC-007: any PEM private key header (RSA, EC, DSA, OPENSSH, ENCRYPTED, bare).
+  // The old form only allowed an optional "RSA", so OpenSSH and EC keys passed clean.
+  { pattern: /-----BEGIN\s+(?:[A-Z0-9]+\s+){0,3}PRIVATE\s+KEY-----/, label: "Private Key", id: "SEC-007" },
   { pattern: /password\s*[:=]\s*["']?[^\s"']{8,}/i,    label: "Inline Password",   id: "SEC-008" },
   { pattern: /api[_-]?key\s*[:=]\s*["']?[^\s"']{8,}/i, label: "Inline API Key",    id: "SEC-009" },
   // SEC-011: connection strings with embedded credentials.
@@ -173,7 +299,13 @@ const SECRET_PATTERNS = [
   // so the regex cannot walk past the credential boundary into the
   // host portion. See tests/injection-guard.test.js for the full set
   // of examples the rule must and must not match.
-  { pattern: /(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqps?):\/\/[^:@\/\s"'`]*:[^@\s"'`]+@/i, label: "Connection String with Embedded Credentials", id: "SEC-011" },
+  { pattern: /(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqps?):\/\/[^:@\/\s"'`]{0,256}:[^@\s"'`]{1,512}@/i, label: "Connection String with Embedded Credentials", id: "SEC-011" },
+  // SEC-011 note: both credential parts are length-bounded. Unbounded,
+  // a long run of "redis://a:b" with no "@" made the rule quadratic.
+  { pattern: /github_pat_[A-Za-z0-9_]{40,}/,            label: "GitHub Fine-Grained Token",   id: "SEC-012" },
+  { pattern: /gh[sur]_[A-Za-z0-9]{36,}/,                label: "GitHub App/Server Token",     id: "SEC-013" },
+  { pattern: /xox[abprs]-[A-Za-z0-9-]{10,}/,            label: "Slack Token",                 id: "SEC-014" },
+  { pattern: /[sr]k_live_[A-Za-z0-9]{20,}/,             label: "Stripe Live Key",             id: "SEC-015" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -191,15 +323,16 @@ const SECRET_PATTERNS = [
  * but `scan()` is exported and used directly by the audit CLI, the
  * hooks, and third-party callers. Without a cap, a bad actor who gets
  * a huge string into any of those paths can burn CPU without blocking.
- * 100 KB is well above any legitimate injection payload and still fast
- * to scan in the millisecond range.
+ * 1 MB is well above any legitimate injection payload. Every pattern
+ * and every normalizer pass is linear in the input, so the cap is a
+ * memory bound, not a workaround for slow regexes.
  *
  * This does not silently corrupt the text — if truncation happens we
- * still scan the first 100 KB (where any injection would realistically
- * sit) and the caller's protection is unchanged. The console note
+ * still scan everything under the cap and report an INJ-OVERSIZE
+ * finding for the remainder, so truncation is never silent. The console note
  * mirrors `guardInput()`'s existing truncation log so operators see it.
  */
-const MAX_SCAN_LENGTH = 100_000;
+const MAX_SCAN_LENGTH = 1_000_000;
 
 /**
  * Scans text for injection patterns and secret leaks.
@@ -216,7 +349,9 @@ export function scan(text, mode = "all") {
   // URL-decoded and base64-decoded copies onto the original, so a
   // large input could double or triple in size inside normalizeForScan.
   // Capping upstream makes the downstream work bounded.
+  let unscanned = 0;
   if (text.length > MAX_SCAN_LENGTH) {
+    unscanned = text.length - MAX_SCAN_LENGTH;
     console.warn(`⚠️  [OTLC GUARDIAN] scan() input truncated: ${text.length} chars > ${MAX_SCAN_LENGTH} limit`);
     text = text.slice(0, MAX_SCAN_LENGTH);
   }
@@ -227,17 +362,32 @@ export function scan(text, mode = "all") {
   const violations = [];
 
   if (mode === "injection" || mode === "all") {
-    for (const { pattern, severity, id } of INJECTION_PATTERNS) {
-      if (pattern.test(normalized)) {
+    for (const { pattern, match, severity, id } of INJECTION_PATTERNS) {
+      const matched = match ? match(normalized) : (normalized.match(pattern)?.[0] ?? null);
+      if (matched !== null) {
         violations.push({
           type: "injection",
           id,
           severity,
-          matched: normalized.match(pattern)?.[0] ?? "",
+          matched,
           pattern: pattern.source,
           timestamp: new Date().toISOString(),
         });
       }
+    }
+
+    // Truncation is a finding, not a footnote. Content past the cap was
+    // not scanned, so padding a payload behind filler must never read
+    // as "clean".
+    if (unscanned > 0) {
+      violations.push({
+        type: "injection",
+        id: "INJ-OVERSIZE",
+        severity: "MEDIUM",
+        matched: `${unscanned} characters past the ${MAX_SCAN_LENGTH} scan limit were not scanned`,
+        pattern: "length",
+        timestamp: new Date().toISOString(),
+      });
     }
 
     if (INVISIBLE_UNICODE_PATTERN.test(text)) {
@@ -330,7 +480,7 @@ export function sanitize(input) {
     .replace(/<<\s*SYS\s*>>/gi, "")
     .replace(/###\s*(?:System|Instruction|Prompt)/gi, "")
     .replace(/---\s*SYSTEM/gi, "")
-    .replace(/[\u200B-\u200F\u2028-\u202F\uFEFF\u00AD]/g, "");
+    .replace(INVISIBLE_STRIP_PATTERN, "");
 }
 
 // ---------------------------------------------------------------------------

@@ -234,13 +234,17 @@ cd /your/project
 guardian init
 ```
 
-**`guardian update`** — Re-merge the latest Guardian files into an existing project.
-Same behavior as `init` (safe to re-run any time). Use this after pulling a new release.
+**`guardian update`** — Bring an existing install up to the current Guardian version.
+Unlike `init`, which never overwrites an existing file, `update` replaces Guardian-owned
+files (`security/*`, `.claude/hooks/*`) and the Guardian section between the markers in
+`CLAUDE.md`, `AGENTS.md`, `GEMINI.md` and `STANDARDS.md`. Your own content, your
+`.github/` files and `security/.audit-allowlist` are left alone. Run it in each project
+after pulling a new release; until you do, that project keeps its old scanner and hooks.
 ```bash
 guardian update
 ```
 
-**`guardian audit`** — Scan your project for security and quality problems. 33 rules
+**`guardian audit`** — Scan your project for security and quality problems. 42 rules
 in 1.4.x — 28 regex patterns, 3 per-file analyzers, 2 project-level checks. The audit
 prints the live breakdown on every run, so that line is always the authoritative count.
 Run regularly.
@@ -306,7 +310,7 @@ Claude Code.
 
 **Audit CLI — scan any codebase:**
 - `guardian audit` scans for hardcoded secrets, silent errors, raw SQL, console.log in
-  prod paths, missing `/health`, and more (33 rules in 1.4.x — every finding should be
+  prod paths, missing `/health`, and more (42 rules in 1.5.x — every finding should be
   reviewed; the tool is advisory)
 - Finds the two bugs AI coding tools generate most, which no regex can express:
   endpoints that perform side effects with no authentication (`AUTHZ-001`) and
@@ -337,8 +341,12 @@ These features piggy-back on Claude Code's `PreToolUse` / `PostToolUse` tool-cal
 lifecycle, which no other agent exposes today. They're installed automatically by
 `guardian init` and do nothing if you're not running inside Claude Code.
 
-**Two advisory hooks (never block — only surface warnings):**
-- **PreToolUse** scans every Write/Edit on a wide default watch list — `.planning/`,
+**Two hooks. The first one can block; the second one warns:**
+- **PreToolUse** denies a write whose new content has a CRITICAL injection pattern,
+  asks for confirmation on a Bash command that carries one and names a watched file,
+  asks before `.claude/settings.json` is changed in a way that weakens Guardian, and
+  warns on HIGH/MEDIUM findings. It scans Write, Edit, MultiEdit, NotebookEdit and
+  Bash on a wide default watch list — `.planning/`,
   `.gsd/`, `.plans/`, `.cursor/`, `.continue/`, `.aider/`, `.windsurf/`, every `*/memory/`
   directory, plus `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursorrules`, `.windsurfrules`,
   `MEMORY.md`, `copilot-instructions.md`, and `.env*`. Patterns are imported from the
@@ -347,8 +355,9 @@ lifecycle, which no other agent exposes today. They're installed automatically b
   reasons about the content — catches indirect prompt injection at the entry point, the
   highest-leverage place to defend.
 - Configurable per project via `otlcGuardian.watchPaths` / `ignorePaths` in
-  `.claude/settings.json`. Doc-exempt marker (`otlc-guardian:doc`) silences scanning for
-  security spec files.
+  `.claude/settings.json`. A file that already carries the `otlc-guardian:doc` marker
+  on disk is warn-only (for security specs). The marker inside content being written
+  has no effect.
 
 **Hook smoke test in `guardian check`:**
 - Pipes a known-injection payload through the `PreToolUse` hook and confirms it fires
@@ -413,7 +422,7 @@ builtin, which you can verify by grepping the source tree.
 **Full step-by-step uninstall instructions live in [`SETUP.md`](SETUP.md#uninstalling).** It walks through:
 
 1. **Un-merging files Guardian appended into** — open `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `STANDARDS.md`, `.gitignore`, and `.env.example` in your editor and delete only the content between the `<!-- OTLC-GUARDIAN-START -->` and `<!-- OTLC-GUARDIAN-END -->` markers (or `# OTLC-GUARDIAN-START` for shell-comment files).
-2. **Cleaning `.claude/settings.json`** — remove only the two Guardian hook entries (PreToolUse `Write|Edit` → `injection-guard-hook.mjs` and PostToolUse `WebFetch|WebSearch` → `web-content-guard.mjs`). Leave every other hook alone.
+2. **Cleaning `.claude/settings.json`** — remove only the two Guardian hook entries (PreToolUse `Write|Edit|MultiEdit|NotebookEdit|Bash` → `injection-guard-hook.mjs` and PostToolUse `WebFetch|WebSearch` → `web-content-guard.mjs`). Leave every other hook alone.
 3. **Deleting pure-Guardian files individually by name** — `security/01-injection-guard.js`, `security/02-code-security.js`, `security/03-audit.js`, `security/04-sql-guard.js`, `security/injection_guard.py`, `.claude/hooks/injection-guard-hook.mjs`, `.claude/hooks/web-content-guard.mjs`. **Never** `rm -rf security/` or `rm -rf .claude/hooks/` — those would also delete any custom files you added.
 4. **Optionally uninstalling the global CLI** — `npm uninstall -g otlc-guardian`.
 

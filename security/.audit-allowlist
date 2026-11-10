@@ -16,8 +16,9 @@
 #   1. Every addition is a single visible diff line in PR review.
 #   2. The reason field forces the contributor to justify the
 #      exemption — no silent additions sneaking past review.
-#   3. CI counts the lines and fails if the count grows without
-#      a matching CHANGELOG.md entry (see .github/workflows).
+#   3. CI prints the exempted-file count in the workflow summary on
+#      every run (see .github/workflows). It reports the count; it
+#      does not fail the build when the count grows.
 #   4. CODEOWNERS can require security-team review of any change
 #      to this file.
 #
