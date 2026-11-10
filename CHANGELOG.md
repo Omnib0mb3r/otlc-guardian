@@ -172,6 +172,14 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **`guardian check` fails on a broken or unregistered hook (BUG-062).** A
+  failed hook smoke test was a warning and `check` still printed "correctly
+  installed" and exited 0, and nothing read `.claude/settings.json`, so the
+  CI gate could not fail on a hook that protects nothing. A failed smoke test
+  (including the hook's own fail-open exit) is now a failure, and a new
+  registration check requires both hooks in `settings.json` or
+  `settings.local.json` on matchers that cover `Write` and `WebFetch`.
+  Invalid JSON and `disableAllHooks` fail too.
 - **The hook no longer fails open in CommonJS projects (BUG-063, first half).**
   The scanner is an ES module with a `.js` extension, so in a project whose
   `package.json` says `"type": "commonjs"` (npm 11's `npm init -y` default)

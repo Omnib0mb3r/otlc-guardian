@@ -596,6 +596,119 @@ describe("BUG-063: the installed hook works in a CommonJS project", () => {
 });
 
 // ---------------------------------------------------------------------------
+// BUG-062: guardian check must fail on a broken or unregistered hook
+// ---------------------------------------------------------------------------
+//
+// CI runs `guardian check` as a gate. It used to count a failed hook smoke
+// test as a warning, print "Guardian is correctly installed" and exit 0,
+// and it never read .claude/settings.json, so an unregistered hook passed.
+
+function runCheck(dir) {
+  return spawnSync("node", [GUARDIAN_CLI, "check"], { cwd: dir, encoding: "utf8", timeout: 60_000, env: HOOK_ENV });
+}
+
+function editSettings(dir, mutate) {
+  const file = path.join(dir, ".claude", "settings.json");
+  const settings = JSON.parse(readFileSync(file, "utf8"));
+  mutate(settings);
+  writeFileSync(file, JSON.stringify(settings, null, 2));
+}
+
+describe("BUG-062: guardian check fails on a broken or unregistered hook", () => {
+  test("a fresh init passes check", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      const r = runCheck(dir);
+      assert.equal(r.status, 0, (r.stdout + r.stderr).slice(-400));
+    });
+  });
+
+  test("a hook that never fires fails check with exit 1", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      writeFileSync(path.join(dir, ".claude", "hooks", "injection-guard-hook.mjs"), "process.exit(0);\n");
+      const r = runCheck(dir);
+      assert.equal(r.status, 1, "a failed smoke test must fail check");
+      assert.ok(/smoke test failed/i.test(r.stdout + r.stderr), "check must say the smoke test failed");
+      assert.ok(!/correctly installed/.test(r.stdout), "check must not report a correct install");
+    });
+  });
+
+  test("a hook that fails open (scanner exports nothing usable) fails check", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      writeFileSync(path.join(dir, "security", "01-injection-guard.js"), "export const scan = null;\n");
+      const r = runCheck(dir);
+      assert.equal(r.status, 1, "every required file exists, so only the smoke test can fail this");
+      assert.ok(/smoke test failed/i.test(r.stdout + r.stderr));
+    });
+  });
+
+  test("a PreToolUse registration removed from settings.json fails check", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      editSettings(dir, (s) => { delete s.hooks.PreToolUse; });
+      const r = runCheck(dir);
+      assert.equal(r.status, 1, "an unregistered hook must fail check");
+      assert.ok(/injection-guard-hook\.mjs/.test(r.stdout + r.stderr) && /not registered/i.test(r.stdout + r.stderr));
+    });
+  });
+
+  test("a matcher that no longer covers Write fails check", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      editSettings(dir, (s) => { s.hooks.PreToolUse[0].matcher = "Bash"; });
+      assert.equal(runCheck(dir).status, 1);
+    });
+  });
+
+  test("a matcher token with a trailing space does not count as Write", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      editSettings(dir, (s) => { s.hooks.PreToolUse[0].matcher = "Write |Edit|MultiEdit|NotebookEdit|Bash|PowerShell"; });
+      assert.equal(runCheck(dir).status, 1);
+    });
+  });
+
+  test("a PostToolUse web guard registration removed fails check", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      editSettings(dir, (s) => { delete s.hooks.PostToolUse; });
+      const r = runCheck(dir);
+      assert.equal(r.status, 1);
+      assert.ok(/web-content-guard\.mjs/.test(r.stdout + r.stderr));
+    });
+  });
+
+  test("disableAllHooks in settings.local.json fails check", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      writeFileSync(path.join(dir, ".claude", "settings.local.json"), JSON.stringify({ disableAllHooks: true }));
+      assert.equal(runCheck(dir).status, 1);
+    });
+  });
+
+  test("a registration moved to settings.local.json still passes", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      let pre;
+      editSettings(dir, (s) => { pre = s.hooks.PreToolUse; delete s.hooks.PreToolUse; });
+      writeFileSync(path.join(dir, ".claude", "settings.local.json"), JSON.stringify({ hooks: { PreToolUse: pre } }));
+      const r = runCheck(dir);
+      assert.equal(r.status, 0, (r.stdout + r.stderr).slice(-400));
+    });
+  });
+
+  test("invalid JSON in settings.json fails check", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      writeFileSync(path.join(dir, ".claude", "settings.json"), "{ not json");
+      assert.equal(runCheck(dir).status, 1);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

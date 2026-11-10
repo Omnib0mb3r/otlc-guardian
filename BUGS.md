@@ -73,7 +73,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-059 | OPEN | Audit exemptions do not reach the project checks: `DEP-001`, `DEP-002`, `WEB-002` still read exempt files |
 | BUG-060 | OPEN | `guardian init` copies Guardian's own `.github/` (CODEOWNERS naming Guardian's maintainer, templates) and allowlist into every project |
 | BUG-061 | OPEN | `guardian init` and `update` on an invalid `.claude/settings.json` stop with a raw stack trace after earlier steps are written |
-| BUG-062 | OPEN | `guardian check` passes (exit 0, "correctly installed") when the hook smoke test fails, and never checks the hook is registered |
+| BUG-062 | SMOKE-TESTING | `guardian check` passes (exit 0, "correctly installed") when the hook smoke test fails, and never checks the hook is registered |
 | BUG-063 | OPEN | HIGH: the PreToolUse hook fails open in every CommonJS project: the ESM scanner cannot load under `"type": "commonjs"` |
 | BUG-064 | OPEN | Windows path aliases dodge the watch and protected sets: `::$INDEX_ALLOCATION` on a folder, and 8.3 short names (`CLAUDE~1`) |
 | BUG-065 | OPEN | Settings and guard-file protection miss explicit deletes and replaces: `find -delete`, `rsync --delete`, `tar -x`, `cmd /c rd` and `del` |
@@ -777,9 +777,11 @@ With an invalid `.claude/settings.json`, `init` and `update` stop with a raw sta
 
 ### BUG-062: `guardian check` passes with a broken hook
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
-`runCheck()` in `bin/guardian.js` counts a failed hook smoke test as a warning, then prints "Guardian is correctly installed in this project." and exits 0; only missing required files exit 1. It also never reads `.claude/settings.json`, so an unregistered hook passes. This repo's CI runs `node bin/guardian.js check` as a gate, which therefore cannot fail on a broken hook. SETUP.md troubleshooting said it verifies registration (corrected 2026-11-10). Fix: a failed smoke test and a missing registration are failures (exit 1), tested in `tests/init.test.js`. Related: `guardian scan` exits 0 when it finds patterns.
+`runCheck()` in `bin/guardian.js` counts a failed hook smoke test as a warning, then prints "Guardian is correctly installed in this project." and exits 0; only missing required files exit 1. It also never reads `.claude/settings.json`, so an unregistered hook passes. This repo's CI runs `node bin/guardian.js check` as a gate, which therefore cannot fail on a broken hook. SETUP.md troubleshooting said it verifies registration (corrected 2026-11-10). Fix: a failed smoke test and a missing registration are failures (exit 1), tested in `tests/init.test.js`.
+
+**Fix (2026-11-10).** `runCheck()` now counts a failed smoke test as a failure, and `smokeTestHook()` reports the hook's own exit-1 fail-open with its first stderr line; it runs in the checked project with `CLAUDE_PROJECT_DIR` dropped. New `hookRegistrationProblems()` reads `settings.json` and `settings.local.json` together and requires `injection-guard-hook.mjs` on PreToolUse for `Write` and `web-content-guard.mjs` on PostToolUse for `WebFetch`, reading matcher tokens untrimmed; invalid JSON and `disableAllHooks` fail. Tests: `tests/init.test.js`, "BUG-062" block (10 cases, 8 failed before the fix). Smoke test: run `guardian check` in a real project with the hook removed from its settings and see exit 1. `guardian scan` exiting 0 on findings is not changed here. Related: `guardian scan` exits 0 when it finds patterns.
 
 BUG-063 to BUG-067 are from the independent re-probe against `4fd3ef8`: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-reprobe.md` (items R1 to R5; harness in `C:\tmp\guardian-reprobe\h\`). Every hook fix among them waits: the hook is protected (cc9182f), and the dev-versus-live split for editing it is with Michael.
 

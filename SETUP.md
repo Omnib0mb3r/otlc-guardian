@@ -562,10 +562,11 @@ On Windows, also confirm the variables are set in System Environment Variables i
 
 Confirm `.claude/settings.json` is in the **project root** (not a subdirectory).  
 The command `node .claude/hooks/injection-guard-hook.mjs` must resolve from the project root.  
-`guardian check` confirms the hook files exist and pipes a test payload through the
-PreToolUse hook. It does not read `.claude/settings.json`, so it cannot tell you the hook
-is registered: open that file and look for the command. A failed smoke test is printed as
-a warning and `check` still exits 0.
+`guardian check` confirms the hook files exist, pipes a test payload through the
+PreToolUse hook, and reads `.claude/settings.json` and `settings.local.json` for both
+registrations (the PreToolUse hook on a matcher that covers `Write`, the web content guard
+on one that covers `WebFetch`). A hook that does not fire, a missing registration, invalid
+JSON or `disableAllHooks` each fail `check` with exit 1.
 
 **GitHub Actions failing on Gitleaks scan**
 
