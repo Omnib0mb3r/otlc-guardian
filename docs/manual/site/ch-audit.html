@@ -94,7 +94,7 @@
 <li>Status header printed: target, project (only when it differs from the target) and the live rule count line.</li>
 <li><code>loadAllowlist(projectRoot)</code>.</li>
 <li><code>collectFiles(scanRoot, allExtensions)</code>, where <code>allExtensions</code> is the union of every rule's <code>fileTypes</code>.</li>
-<li>Each collected file is read once to decide exemption with <code>exemptionMechanism()</code>. File and exempt counts are printed, then every exempt path by mechanism.</li>
+<li>Each collected file is read once to decide exemption with <code>exemptionMechanism()</code>. File and exempt counts are printed, then every exempt path by mechanism, then each per-rule exemption as <code>[allowlist rule] &lt;path&gt; [IDS]</code>.</li>
 <li>Pattern rules, in <code>AUDIT_RULES</code> order, over the files whose extension is in the rule's <code>fileTypes</code>.</li>
 <li>Analyzer rules, same file filter.</li>
 <li>Project rules.</li>
@@ -187,7 +187,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
     }
   ],
   "total": 3,
-  "exempt": { "total": 7, "marker": [], "allowlist": ["bin/guardian.js", "..."] }
+  "exempt": { "total": 7, "marker": [], "allowlist": ["bin/guardian.js", "..."], "rules": [] }
 }</code></pre>
 <div class="tbl"><table><thead><tr><th>Field</th><th>Meaning</th></tr></thead><tbody>
 <tr><td><code>findings[].file</code></td><td>Absolute path for file findings. For a project finding: the project root (absolute) when the rule has <code>evidence: "project"</code>, otherwise the target exactly as typed (for example <code>"."</code>).</td></tr>
@@ -195,7 +195,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <tr><td><code>findings[].content</code></td><td>Snippet, max 120 characters, or <code>null</code> for a project finding. AUTHZ-003 snippets start with <code>[destructive] </code> when the handler is DELETE, PATCH or PUT.</td></tr>
 <tr><td><code>findings[].rule</code></td><td>The whole rule object as <code>JSON.stringify</code> sees it. Regular expressions serialize as <code>{}</code> (so <code>pattern</code>, <code>excludePatterns</code> and <code>excludeLinePatterns</code> carry no information) and functions (<code>checkFn</code>, <code>fileCheckFn</code>) are dropped. Use <code>id</code>, <code>severity</code>, <code>category</code> and <code>description</code>.</td></tr>
 <tr><td><code>total</code></td><td><code>findings.length</code>.</td></tr>
-<tr><td><code>exempt</code></td><td><code>total</code> count, and the <code>marker</code> and <code>allowlist</code> path lists relative to the scan root.</td></tr>
+<tr><td><code>exempt</code></td><td><code>total</code> count of whole-file exemptions, the <code>marker</code> and <code>allowlist</code> path lists relative to the scan root, and <code>rules</code>: one <code>{ file, rules }</code> per file with per-rule allowlist entries (still scanned by every other rule; see <a href="ch-suppression.html#ch-suppression">chapter 06</a>).</td></tr>
 </tbody></table></div>
 <p>The JSON has no per-severity counts, no scan root, project root or rule count: a consumer computes severity totals from <code>findings[].rule.severity</code>. Findings appear in pass order (pattern, analyzer, project), not grouped.</p>
 

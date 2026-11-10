@@ -73,16 +73,17 @@ Short answer: **no, but it's a controlled trust mechanism worth being explicit a
 Two ways to exempt a file from `guardian audit` scanning:
 
 1. **Per-file marker** (`otlc-guardian:audit-exempt`) - a comment line that starts with the marker, in the file's first 4 KB. A mention elsewhere (a string, prose) does not exempt the file.
-2. **Central allowlist** (`security/.audit-allowlist`) - one file, one line per exemption, **required reason field**.
+2. **Central allowlist** (`security/.audit-allowlist`) - one file, one line per exemption, **required reason field**. A line can name the rules it suppresses: `src/components/ui/chart.jsx  [INJ-003]  # reason: ...` switches off only INJ-003 in that file, and every other rule still runs there. A line with no rule list exempts the whole file. Prefer the per-rule form.
 
 For an attacker to abuse either mechanism, they need write access to your repository. If they have that, they can already do strictly worse things - modify the audit script itself, modify the patterns, add backdoors, change the CI workflow.
 
 Defenses we ship to make abuse visible:
 
 - **Allowlist takes precedence.** A file in both ends up reported as `[allowlist]`, which is the more reviewable mechanism.
-- **Required reason field.** Allowlist entries without `# reason: ...` are loudly rejected at scan time.
+- **Required reason field.** Allowlist entries without `# reason: ...`, or with an empty reason, are loudly rejected at scan time.
+- **Rule ids are checked.** A per-rule entry naming an unknown rule id, an empty list or a project check is rejected loudly and suppresses nothing.
 - **Exemption summary printed every run.** `guardian audit` prints the count and full list of exempted files before any findings, so unexpected growth is impossible to miss.
-- **CI step summary.** GitHub Actions writes the exemption count to the workflow summary so reviewers see it from the Actions tab.
+- **CI step summary.** GitHub Actions writes the whole-file and per-rule exemption counts to the workflow summary so reviewers see them from the Actions tab.
 - **CODEOWNERS suggested.** Repos that need stronger guarantees can require security-team review of any change to `security/.audit-allowlist` and `.claude/hooks/`.
 
 If you find a way to add an exemption that does **not** show up in the summary or the allowlist - that **is** a Guardian security issue. Please report it.

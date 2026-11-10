@@ -150,6 +150,16 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Added
 
+- **Per-rule allowlist entries.** `<path>  [RULE-ID, ...]  # reason: ...`
+  in `security/.audit-allowlist` suppresses only the named audit rules in
+  that file; every other rule still runs on it, as with
+  `eslint-disable <rule>` or `nosemgrep: <rule-id>`. A path-only line
+  keeps its meaning (the whole file). The reason is required and must not
+  be empty; an unknown rule id, an empty list or a project check
+  (DEP-001, WEB-002) rejects the line with a warning. The audit prints
+  `[allowlist rule] <path> [IDS]`, `--json` carries `exempt.rules`, and
+  the CI step summary counts them.
+
 - **`AUTHZ-011`, `AUTHZ-013`: authorization rules for Python.** `AUTHZ-001`
   and `AUTHZ-003` only read JS/TS, so FastAPI and Flask backends had no
   authorization coverage. A new indentation-aware analyzer finds route

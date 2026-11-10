@@ -76,7 +76,7 @@ A finding is suppressed only when it is genuinely wrong, and only in a way a
 reviewer can see:
 
 - per-file: a comment line starting with `otlc-guardian:audit-exempt` in the first 4 KB
-- central: a line in `security/.audit-allowlist` with a mandatory `# reason:` field
+- central: a line in `security/.audit-allowlist` with a mandatory `# reason:` field; name the rule when the finding concerns one sink (`src/x.jsx  [INJ-003]  # reason: ...`) so every other rule still runs on the file
 
 Both are reported in every audit run. If the exempt count grows, that is visible
 immediately. Never suppress a finding because the fix is inconvenient.

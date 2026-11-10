@@ -24,6 +24,11 @@
 #
 # Format:
 #   <relative-path>  # reason: <one-line justification>
+#       exempts the whole file from every audit rule.
+#   <relative-path>  [RULE-ID, RULE-ID]  # reason: <one-line justification>
+#       exempts the file from the named rules only; every other rule
+#       still runs on it. Prefer this form. An unknown rule id, an empty
+#       list or a project check (DEP-001, WEB-002) rejects the line.
 #
 # ============================================================
 

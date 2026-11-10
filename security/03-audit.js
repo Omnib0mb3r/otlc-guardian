@@ -1902,9 +1902,42 @@ const MARKER_LINE = new RegExp(
   "m"
 );
 
+// A per-rule entry names the rules it suppresses in brackets between the
+// path and the reason:
+//
+//     src/components/ui/chart.jsx  [INJ-003]  # reason: ...
+//
+// Like `eslint-disable <rule>` or `nosemgrep: <rule-id>`, it switches off
+// only those rules in that file; every other rule still runs there. The
+// list must be the last thing before the `#`, after whitespace, so a path
+// that holds brackets (`app/docs/[id]/page.jsx`) still reads as a path.
+const ALLOWLIST_RULE_LIST = /^(.*?)\s+\[([^\[\]]*)\]$/;
+
+/**
+ * Resolve the ids of a per-rule entry against AUDIT_RULES (any case).
+ * Returns { ids } or { problem } describing why the line is rejected.
+ */
+function parseAllowlistRules(listText) {
+  const parts = listText.split(",").map((p) => p.trim());
+  if (parts.length === 1 && parts[0] === "") return { problem: "empty rule list" };
+  const byLower = new Map(AUDIT_RULES.map((r) => [r.id.toLowerCase(), r]));
+  const ids = [];
+  for (const part of parts) {
+    const rule = byLower.get(part.toLowerCase());
+    if (!rule) return { problem: `unknown rule id "${part}"` };
+    // Absence checks judge the whole project, and an exemption never
+    // hides a file as evidence (BUG-059), so naming one would do nothing.
+    if (rule.evidence === "project") return { problem: `${rule.id} is a project check and cannot be suppressed per file` };
+    if (!ids.includes(rule.id)) ids.push(rule.id);
+  }
+  return { ids };
+}
+
 /**
  * Load the central allowlist from security/.audit-allowlist if present.
- * Returns a Map of normalized-path -> reason. Lines without a reason are
+ * Returns a Map of normalized-path -> { reason, rules }, where `rules` is
+ * null for a whole-file entry and a Set of rule ids for a per-rule entry.
+ * Lines without a reason, or with a rule list that does not resolve, are
  * rejected loudly so silent additions cannot slip past CI.
  */
 function loadAllowlist(rootDir) {
@@ -1922,7 +1955,7 @@ function loadAllowlist(rootDir) {
     const line = raw.trim();
     if (!line || line.startsWith("#")) return;
 
-    // Format:  <path>  # reason: <text>
+    // Format:  <path>  [RULE-ID, ...]  # reason: <text>   (rule list optional)
     const hashIdx = line.indexOf("#");
     if (hashIdx === -1) {
       console.warn(`⚠️  [OTLC GUARDIAN] .audit-allowlist:${idx + 1} - missing reason, line ignored`);
@@ -1946,9 +1979,31 @@ function loadAllowlist(rootDir) {
       return;
     }
 
+    let pathPart = filePart;
+    let rules = null;
+    const list = ALLOWLIST_RULE_LIST.exec(filePart);
+    if (list) {
+      const parsed = parseAllowlistRules(list[2]);
+      if (parsed.problem) {
+        console.warn(`⚠️  [OTLC GUARDIAN] .audit-allowlist:${idx + 1} - ${parsed.problem}, line ignored`);
+        return;
+      }
+      pathPart = list[1].trim();
+      rules = new Set(parsed.ids);
+    }
+
     // Normalize path separators so Windows backslashes match Unix forward slashes
-    const normalized = filePart.replace(/\\/g, "/");
-    allowlist.set(normalized, reason);
+    const normalized = pathPart.replace(/\\/g, "/");
+    // Several lines for one path merge: a whole-file entry wins, rule
+    // lists add up.
+    const previous = allowlist.get(normalized);
+    if (previous && (previous.rules === null || rules === null)) {
+      allowlist.set(normalized, { reason: rules === null ? reason : previous.reason, rules: null });
+    } else if (previous) {
+      for (const id of rules) previous.rules.add(id);
+    } else {
+      allowlist.set(normalized, { reason, rules });
+    }
   });
 
   return allowlist;
@@ -1967,7 +2022,7 @@ function loadAllowlist(rootDir) {
 function exemptionMechanism(filePath, content, allowlist, rootDir) {
   // Allowlist check first - more reviewable, takes precedence
   const rel = path.relative(rootDir, filePath).replace(/\\/g, "/");
-  if (allowlist.has(rel)) return "allowlist";
+  if (allowlist.get(rel)?.rules === null) return "allowlist";
 
   // Marker fallback - for end-user projects that prefer per-file headers
   if (MARKER_LINE.test(content.slice(0, MARKER_WINDOW))) return "marker";
@@ -1999,6 +2054,7 @@ function scanFile(filePath, rule, scanContext) {
   // Whole-file exemption - handled outside per-rule logic so the same
   // file isn't checked once per rule. State is precomputed in runAudit.
   if (scanContext.exemptPaths.has(filePath)) return [];
+  if (scanContext.ruleExemptions.get(filePath)?.has(rule.id)) return [];
 
   // Per-rule exclude patterns (e.g. ERR-003 already excludes *.test.*)
   if (excludedByRule(rule, filePath, scanContext.projectRoot)) return [];
@@ -2182,6 +2238,8 @@ function runAudit(targetDir, options = {}) {
   const exemptPaths     = new Set();
   const exemptByMarker  = [];
   const exemptByList    = [];
+  const ruleExemptions  = new Map(); // file -> Set of rule ids (per-rule entries)
+  const exemptByRule    = [];
 
   for (const file of files) {
     let head;
@@ -2194,13 +2252,21 @@ function runAudit(targetDir, options = {}) {
     } else if (mech === "allowlist") {
       exemptPaths.add(file);
       exemptByList.push(path.relative(scanRoot, file).replace(/\\/g, "/"));
+    } else {
+      // A per-rule entry: only the named rules skip this file.
+      const entry = allowlist.get(path.relative(projectRoot, file).replace(/\\/g, "/"));
+      if (entry?.rules) {
+        ruleExemptions.set(file, entry.rules);
+        exemptByRule.push({ file: path.relative(scanRoot, file).replace(/\\/g, "/"), rules: [...entry.rules] });
+      }
     }
   }
 
-  const scanContext = { exemptPaths, projectRoot };
+  const scanContext = { exemptPaths, ruleExemptions, projectRoot };
 
   status(`    Files   : ${files.length} scanned`);
-  status(`    Exempt  : ${exemptPaths.size} (${exemptByMarker.length} marker, ${exemptByList.length} allowlist)`);
+  status(`    Exempt  : ${exemptPaths.size} (${exemptByMarker.length} marker, ${exemptByList.length} allowlist)` +
+         (exemptByRule.length > 0 ? `, ${exemptByRule.length} with per-rule exemptions` : ""));
 
   // Visibility: print the exempt list every run, not just on issues.
   // If this list grows unexpectedly, you see it immediately.
@@ -2211,6 +2277,9 @@ function runAudit(targetDir, options = {}) {
     if (exemptByList.length > 0) {
       status(`    [allowlist] ${exemptByList.join(", ")}`);
     }
+  }
+  for (const { file, rules } of exemptByRule) {
+    status(`    [allowlist rule] ${file} [${rules.join(", ")}]`);
   }
   status("");
 
@@ -2254,6 +2323,7 @@ function runAudit(targetDir, options = {}) {
 
     for (const file of relevantFiles) {
       if (exemptPaths.has(file)) continue;
+      if (ruleExemptions.get(file)?.has(rule.id)) continue;
       if (excludedByRule(rule, file, projectRoot)) continue;
 
       let content;
@@ -2308,7 +2378,7 @@ function runAudit(targetDir, options = {}) {
     if (!rule.checkFn) continue;
     const wholeProject = rule.evidence === "project";
     const evidence = !wholeProject
-      ? files.filter((f) => !exemptPaths.has(f))
+      ? files.filter((f) => !exemptPaths.has(f) && !ruleExemptions.get(f)?.has(rule.id))
       : projectRoot !== scanRoot
         ? (projectFiles ??= collectFiles(projectRoot, allExtensions))
         : files;
@@ -2329,6 +2399,8 @@ function runAudit(targetDir, options = {}) {
         total:     exemptPaths.size,
         marker:    exemptByMarker,
         allowlist: exemptByList,
+        // Per-rule entries: these files are still scanned by every other rule.
+        rules:     exemptByRule,
       },
     }, null, 2));
   } else {

@@ -2976,6 +2976,89 @@ describe("BUG-070: AUTHZ-001 honors auth middleware", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Per-rule allowlist entries (1.5.0)
+// ---------------------------------------------------------------------------
+//
+// `<path>  [RULE-ID, ...]  # reason: <text>` suppresses only the named
+// rules in that file. A path-only entry still exempts the whole file.
+
+describe("Per-rule allowlist entries", () => {
+  // One file that trips INJ-003, SEC-002 and ERR-003.
+  const source = [
+    `export function Box({ html }) {`,
+    `  console.log("render");`,
+    `  return <div dangerouslySetInnerHTML={{ __html: html }} />;`,
+    `}`,
+    `const k = "${"AKIA" + "ABCDEFGHIJKLMNOP"}";`,
+    ``,
+  ].join("\n");
+  const run = (allowlist) => withTempProject({ "src/Box.jsx": source, "security/.audit-allowlist": allowlist + "\n" }, (dir) => {
+    const r = runAuditArgs(dir, "--json");
+    return { report: JSON.parse(r.stdout), stderr: r.stderr };
+  });
+  const ids = (report) => report.findings.map((f) => f.rule.id).sort();
+
+  test("baseline: the file trips INJ-003, SEC-002 and ERR-003", () => {
+    const { report } = run("# nothing");
+    for (const id of ["INJ-003", "SEC-002", "ERR-003"]) assert.ok(ids(report).includes(id), ids(report).join(", "));
+  });
+
+  test("the named rule is suppressed and every other rule still fires", () => {
+    const { report, stderr } = run("src/Box.jsx  [INJ-003]  # reason: sanitized upstream");
+    assert.ok(!ids(report).includes("INJ-003"), ids(report).join(", "));
+    assert.ok(ids(report).includes("SEC-002") && ids(report).includes("ERR-003"), ids(report).join(", "));
+    assert.deepEqual(report.exempt.rules, [{ file: "src/Box.jsx", rules: ["INJ-003"] }]);
+    assert.equal(report.exempt.total, 0, "a per-rule entry must not exempt the whole file");
+    assert.ok(!/line ignored/.test(stderr), stderr.slice(0, 300));
+  });
+
+  test("several rule ids, any case and spacing", () => {
+    const { report } = run("src/Box.jsx  [ inj-003 ,ERR-003 ]  # reason: fixture");
+    assert.deepEqual(ids(report).filter((id) => ["INJ-003", "ERR-003", "SEC-002"].includes(id)), ["SEC-002"]);
+  });
+
+  test("an analyzer rule can be named", () => {
+    const handler = `router.post("/x", async (req, res) => {\n  await db.items.create({ data: {} });\n  res.end();\n});\n`;
+    const r = withTempProject({ "src/r.js": handler, "security/.audit-allowlist": "src/r.js  [AUTHZ-001]  # reason: internal network only\n" },
+      (dir) => JSON.parse(runAuditArgs(dir, "--json").stdout));
+    assert.ok(!ids(r).includes("AUTHZ-001"), ids(r).join(", "));
+  });
+
+  test("a path-only entry still exempts the whole file", () => {
+    const { report } = run("src/Box.jsx  # reason: generated");
+    assert.deepEqual(ids(report).filter((id) => ["INJ-003", "ERR-003", "SEC-002"].includes(id)), []);
+    assert.equal(report.exempt.total, 1);
+  });
+
+  for (const [label, line, message] of [
+    ["an unknown rule id", "src/Box.jsx  [INJ-999]  # reason: typo", /\.audit-allowlist:1 - unknown rule id "INJ-999", line ignored/],
+    ["a runtime GUARD- id", "src/Box.jsx  [GUARD-INJ-001]  # reason: wrong engine", /unknown rule id "GUARD-INJ-001", line ignored/],
+    ["an empty rule list", "src/Box.jsx  []  # reason: x", /empty rule list, line ignored/],
+    ["a project check, which an entry cannot suppress", "src/Box.jsx  [DEP-001]  # reason: x", /DEP-001 is a project check and cannot be suppressed per file, line ignored/],
+    ["an empty reason", "src/Box.jsx  [INJ-003]  # reason:", /reason is empty, line ignored/],
+    ["no reason at all", "src/Box.jsx  [INJ-003]", /missing reason, line ignored/],
+  ]) {
+    test(`${label} is rejected loudly and suppresses nothing`, () => {
+      const { report, stderr } = run(line);
+      assert.ok(message.test(stderr), stderr.slice(0, 400));
+      assert.ok(ids(report).includes("INJ-003"), ids(report).join(", "));
+    });
+  }
+
+  test("the human report lists per-rule exemptions", () => {
+    const r = withTempProject({ "src/Box.jsx": source, "security/.audit-allowlist": "src/Box.jsx  [INJ-003]  # reason: x\n" },
+      (dir) => runAuditArgs(dir));
+    assert.ok(/\[allowlist rule\] src\/Box\.jsx \[INJ-003\]/.test(r.stdout + r.stderr), (r.stdout + r.stderr).slice(0, 600));
+  });
+
+  test("a Next.js path with brackets still parses as a path-only entry", () => {
+    const r = withTempProject({ "app/docs/[id]/page.jsx": source, "security/.audit-allowlist": "app/docs/[id]/page.jsx  # reason: x\n" },
+      (dir) => JSON.parse(runAuditArgs(dir, "--json").stdout));
+    assert.equal(r.exempt.total, 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

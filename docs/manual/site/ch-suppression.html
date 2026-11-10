@@ -26,7 +26,8 @@
 <div class="tbl dense"><table>
 <thead><tr><th>Mechanism</th><th>Applies to</th><th>Syntax</th><th>Visible where</th><th>Guarded how</th></tr></thead>
 <tbody>
-<tr><td>Central allowlist</td><td>Audit: every pattern and analyzer rule, whole file, and the presence check DEP-002. Never hides a file as evidence for an absence check (DEP-001, WEB-002).</td><td><code>&lt;path&gt;  # reason: &lt;text&gt;</code> in <code>security/.audit-allowlist</code>, path relative to the project root</td><td><code>Exempt :</code> line and <code>[allowlist]</code> list on every run; <code>exempt.allowlist</code> in <code>--json</code>; count in the CI step summary</td><td>A line without <code>reason:</code> is ignored with a warning. CODEOWNERS in the Guardian repo. <code>update</code> never overwrites it. The hook does not watch or protect it.</td></tr>
+<tr><td>Central allowlist, per-rule entry</td><td>Audit: only the named pattern or analyzer rules, or DEP-002, in that file. Every other rule still runs on it.</td><td><code>&lt;path&gt;  [RULE-ID, ...]  # reason: &lt;text&gt;</code> in <code>security/.audit-allowlist</code></td><td><code>[allowlist rule] &lt;path&gt; [IDS]</code> on every run; <code>exempt.rules</code> in <code>--json</code>; count in the CI step summary</td><td>Same as a whole-file entry, plus: an unknown rule id, an empty list or a project check rejects the line with a warning.</td></tr>
+<tr><td>Central allowlist, whole-file entry</td><td>Audit: every pattern and analyzer rule, whole file, and the presence check DEP-002. Never hides a file as evidence for an absence check (DEP-001, WEB-002).</td><td><code>&lt;path&gt;  # reason: &lt;text&gt;</code> in <code>security/.audit-allowlist</code>, path relative to the project root</td><td><code>Exempt :</code> line and <code>[allowlist]</code> list on every run; <code>exempt.allowlist</code> in <code>--json</code>; count in the CI step summary</td><td>A line without <code>reason:</code> is ignored with a warning. CODEOWNERS in the Guardian repo. <code>update</code> never overwrites it. The hook does not watch or protect it.</td></tr>
 <tr><td>Per-file marker</td><td>Same as the allowlist</td><td>A comment line that starts with <code>otlc-guardian:audit-exempt</code>, within the file's first 4096 characters</td><td><code>[marker]</code> list on every run; <code>exempt.marker</code> in <code>--json</code>; CI count</td><td>Visibility only</td></tr>
 <tr><td>Built-in rule scope</td><td>The rules that declare it; the file walker</td><td>Code in <code>03-audit.js</code>: <code>excludePatterns</code>, <code>excludeLinePatterns</code>, <code>SKIP_DIRS</code></td><td>Not reported</td><td>Only by editing the audit; CODEOWNERS in the Guardian repo</td></tr>
 <tr><td>CSP text anywhere (a defect)</td><td><code>WEB-002</code> only</td><td>Any text matching <code>CSP_ANYWHERE</code>, comments included</td><td>Not reported</td><td>None. BUG-038, open.</td></tr>
@@ -47,6 +48,20 @@
 <li>Text after the <code>#</code> does not start with <code>reason:</code> (case-insensitive): <code>reason must start with "reason:", line ignored</code>.</li>
 <li><code># reason:</code> with nothing (or only spaces) after it: <code>reason is empty, line ignored</code> (BUG-056, fixed 2026-11-10; before the fix the prefix alone was accepted).</li>
 <li>A path that itself contains <code>#</code> cannot be listed, because the split happens at the first <code>#</code>.</li>
+</ul>
+
+<h4 id="sp-perrule">Per-rule entries</h4>
+
+<p>A rule list in brackets between the path and the <code>#</code> limits the entry to those rules, the way <code>eslint-disable &lt;rule&gt;</code> or <code>nosemgrep: &lt;rule-id&gt;</code> does. Prefer it to a whole-file entry: a file exempted for one sink should not lose every other check.</p>
+
+<pre><code>src/components/ui/chart.jsx  [INJ-003]           # reason: stock shadcn ChartStyle; ChartConfig and id are developer constants
+src/legacy/report.js         [ERR-003, CFG-001]   # reason: CLI report script, output is its purpose</code></pre>
+
+<ul>
+<li><code>ALLOWLIST_RULE_LIST</code> takes the list only when it is the last thing before the <code>#</code> and follows whitespace, so a path with brackets (<code>app/docs/[id]/page.jsx</code>) stays a path.</li>
+<li><code>parseAllowlistRules()</code> resolves each id against <code>AUDIT_RULES</code>, in any case. An unknown id (a typo, or a runtime <code>GUARD-</code> id): <code>unknown rule id "X", line ignored</code>. An empty list: <code>empty rule list, line ignored</code>. An absence check (DEP-001, WEB-002): <code>... is a project check and cannot be suppressed per file, line ignored</code>, because an exemption never hides a file as evidence (BUG-059). A rejected line suppresses nothing.</li>
+<li>The reason rules above apply unchanged, the BUG-056 empty-reason check included.</li>
+<li>Several lines for one path merge: rule lists add up, and a whole-file entry wins over a per-rule one.</li>
 </ul>
 
 <p>Both warnings go to stderr through <code>console.warn</code>. The path is stored with backslashes turned into forward slashes. Nothing else is normalized.</p>
@@ -78,9 +93,11 @@
     Exempt  : 3 (0 marker, 3 allowlist)
     [allowlist] security/02-code-security.js, security/03-audit.js, security/04-sql-guard.js</code></pre>
 
-<p>That is the output of a fresh <code>guardian init</code> project on 2026-11-10. The listed paths are relative to the scan target. In human mode these lines go to stdout. With <code>--json</code> they go to stderr, and the JSON on stdout carries <code>exempt: { total, marker: [...], allowlist: [...] }</code>.</p>
+<p>Per-rule entries are counted after the whole-file ones (<code>Exempt : 3 (0 marker, 3 allowlist), 1 with per-rule exemptions</code>) and listed one per line as <code>[allowlist rule] src/components/ui/chart.jsx [INJ-003]</code>. Those files are not in the exempt total: they are still scanned.</p>
 
-<p>The copied CI workflow (<code>.github/workflows/security-audit.yml</code>, step "Audit exemption visibility") runs the audit with <code>--json</code> and writes <code>Files exempted from scanning: N</code> to the GitHub step summary. It reports the count and does not fail the build when the count grows. The allowlist header says the same since the 1.5.0 fix; it used to claim CI failed.</p>
+<p>That is the output of a fresh <code>guardian init</code> project on 2026-11-10. The listed paths are relative to the scan target. In human mode these lines go to stdout. With <code>--json</code> they go to stderr, and the JSON on stdout carries <code>exempt: { total, marker: [...], allowlist: [...], rules: [{ file, rules: [...] }] }</code>.</p>
+
+<p>The copied CI workflow (<code>.github/workflows/security-audit.yml</code>, step "Audit exemption visibility") runs the audit with <code>--json</code> and writes <code>Files exempted from scanning: N</code> and <code>Files with per-rule exemptions: N</code> to the GitHub step summary. It reports the count and does not fail the build when the count grows. The allowlist header says the same since the 1.5.0 fix; it used to claim CI failed.</p>
 
 <h3 id="sp-notcovered">What an audit exemption does not cover</h3>
 
@@ -187,7 +204,7 @@
 
 <h3 id="sp-policy">When to use one</h3>
 
-<p>Use an exemption only when the finding is wrong, and only in a way a reviewer can see. That is Step 3 of the OTLC-Guardian skill: "Never suppress a finding because the fix is inconvenient." For the audit that means an allowlist line with a real reason; it is preferred over the marker because it is one reviewable line in one file, takes precedence, and carries a written justification. Anyone with write access can add either, an agent included, because the hook does not watch <code>security/.audit-allowlist</code> or source files. The safeguards are the reason field, the exempt summary on every run, and CODEOWNERS review where it is set up. For the hook, the person approving the prompt decides.</p>
+<p>Use an exemption only when the finding is wrong, and only in a way a reviewer can see. That is Step 3 of the OTLC-Guardian skill: "Never suppress a finding because the fix is inconvenient." For the audit that means an allowlist line with a real reason, per rule wherever the finding concerns one sink; it is preferred over the marker because it is one reviewable line in one file, takes precedence, and carries a written justification. Anyone with write access can add either, an agent included, because the hook does not watch <code>security/.audit-allowlist</code> or source files. The safeguards are the reason field, the exempt summary on every run, and CODEOWNERS review where it is set up. For the hook, the person approving the prompt decides.</p>
 
 <p>Known-bug tests are not suppression. When a rule gets a case wrong, the case is logged in <code>BUGS.md</code> and kept as a <code>knownBug()</code> test in <code>tests/audit.test.js</code>, which fails the suite once the bug stops reproducing. The rule is never loosened to make the case pass.</p>
 
