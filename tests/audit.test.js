@@ -2127,9 +2127,30 @@ describe("Rules with no prior test: bad sample fires, good sample is silent", ()
     test(`${id} is silent on its good sample`, () => assert.ok(!auditFires(good, id), `${id} fired on its good sample`));
   }
 
-  knownBug("BUG-040", "INJ-001 (eval) is silent on a function whose name ends in 'eval'", () => {
+  // BUG-040: the pattern had no word boundary, so `retrieval(` fired.
+  test("INJ-001 (eval) is silent on a function whose name ends in 'eval'", () => {
     assert.ok(!auditFires({ "src/search.js": `const docs = retrieval(query);\n` }, "INJ-001"));
   });
+
+  for (const [label, line] of [
+    ["window.eval(", "window.eval(code);"],
+    ["eval with a space before the parenthesis", "eval (code);"],
+    ["new Function(", `const fn = new Function("a", body);`],
+  ]) {
+    test(`INJ-001 fires on ${label}`, () => {
+      assert.ok(auditFires({ "src/run.js": line + "\n" }, "INJ-001"));
+    });
+  }
+
+  for (const [label, line] of [
+    ["Puppeteer's page.$eval(", "const t = await page.$eval('h1', (el) => el.textContent);"],
+    ["evaluate(", "const v = evaluate(expr);"],
+    ["a Function type reference", "const handlers: Function[] = [];"],
+  ]) {
+    test(`INJ-001 is silent on ${label}`, () => {
+      assert.ok(!auditFires({ "src/run.ts": line + "\n" }, "INJ-001"));
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------

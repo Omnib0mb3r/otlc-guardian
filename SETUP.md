@@ -408,7 +408,7 @@ node security/03-audit.js . --json           # machine-readable output
 - Hardcoded `localhost` URLs and IP addresses
 - Silent `catch {}` blocks
 - `console.log()` in non-test code
-- `eval()` usage
+- `eval()` and `new Function()` usage
 - `innerHTML` and `dangerouslySetInnerHTML` (XSS risk)
 - Committed `.env` files
 - Missing health check endpoints

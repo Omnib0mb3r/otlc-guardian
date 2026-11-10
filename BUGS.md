@@ -51,7 +51,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-037 | OPEN | `guardian update` hook migration overrides a custom wider matcher and duplicates the `$CLAUDE_PROJECT_DIR` form |
 | BUG-038 | OPEN | Small hook and audit defects: deny message loses the file name, NGINX check cost, CSP comment suppresses WEB-002 |
 | BUG-039 | SMOKE-TESTING | `DEP-002` can never fire: the walker never collects a bare `.env` file |
-| BUG-040 | OPEN | Audit `INJ-001` (eval) fires on any call whose name ends in `eval`, e.g. `retrieval(` |
+| BUG-040 | SMOKE-TESTING | Audit `INJ-001` (eval) fires on any call whose name ends in `eval`, e.g. `retrieval(` |
 | BUG-041 | RESOLVED | Partial scans: project checks judge the scanned subtree as the whole project (false `DEP-001`), and a single-file target scans nothing |
 | BUG-042 | OPEN | Hook: count-based judgement lets an existing quoted pattern be moved into a live directive |
 | BUG-043 | OPEN | Hook false denies: `### System: Billing`, `### Prompt:`, a `--- System ---` line, "wrap in <user> tags", a CLAUDE.md line that quotes a pattern as data |
@@ -595,13 +595,15 @@ Found by the first fixture for DEP-002 (gate plan step 0, `tests/audit.test.js`,
 
 ### BUG-040: Audit `INJ-001` (eval) fires on any call whose name ends in `eval`, e.g. `retrieval(`
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 Found by the fixtures for the audit's INJ-001 (gate plan step 0).
 
 - The pattern is `/eval\s*\(/` with no word boundary, so `retrieval(query)` is reported CRITICAL as "Direct user input passed to eval()".
 - The description also overstates what is checked: any `eval(` fires, with or without user input. The likely fix is `\beval\s*\(` (and `new Function(`, which the rule does not cover), with the description matched to what it detects.
 - The fixture is kept as a known-bug test (`knownBug("BUG-040", ...)`).
+
+**Fix (2026-11-10).** INJ-001 in `security/03-audit.js` is `(?<![\w$])eval\s*\(|\bnew\s+Function\s*\(` with the description "eval() or new Function() runs a string as code - injection risk"; the id and severity are unchanged. Tests: the `retrieval(` fixture moved from `knownBug()` to `test()`; new cases in the same block for `window.eval(`, `eval (`, `new Function(` (fires) and `page.$eval(`, `evaluate(`, a `Function[]` type (silent); `retrieval(`, `new Function(` and `page.$eval(` failed before the fix. No known-bug tests remain in `tests/audit.test.js`. Docs: manual chapters 01 and 02, SETUP.md. Smoke test: `guardian audit` on a project calling `retrieval(` gives no INJ-001, and `new Function(body)` gives one.
 
 ### BUG-041: Partial scans: project checks judge the scanned subtree as the whole project (false `DEP-001`), and a single-file target scans nothing
 

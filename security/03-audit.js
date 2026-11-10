@@ -1032,9 +1032,13 @@ const AUDIT_RULES = [
 
   // --- SECURITY PATTERNS ---
   {
+    // Any string-to-code call, whatever its argument: the audit cannot
+    // tell user input from a constant, so the description says what is
+    // matched. The lookbehind keeps `retrieval(` and Puppeteer's
+    // `page.$eval(` out (BUG-040); `window.eval(` still matches.
     id: "INJ-001", category: "Injection Risk", severity: "CRITICAL",
-    description: "Direct user input passed to eval()",
-    pattern: /eval\s*\(/,
+    description: "eval() or new Function() runs a string as code - injection risk",
+    pattern: /(?<![\w$])eval\s*\(|\bnew\s+Function\s*\(/,
     fileTypes: JS_TS_EXTS,
   },
   {

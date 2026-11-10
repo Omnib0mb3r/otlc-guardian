@@ -319,7 +319,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 
 <h4>INJ: injection (7)</h4>
 <div class="tbl dense"><table><thead><tr><th>Id</th><th>Kind</th><th>Severity</th><th>Files</th><th>Detects</th></tr></thead><tbody>
-<tr><td>INJ-001</td><td>pattern</td><td>CRITICAL</td><td>JS</td><td><code>eval(</code> anywhere, with no word boundary (BUG-040). The description says "Direct user input passed to eval()", but no input is checked.</td></tr>
+<tr><td>INJ-001</td><td>pattern</td><td>CRITICAL</td><td>JS</td><td><code>eval(</code> not preceded by a word character or <code>$</code> (so <code>window.eval(</code> matches and <code>retrieval(</code> and Puppeteer's <code>page.$eval(</code> do not), or <code>new Function(</code>. Any argument: the audit cannot tell user input from a constant, and the description, "eval() or new Function() runs a string as code", says so. Before BUG-040 (fixed 2026-11-10) the pattern had no boundary and the description claimed a user-input check.</td></tr>
 <tr><td>INJ-002</td><td>pattern</td><td>HIGH</td><td>JS, tests out</td><td><code>.innerHTML =</code>.</td></tr>
 <tr><td>INJ-003</td><td>pattern</td><td>HIGH</td><td>JS</td><td>Any <code>dangerouslySetInnerHTML</code> (BUG-003).</td></tr>
 <tr><td>INJ-004</td><td>pattern, whole</td><td>CRITICAL</td><td>JS+PY</td><td><code>query|execute|exec|raw|prepare(</code> with a string holding a SQL verb, then <code>+</code> concatenation, within 300-character bounded spans.</td></tr>
@@ -398,7 +398,6 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <li><b>BUG-032</b>: <code>AUTHZ-011</code> flags reads: a <code>GET</code> running <code>db.execute(select(...))</code> is reported HIGH.</li>
 <li><b>BUG-033</b>: <code>WEB-001</code> misses <code>setItem(TOKEN_KEY, ...)</code> and JSON-wrapped tokens, and flags <code>setItem("refreshCount", ...)</code>.</li>
 <li><b>BUG-038</b> (audit part): the <code>NGINX_SERVER_BLOCK</code> check's cost grows with file size, and a comment that mentions ContentSecurityPolicy suppresses <code>WEB-002</code>.</li>
-<li><b>BUG-040</b>: <code>INJ-001</code> fires on any call ending in <code>eval</code> (<code>retrieval(</code>), and its description claims a user-input check it does not make.</li>
 </ul>
 <p>Deferred, not open: BUG-005 (race-condition rule, planned <code>RACE-001</code>), BUG-006 (inconsistent <code>npm:</code> import versions, planned <code>DEP-003</code>), BUG-007 (file-size rule, planned <code>QUAL-001</code>).</p></div>
 

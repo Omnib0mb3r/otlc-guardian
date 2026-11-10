@@ -172,6 +172,13 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **INJ-001 matches `eval(` as a word, and `new Function(` (BUG-040).**
+  The pattern had no boundary, so `retrieval(query)` was reported
+  CRITICAL, and the description claimed a user-input check the rule does
+  not make. It now skips names ending in `eval` and Puppeteer's
+  `page.$eval(`, also catches `new Function(`, and is described as
+  "eval() or new Function() runs a string as code".
+
 - **DEP-002 can fire (BUG-039).** A bare `.env` has no extension, so the
   walker never collected it and the committed-`.env` check never ran.
   `collectFiles()` now keeps a `.env` by name, for DEP-002 only (the
