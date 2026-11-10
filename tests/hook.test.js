@@ -681,7 +681,7 @@ describe("PreToolUse hook — self-protection of .claude/settings.json (1.5.0)",
   test("removing a Guardian hook asks for confirmation", () => {
     const out = runSettingsWrite((s) => { delete s.hooks.PostToolUse; });
     assert.equal(decisionOf(out), "ask");
-    expectWarning(out, "weakens Guardian", "hook registrations drop from 2 to 1");
+    expectWarning(out, "weakens Guardian", "no longer runs on PostToolUse WebFetch");
   });
 
   test("adding an ignorePaths entry asks for confirmation", () => {
@@ -733,6 +733,107 @@ describe("PreToolUse hook — self-protection of .claude/settings.json (1.5.0)",
   test("a change that leaves Guardian intact is silent", () => {
     const out = runSettingsWrite((s) => { s.otlcGuardian.watchPaths.push("docs/agents/"); s.permissions = { allow: [] }; });
     expectSilent(out);
+  });
+
+  // Review finding 4: each of these was allowed by the first 1.5.0 build.
+
+  function inProject(fn, local = null) {
+    return withTempProject((dir) => {
+      const claudeDir = path.join(dir, ".claude");
+      mkdirSync(claudeDir, { recursive: true });
+      writeFileSync(path.join(claudeDir, "settings.json"), JSON.stringify(baseSettings(), null, 2));
+      if (local !== null) writeFileSync(path.join(claudeDir, "settings.local.json"), JSON.stringify(local, null, 2));
+      return fn(dir, claudeDir);
+    });
+  }
+
+  test("disableAllHooks written to settings.local.json asks (reviewer's case)", () => {
+    const out = inProject((dir, claudeDir) => runHook(PRE_HOOK, {
+      tool_name: "Write",
+      cwd: dir,
+      tool_input: { file_path: path.join(claudeDir, "settings.local.json"), content: '{"disableAllHooks":true}' },
+    }));
+    assert.equal(decisionOf(out), "ask");
+    expectWarning(out, "disableAllHooks");
+  });
+
+  test("the PreToolUse matcher edited to 'Nothing' asks (reviewer's case)", () => {
+    const out = runSettingsWrite((s) => { s.hooks.PreToolUse[0].matcher = "Nothing"; });
+    assert.equal(decisionOf(out), "ask");
+    expectWarning(out, "no longer runs on PreToolUse Write");
+  });
+
+  test("'node' changed to 'echo' in the hook command asks (reviewer's case)", () => {
+    const out = inProject((dir, claudeDir) => runHook(PRE_HOOK, {
+      tool_name: "Edit",
+      cwd: dir,
+      tool_input: {
+        file_path: path.join(claudeDir, "settings.json"),
+        old_string: "node .claude/hooks/injection-guard-hook.mjs",
+        new_string: "echo .claude/hooks/injection-guard-hook.mjs",
+      },
+    }));
+    assert.equal(decisionOf(out), "ask");
+  });
+
+  for (const command of [
+    `echo '{}' > .claude/settings.json`,
+    `echo '{"disableAllHooks":true}' > .claude/settings.local.json`,
+    `cd .claude && sed -i 's/node/echo/' settings.json`,
+    `rm .claude/settings.json`,
+  ]) {
+    test(`Bash write to settings asks: ${command} (reviewer's case)`, () => {
+      const out = inProject((dir) => runHook(PRE_HOOK, { tool_name: "Bash", cwd: dir, tool_input: { command } }));
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+      expectWarning(out, "may weaken Guardian");
+    });
+  }
+
+  test("Bash write to settings in bypass mode is denied", () => {
+    const out = inProject((dir) => runHook(PRE_HOOK, {
+      tool_name: "Bash", cwd: dir, permission_mode: "bypassPermissions",
+      tool_input: { command: `echo '{}' > .claude/settings.json` },
+    }));
+    assert.equal(decisionOf(out), "deny");
+  });
+
+  test("Bash that only reads settings is silent", () => {
+    const out = inProject((dir) => runHook(PRE_HOOK, { tool_name: "Bash", cwd: dir, tool_input: { command: "cat .claude/settings.json | grep hooks" } }));
+    expectSilent(out);
+  });
+
+  test("lowering the hook timeout asks", () => {
+    const out = runSettingsWrite((s) => { s.hooks.PreToolUse[0].hooks[0].timeout = 0.01; });
+    assert.equal(decisionOf(out), "ask");
+    expectWarning(out, "timeout");
+  });
+
+  test("widening a matcher, or replacing it with '*', is silent", () => {
+    expectSilent(runSettingsWrite((s) => { s.hooks.PreToolUse[0].matcher = "Write|Edit|MultiEdit|Bash"; }));
+    expectSilent(runSettingsWrite((s) => { s.hooks.PreToolUse[0].matcher = "*"; }));
+  });
+
+  test("moving the hook from settings.json to settings.local.json is judged together and is silent", () => {
+    const base = baseSettings();
+    const out = inProject((dir, claudeDir) => {
+      const next = baseSettings();
+      delete next.hooks.PreToolUse;
+      return runHook(PRE_HOOK, {
+        tool_name: "Write", cwd: dir,
+        tool_input: { file_path: path.join(claudeDir, "settings.json"), content: JSON.stringify(next) },
+      });
+    }, { hooks: { PreToolUse: base.hooks.PreToolUse } });
+    expectSilent(out);
+  });
+
+  test("disableAllHooks in a settings file with no Guardian hooks still asks (user settings)", () => {
+    const out = withTempProject((dir) => {
+      const file = path.join(dir, ".claude", "settings.json");
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, JSON.stringify({ permissions: { allow: [] } }));
+      return runHook(PRE_HOOK, { tool_name: "Write", cwd: dir, tool_input: { file_path: file, content: '{"disableAllHooks":true}' } });
+    });
+    assert.equal(decisionOf(out), "ask");
   });
 });
 

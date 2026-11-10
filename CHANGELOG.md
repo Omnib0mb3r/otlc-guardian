@@ -67,6 +67,15 @@ project (each project picks it up when `guardian update` is run there).
 - **Self-protection for `.claude/settings.json`.** A change that removes a
   Guardian hook, sets `disableAllHooks`, turns `extendDefaults` off, adds
   to `ignorePaths`, or removes from `watchPaths` asks for confirmation.
+  After the review (finding 4) it judges `settings.json` and
+  `settings.local.json` together, as Claude Code merges them. Guardian's
+  coverage is each (event, matcher token, exact command) its hooks run
+  under, so narrowing a matcher (`Nothing`), altering the command (`node`
+  to `echo`), or lowering the timeout is caught; widening a matcher or
+  moving the hook between the two files is not a weakening. A Bash command
+  that writes or deletes any `.claude/settings*.json` asks, because the
+  hook cannot see the result. `disableAllHooks` asks in any settings file,
+  including the user-level one.
 - **Hook failures are loud.** A missing scanner, bad input or an internal
   error used to exit 0 with no output. The hooks still do not block on
   their own failure, but they say on stderr that the call was not scanned

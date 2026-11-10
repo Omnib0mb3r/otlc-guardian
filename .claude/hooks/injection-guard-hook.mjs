@@ -495,81 +495,149 @@ function extractWrite(toolName, toolInput) {
 // SELF-PROTECTION: changes to .claude/settings*.json
 // ---------------------------------------------------------------------------
 
-/** Summarize how strongly a settings document has Guardian wired in. */
-function guardianPosture(jsonText) {
-  let parsed;
+//
+// Claude Code merges .claude/settings.json and .claude/settings.local.json,
+// so a change to either is judged on the pair. Guardian's coverage is the
+// set of (event, matcher token, exact command) its hooks are registered
+// under. A change weakens Guardian when any of that coverage is lost: a
+// hook removed, a matcher token dropped, the command altered in any way,
+// or the timeout lowered. A "*" or empty matcher covers every token.
+
+const DEFAULT_HOOK_TIMEOUT_S = 60; // Claude Code's default for command hooks
+
+/** @returns {object | null} the settings object, or null when the text is not one */
+function parseSettings(text) {
   try {
-    parsed = JSON.parse(jsonText);
+    const parsed = JSON.parse(text);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
   } catch (err) {
     return null; // not valid JSON
   }
-  if (parsed === null || typeof parsed !== "object") return null;
+}
 
-  let hookCount = 0;
-  const hooks = parsed.hooks && typeof parsed.hooks === "object" ? parsed.hooks : {};
-  for (const blocks of Object.values(hooks)) {
+function matcherTokens(matcher) {
+  const m = typeof matcher === "string" ? matcher.trim() : "";
+  if (m === "" || m === "*") return ["*"];
+  return m.split("|").map((t) => t.trim()).filter(Boolean);
+}
+
+/** @returns {Map<string, number>} "event \0 token \0 command" -> timeout in seconds */
+function hookCoverage(settings) {
+  const coverage = new Map();
+  const hooks = settings?.hooks && typeof settings.hooks === "object" ? settings.hooks : {};
+  for (const [event, blocks] of Object.entries(hooks)) {
     if (!Array.isArray(blocks)) continue;
     for (const block of blocks) {
       for (const h of Array.isArray(block?.hooks) ? block.hooks : []) {
-        if (typeof h?.command === "string" && GUARDIAN_HOOK_FILES.some((f) => h.command.includes(f))) hookCount++;
+        if (typeof h?.command !== "string" || (h.type !== undefined && h.type !== "command")) continue;
+        const timeout = typeof h.timeout === "number" ? h.timeout : DEFAULT_HOOK_TIMEOUT_S;
+        for (const token of matcherTokens(block.matcher)) {
+          const key = `${event}\u0000${token}\u0000${h.command}`;
+          coverage.set(key, Math.max(coverage.get(key) ?? 0, timeout));
+        }
       }
     }
   }
-  const cfg = parsed.otlcGuardian && typeof parsed.otlcGuardian === "object" ? parsed.otlcGuardian : {};
+  return coverage;
+}
+
+/** Guardian's standing across settings.json and settings.local.json together. */
+function guardianPosture(projectText, localText) {
+  const project = parseSettings(projectText);
+  const local = parseSettings(localText);
+  const coverage = hookCoverage(project);
+  for (const [key, timeout] of hookCoverage(local)) coverage.set(key, Math.max(coverage.get(key) ?? 0, timeout));
+  // The hook reads its own config from settings.json only (loadSettings).
+  const cfg = project?.otlcGuardian && typeof project.otlcGuardian === "object" ? project.otlcGuardian : {};
   return {
-    hookCount,
-    disableAllHooks: parsed.disableAllHooks === true,
+    coverage,
+    disableAllHooks: project?.disableAllHooks === true || local?.disableAllHooks === true,
     extendDefaults:  cfg.extendDefaults !== false,
     ignorePaths:     Array.isArray(cfg.ignorePaths) ? cfg.ignorePaths.map(String) : [],
     watchPaths:      Array.isArray(cfg.watchPaths)  ? cfg.watchPaths.map(String)  : [],
   };
 }
 
-/** Apply an Edit/MultiEdit to text the way the tool would. */
+/**
+ * Applies Edit/MultiEdit edits the way the tool does. Line endings are
+ * normalized first, because the tool matches an LF old_string against a
+ * CRLF file and a literal match here would miss it.
+ * @returns {{ text: string, unmatched: object[] }} unmatched: edits whose old_string was not found
+ */
 function applyEdits(text, edits) {
-  let out = text;
+  const lf = (s) => (typeof s === "string" ? s.replace(/\r\n/g, "\n") : "");
+  let out = lf(text);
+  const unmatched = [];
   for (const e of edits) {
-    const oldS = typeof e?.old_string === "string" ? e.old_string : "";
-    const newS = typeof e?.new_string === "string" ? e.new_string : "";
-    if (!oldS) continue;
+    const oldS = lf(e?.old_string);
+    const newS = lf(e?.new_string);
+    if (!oldS || !out.includes(oldS)) {
+      unmatched.push(e);
+      continue;
+    }
     out = e.replace_all ? out.split(oldS).join(newS) : out.replace(oldS, () => newS);
   }
-  return out;
+  return { text: out, unmatched };
 }
 
 /**
+ * @param {string} absPath - the settings file being changed
+ * @param {string | null} after - its text after the change, or null when
+ *   the change cannot be computed (a shell command, an edit that does not apply)
  * @returns {string[]} human-readable list of ways the change weakens Guardian
  */
-function settingsWeakening(toolName, toolInput, absPath) {
-  let before = "";
+function settingsWeakening(absPath, after) {
+  const isLocal = /settings\.local\.json$/i.test(absPath);
+  const sibling = path.join(path.dirname(absPath), isLocal ? "settings.json" : "settings.local.json");
+  let current, other;
   try {
-    before = existsSync(absPath) ? readFileSync(absPath, "utf8") : "";
+    current = existsSync(absPath) ? readFileSync(absPath, "utf8") : "";
+    other   = existsSync(sibling) ? readFileSync(sibling, "utf8") : "";
   } catch (err) {
-    return [`current settings file could not be read (${err?.message ?? "unknown"})`];
+    return [`current settings could not be read (${err?.message ?? "unknown"})`];
   }
-  const was = guardianPosture(before);
-  if (!was || (was.hookCount === 0 && was.ignorePaths.length === 0 && was.watchPaths.length === 0)) {
-    return []; // nothing of Guardian's to weaken
+  const pair = (text) => (isLocal ? guardianPosture(other, text) : guardianPosture(text, other));
+  const was = pair(current);
+  const guarded = [...was.coverage.keys()].filter((k) => GUARDIAN_HOOK_FILES.some((f) => k.split("\u0000")[2].includes(f)));
+  const hasConfig = was.ignorePaths.length > 0 || was.watchPaths.length > 0 || !was.extendDefaults;
+
+  if (after === null) {
+    // Any settings file can set disableAllHooks, so an unseen result is
+    // harmless only when hooks are already off and nothing else is at stake.
+    const nothingAtStake = was.disableAllHooks && guarded.length === 0 && !hasConfig;
+    return nothingAtStake
+      ? []
+      : ["Guardian cannot see the resulting file, so it cannot tell whether hooks are removed or disableAllHooks is set"];
+  }
+  if (parseSettings(after) === null && parseSettings(current) !== null) {
+    return ["result would not be valid JSON, which unregisters every hook in the file"];
   }
 
-  let after;
-  if (toolName === "Write") after = typeof toolInput.content === "string" ? toolInput.content : "";
-  else if (toolName === "Edit") after = applyEdits(before, [toolInput]);
-  else if (toolName === "MultiEdit") after = applyEdits(before, Array.isArray(toolInput.edits) ? toolInput.edits : []);
-  else return [];
-
-  const now = guardianPosture(after);
-  if (!now) return ["result would not be valid JSON, which unregisters every hook in the file"];
-
+  const now = pair(after);
   const reasons = [];
-  if (now.hookCount < was.hookCount) reasons.push(`Guardian hook registrations drop from ${was.hookCount} to ${now.hookCount}`);
   if (now.disableAllHooks && !was.disableAllHooks) reasons.push("disableAllHooks is turned on");
+  for (const key of guarded) {
+    const [event, token, command] = key.split("\u0000");
+    const need = was.coverage.get(key);
+    const kept = Math.max(now.coverage.get(key) ?? -1, now.coverage.get(`${event}\u0000*\u0000${command}`) ?? -1);
+    if (kept < 0) reasons.push(`Guardian hook no longer runs on ${event} ${token} (removed, or its matcher or command changed)`);
+    else if (kept < need) reasons.push(`Guardian hook timeout on ${event} ${token} lowered from ${need} s to ${kept} s`);
+  }
   if (was.extendDefaults && !now.extendDefaults) reasons.push("otlcGuardian.extendDefaults is turned off (default watch list dropped)");
   const addedIgnores = now.ignorePaths.filter((p) => !was.ignorePaths.includes(p));
   if (addedIgnores.length > 0) reasons.push(`otlcGuardian.ignorePaths gains ${addedIgnores.length} entr${addedIgnores.length === 1 ? "y" : "ies"}`);
   const removedWatches = was.watchPaths.filter((p) => !now.watchPaths.includes(p));
   if (removedWatches.length > 0) reasons.push(`otlcGuardian.watchPaths loses ${removedWatches.length} entr${removedWatches.length === 1 ? "y" : "ies"}`);
   return reasons;
+}
+
+/** The text a Write/Edit/MultiEdit leaves in a settings file, or null when it cannot be computed. */
+function settingsAfter(toolName, toolInput, absPath) {
+  if (toolName === "Write") return typeof toolInput.content === "string" ? toolInput.content : "";
+  const edits = toolName === "Edit" ? [toolInput] : toolName === "MultiEdit" && Array.isArray(toolInput.edits) ? toolInput.edits : null;
+  if (!edits) return null;
+  const { text, unmatched } = applyEdits(readCurrent(absPath), edits);
+  return unmatched.length > 0 ? null : text;
 }
 
 // ---------------------------------------------------------------------------
@@ -630,9 +698,15 @@ process.stdin.on("end", () => {
       ? " Denied because this session runs with permission prompts bypassed; make this change by hand or leave bypass mode."
       : "";
 
-    // ── Self-protection: settings edits that weaken Guardian ──────────
-    if (write.kind === "file" && SETTINGS_FILE_PATTERN.test(write.targets[0].replace(/\\/g, "/"))) {
-      const reasons = settingsWeakening(toolName, toolInput, resolve(write.targets[0]));
+    // Paths a Bash command writes, resolved against the session cwd.
+    const sessionCwd = (typeof data.cwd === "string" && data.cwd) || projectRoot;
+    const bashWrites = write.kind === "bash" ? [...shellWriteTargets(write.content, sessionCwd)] : [];
+
+    // ── Self-protection: settings changes that weaken Guardian ────────
+    const isSettings = (p) => SETTINGS_FILE_PATTERN.test(p.replace(/\\/g, "/"));
+    if (write.kind === "file" && isSettings(write.targets[0])) {
+      const target = resolve(write.targets[0]);
+      const reasons = settingsWeakening(target, settingsAfter(toolName, toolInput, target));
       if (reasons.length > 0) {
         emit({
           permissionDecision: confirmOrDeny,
@@ -642,13 +716,23 @@ process.stdin.on("end", () => {
         });
       }
     }
+    for (const target of bashWrites.filter(isSettings)) {
+      const reasons = settingsWeakening(target, null);
+      if (reasons.length > 0) {
+        emit({
+          permissionDecision: confirmOrDeny,
+          permissionDecisionReason:
+            `${TAG} This command writes ${safeEcho(target, 120)} and may weaken Guardian: ` +
+            `${reasons.join("; ")}. Use Edit for settings changes, or approve only if you asked for it.${bypassNote}`,
+        });
+      }
+    }
 
     // ── Which targets are watched? ────────────────────────────────────
     // For Bash, only a path the command writes can make it ask; a watched
     // path it merely names (grep, git commit, cat) earns an advisory.
     const isWatched = (t) => t && !isIgnoredPath(t, settings) && isWatchedPath(t, settings);
-    const sessionCwd = (typeof data.cwd === "string" && data.cwd) || projectRoot;
-    const written = write.kind === "bash" ? [...shellWriteTargets(write.content, sessionCwd)].filter(isWatched) : [];
+    const written = bashWrites.filter(isWatched);
     const watched = [...written, ...write.targets.filter(isWatched)];
     if (watched.length === 0) process.exit(0);
     if (!write.content.trim()) process.exit(0);
