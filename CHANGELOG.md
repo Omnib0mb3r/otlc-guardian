@@ -201,6 +201,15 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Moving a quoted pattern onto a live line is a finding (BUG-042).**
+  `scanChange()` counts each match by string and by context kind: data
+  when it sits inside a fenced code block or a quoted or inline-code span
+  on its line, live otherwise. A live match in the new text needs a live
+  match of the same string in the old one, so cutting a quoted example
+  out of its quotes or fence (or deleting the fence) and leaving it on an
+  ordinary line is reported, where the count used to stay the same.
+  Moving a pattern into quotes is never a finding.
+
 - **Padding no longer crosses the change window (BUG-046).**
   `scanChange()` counts its 2 KB of context in characters that are not
   padding: whitespace, invisible characters, markdown emphasis markers,

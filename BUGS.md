@@ -5,7 +5,7 @@ already known-broken before it starts troubleshooting.
 
 **Read the Index first.** Only open a detail block when you need that specific bug.
 
-Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verifying) →
+Statuses: `IN-PROGRESS` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verifying) →
 `RESOLVED` (fixed and verified). `DEFERRED` = real bug, intentionally parked.
 
 <!-- INDEX START -->
@@ -656,12 +656,16 @@ Fix: project checks declare `evidence: "project"` when they prove an absence (DE
 
 ### BUG-042: Hook: count-based judgement lets an existing quoted pattern be moved into a live directive
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** IN-PROGRESS · **Found:** 2026-11-10
 
 Verifier item P7 (`C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-verify.md`, line refs against 811381e).
 
 - `scanChange()` in `security/01-injection-guard.js` (about lines 489 to 500 at 811381e) counts a finding as new only when the change adds a matched string more times than the file already held it. A file that quotes a pattern as an example can have that quote moved out of its example context into a live directive, by a full rewrite or by a MultiEdit that removes it and re-adds it, and the count does not change.
 - Fix direction: judge where the string sits (its surrounding context), not only how many times it occurs. Must not bring back the false denies that review finding 1 fixed (rewrites of a CLAUDE.md that carries Guardian's section).
+
+**Lex decision (2026-11-10, handover HANDOVER-2026-11-10_17-40-12-042Z).** Fix it in staging: judge occurrences by pattern and context kind (quoted or fenced data versus a live line), not by count alone, so moving an already-quoted pattern onto a live line is a new finding.
+
+**Fix in staging (2026-11-10), not yet live.** Staging commit: recorded in `staging/APPLY.md`. In `staging/security/01-injection-guard.js`: `contextKinds()` classifies each match in a view as data (whole inside one fenced code block, by CommonMark's open and close rules in `nextFence()`, or inside one quoted or inline-code span on its line, `QUOTE_SPAN`, where a single quote against a letter or digit is an apostrophe and opens nothing) or live. `firstAddedMatch()` now accounts for a live match only with a live match of the same string in the old text, and for a data match with a data match or else a live one, so moving a pattern into quotes is never a finding and moving it out is. Both windows start at the same offset, and `fenceAtEnd()` reads the fence state there from the text before it (as the base view reads it), so a window that opens inside a fence still knows. Only the positional views (base, lookalikes folded, %-decoded, entities decoded) are classified; the tag, markdown-stripped and base64 views count every match as live, as before. `ruleMatches()` now yields offsets, so the comment rules gained `spans()` beside `matchAll()` (whose public shape is unchanged). Tests: `tests/injection-guard.test.js`, group "BUG-042: a pattern moved from quoted or fenced data onto a live line is a finding" (6 staged tests: out of a fence, double quotes, inline code, single quotes into a line with apostrophes, deleting the fence, and a window that starts inside a fence; all 6 failing against the staged scanner before the fix; 4 tests that moving into quotes, between quotes, reordering fenced examples and an unrelated edit stay clean, passing on both), and one staged hook test in `tests/hook.test.js` (a full Write of CLAUDE.md that moves a quoted pattern onto a live line is denied in bypass mode; failing before the fix). The existing review-finding-1 tests (rewrites of a CLAUDE.md carrying Guardian's section) still pass. The bug stays IN-PROGRESS until Michael applies the staged scanner. Smoke test after applying: in a scratch project whose CLAUDE.md quotes "ignore all previous instructions" inside a code fence, ask Claude to rewrite the file with that line moved out of the fence, and see the Guardian deny; then ask for an unrelated edit and see none.
 
 ### BUG-043: Hook false denies on ordinary headings and on text that quotes a pattern as data
 

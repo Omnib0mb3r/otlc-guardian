@@ -87,14 +87,16 @@ export const INJECTION_PATTERNS = [
 
 /**
  * Builds a linear-time matcher for "comment containing a control word".
- * `match` returns the first such comment or null; `matchAll` yields each.
+ * `match` returns the first such comment or null; `matchAll` yields each;
+ * `spans` yields each with its offset.
  * @param {string} open  - comment opener, e.g. "<!--"
  * @param {string} close - comment closer, e.g. "-->"
- * @returns {{ match: (text: string) => string | null, matchAll: (text: string) => Generator<string> }}
+ * @returns {{ match: (text: string) => string | null, matchAll: (text: string) => Generator<string>, spans: (text: string) => Generator<{ text: string, index: number }> }}
  */
 function commentMatcher(open, close) {
   const keyword = /ignore|override|system/i;
-  function* matchAll(text) {
+  /** Each hit with its offset, for scanChange(). */
+  function* spans(text) {
     let pos = 0;
     for (;;) {
       const start = text.indexOf(open, pos);
@@ -104,11 +106,14 @@ function commentMatcher(open, close) {
       // be closed either, so the search is over.
       if (end < 0) return;
       const comment = text.slice(start, end + close.length);
-      if (keyword.test(comment)) yield comment;
+      if (keyword.test(comment)) yield { text: comment, index: start };
       pos = end + close.length;
     }
   }
-  return { match: (text) => matchAll(text).next().value ?? null, matchAll };
+  function* matchAll(text) {
+    for (const span of spans(text)) yield span.text;
+  }
+  return { match: (text) => matchAll(text).next().value ?? null, matchAll, spans };
 }
 
 // ---------------------------------------------------------------------------
@@ -494,16 +499,94 @@ const CHANGE_CONTEXT = 2048;
 
 const INVISIBLE_UNICODE_GLOBAL = new RegExp(INVISIBLE_UNICODE_PATTERN.source, "gu");
 
-/** Every matched string of one rule in one view. */
+/** Every match of one rule in one view, as { text, index }. */
 function* ruleMatches(rule, view) {
   if (!view) return;
-  if (rule.matchAll) {
-    yield* rule.matchAll(view);
+  if (rule.spans) {
+    yield* rule.spans(view);
     return;
   }
   const flags = rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`;
-  for (const m of view.matchAll(new RegExp(rule.pattern.source, flags))) yield m[0];
+  for (const m of view.matchAll(new RegExp(rule.pattern.source, flags))) yield { text: m[0], index: m.index };
 }
+
+// ---------------------------------------------------------------------------
+// Context kind (BUG-042). A match is "data" when it sits whole inside a
+// fenced code block, or inside one quoted or inline-code span on its line;
+// anything else is "live". A pattern quoted as an example is data; the same
+// words moved onto an ordinary line are a live directive, which a count
+// alone cannot tell apart.
+// ---------------------------------------------------------------------------
+
+const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
+/**
+ * The fence state after one line: the open fence ({ char, length }) or
+ * null. A backtick fence's info string cannot hold a backtick; a closing
+ * fence uses the opening character, at least as many, and nothing after.
+ */
+function nextFence(fence, line) {
+  const m = FENCE_LINE.exec(line);
+  if (!m) return fence;
+  const [, run, rest] = m;
+  if (fence) return run[0] === fence.char && run.length >= fence.length && rest.trim() === "" ? null : fence;
+  return run[0] === "`" && rest.includes("`") ? null : { char: run[0], length: run.length };
+}
+
+/** The fence state at the end of `text`, read line by line. */
+function fenceAtEnd(text) {
+  let fence = null;
+  for (const line of text.split("\n")) fence = nextFence(fence, line.replace(/\r$/, ""));
+  return fence;
+}
+
+// A quote opens and closes on one line. A single quote touching a letter
+// or digit on its outer side is an apostrophe ("don't"), not a quote.
+const QUOTE_SPAN = /"[^"\n]*"|“[^”\n]*”|`[^`\n]+`|(?<![\p{L}\p{N}])'[^'\n]*'(?![\p{L}\p{N}])|(?<![\p{L}\p{N}])‘[^’\n]*’(?![\p{L}\p{N}])/gu;
+
+/**
+ * A classifier for matches in one view: kind(match) is "data" or "live".
+ * `fence` is the fence state where the view starts; `partial` says the
+ * view starts mid-line (a window cut), so its first line is not read as
+ * a fence line.
+ */
+function contextKinds(view, fence, partial) {
+  const lineStarts = [0];
+  for (let i = view.indexOf("\n"); i >= 0; i = view.indexOf("\n", i + 1)) lineStarts.push(i + 1);
+  // block[n]: the fenced block line n belongs to (fence lines included), or -1
+  const block = new Int32Array(lineStarts.length).fill(-1);
+  let blocks = fence ? 1 : 0;
+  for (let n = 0; n < lineStarts.length; n++) {
+    const line = view.slice(lineStarts[n], (lineStarts[n + 1] ?? view.length + 1) - 1).replace(/\r$/, "");
+    const next = n === 0 && partial ? fence : nextFence(fence, line);
+    if (fence || next) block[n] = fence ? blocks - 1 : blocks++;
+    fence = next;
+  }
+  const lineOf = (offset) => {
+    let lo = 0;
+    let hi = lineStarts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (lineStarts[mid] <= offset) lo = mid; else hi = mid - 1;
+    }
+    return lo;
+  };
+  return ({ text, index }) => {
+    const first = lineOf(index);
+    const last  = lineOf(index + Math.max(0, text.length - 1));
+    if (block[first] >= 0 && block[first] === block[last]) return "data";
+    if (first !== last) return "live";
+    const start = lineStarts[first];
+    const line  = view.slice(start, (lineStarts[first + 1] ?? view.length + 1) - 1);
+    for (const q of line.matchAll(QUOTE_SPAN)) {
+      if (start + q.index <= index && index + text.length <= start + q.index + q[0].length) return "data";
+    }
+    return "live";
+  };
+}
+
+/** View indexes that keep the text's lines, quotes and fences in place (see scanViews()). */
+const POSITIONAL_VIEWS = new Set([0, 2, 3, 4]);
 
 /**
  * The context is counted in characters that are not padding (BUG-046).
@@ -557,7 +640,10 @@ function contextEnd(text, begin) {
   }
 }
 
-/** Trims the common prefix and suffix, keeping CHANGE_CONTEXT around the change. */
+/**
+ * Trims the common prefix and suffix, keeping CHANGE_CONTEXT around the
+ * change. Returns both windows and the offset they start at.
+ */
 function changedWindows(before, after) {
   const shorter = Math.min(before.length, after.length);
   let head = 0;
@@ -566,24 +652,43 @@ function changedWindows(before, after) {
   while (tail < shorter - head && before.charCodeAt(before.length - 1 - tail) === after.charCodeAt(after.length - 1 - tail)) tail++;
   const from = contextStart(before, head);
   const keep = before.length - contextEnd(before, before.length - tail);
-  return [before.slice(from, before.length - keep), after.slice(from, after.length - keep)];
+  return [before.slice(from, before.length - keep), after.slice(from, after.length - keep), from];
 }
 
 /**
- * The first string a rule matches in `after` more often than in `before`,
- * view by view, or null when the change adds no match of that rule.
+ * The first string a rule matches in `after` that `before` does not
+ * account for, view by view, or null when the change adds no match.
+ *
+ * Matches are counted by string and context kind (BUG-042). A live match
+ * is accounted for only by a live match of the same string in `before`;
+ * a data match by a data match, or else by a live one, so moving a
+ * pattern into quotes is never a finding but moving it out is. `kinds[i]`
+ * classifies matches in view i of each text; a view without a classifier
+ * counts every match as live.
  */
-function firstAddedMatch(rule, beforeViews, afterViews) {
+function firstAddedMatch(rule, beforeViews, afterViews, beforeKinds, afterKinds) {
+  const take = (counts, text) => {
+    const left = counts.get(text) ?? 0;
+    if (left > 0) counts.set(text, left - 1);
+    return left > 0;
+  };
   for (let i = 0; i < afterViews.length; i++) {
-    const seen = new Map();
-    for (const m of ruleMatches(rule, beforeViews[i])) seen.set(m, (seen.get(m) ?? 0) + 1);
-    for (const m of ruleMatches(rule, afterViews[i])) {
-      const left = seen.get(m) ?? 0;
-      if (left === 0) return m;
-      seen.set(m, left - 1);
+    const old = { live: new Map(), data: new Map() };
+    for (const m of ruleMatches(rule, beforeViews[i])) {
+      const counts = old[beforeKinds[i]?.(m) ?? "live"];
+      counts.set(m.text, (counts.get(m.text) ?? 0) + 1);
     }
+    const added = { live: [], data: [] };
+    for (const m of ruleMatches(rule, afterViews[i])) added[afterKinds[i]?.(m) ?? "live"].push(m.text);
+    for (const text of added.live) if (!take(old.live, text)) return text;
+    for (const text of added.data) if (!take(old.data, text) && !take(old.live, text)) return text;
   }
   return null;
+}
+
+/** Context-kind classifiers for the positional views of one window. */
+function viewKinds(views, fence, partial) {
+  return views.map((view, i) => (POSITIONAL_VIEWS.has(i) && view ? contextKinds(view, fence, partial) : null));
 }
 
 /**
@@ -611,12 +716,19 @@ function firstAddedMatch(rule, beforeViews, afterViews) {
  */
 export function scanChange(before, after, mode = "all") {
   assertScanArgs("scanChange", after, mode);
-  const [oldWindow, newWindow] = changedWindows(typeof before === "string" ? before : "", after);
+  const original = typeof before === "string" ? before : "";
+  const [oldWindow, newWindow, from] = changedWindows(original, after);
 
   const { violations } = scan(newWindow, mode);
   const oldViews = scanViews(oldWindow.slice(0, MAX_SCAN_LENGTH));
   const newViews = scanViews(newWindow.slice(0, MAX_SCAN_LENGTH));
   const rules    = new Map([...INJECTION_PATTERNS, ...SECRET_PATTERNS].map((r) => [r.id, r]));
+  // Both windows start at `from` after the same text, so they share the
+  // fence state there, read from that text as the base view reads it.
+  const fence    = fenceAtEnd(original.slice(0, from).normalize("NFKC").replace(INVISIBLE_STRIP_PATTERN, ""));
+  const partial  = from > 0 && original[from - 1] !== "\n";
+  const oldKinds = viewKinds(oldViews, fence, partial);
+  const newKinds = viewKinds(newViews, fence, partial);
   const countInvisible = (text) => text.match(INVISIBLE_UNICODE_GLOBAL)?.length ?? 0;
 
   const added = [];
@@ -626,7 +738,7 @@ export function scanChange(before, after, mode = "all") {
     } else if (v.id === "GUARD-INJ-UNICODE") {
       if (countInvisible(newWindow) > countInvisible(oldWindow)) added.push(v);
     } else {
-      const matched = firstAddedMatch(rules.get(v.id), oldViews, newViews);
+      const matched = firstAddedMatch(rules.get(v.id), oldViews, newViews, oldKinds, newKinds);
       if (matched !== null) added.push(v.type === "secret" ? v : { ...v, matched });
     }
   }

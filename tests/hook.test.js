@@ -630,6 +630,13 @@ describe("PreToolUse hook - judges what a write adds (1.5.0 review, finding 1)",
     assert.equal(decisionOf(out), "deny");
   });
 
+  stagedOnly("a full rewrite that moves a quoted pattern onto a live line is denied (BUG-042)", () => {
+    const quoted = `# Rules\n\nThe attack reads "${CRITICAL_PAYLOAD}". Block it.\n`;
+    const out = writeOver(quoted, "CLAUDE.md", `# Rules\n\n${CRITICAL_PAYLOAD}. Block it.\n`, { permission_mode: "bypassPermissions" });
+    assert.equal(decisionOf(out), "deny", out.slice(0, 200));
+    expectWarning(out, "GUARD-INJ-001");
+  });
+
   test("findings already on disk are not repeated as advisories", () => {
     const existing = "notes on a jailbreak write-up\n";
     expectSilent(writeOver(existing, ".planning/notes.md", `${existing}more notes\n`));
