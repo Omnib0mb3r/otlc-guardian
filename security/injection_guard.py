@@ -97,8 +97,10 @@ INJECTION_PATTERNS: list[InjectionPattern] = [
     InjectionPattern("GUARD-INJ-012", re.compile(r"(?:print|output|reveal|show|display|repeat)\s+(?:your\s+)?(?:system\s+)?(?:prompt|instructions)", re.I), "HIGH", "Prompt extraction"),
     InjectionPattern("GUARD-INJ-013", re.compile(r"what\s+(?:are|were)\s+your\s+(?:original\s+)?instructions", re.I), "HIGH", "Instruction extraction"),
     InjectionPattern("GUARD-INJ-014", re.compile(r"tell\s+me\s+your\s+(?:system\s+)?prompt",    re.I), "HIGH",     "System prompt extraction"),
-    # BUG-043: a role tag named as a noun ("wrap in <user> tags") is prose.
-    InjectionPattern("GUARD-INJ-015", re.compile(r"</?(?:system|assistant|human|user)>(?!(?:[ \t]*(?:and|or|,|/|\.\.\.|\u2026)?[ \t]*</?(?:system|assistant|human|user)>)*[ \t]*(?:tags?|elements?|blocks?)\b)", re.I), "CRITICAL", "Delimiter injection"),
+    # BUG-043: a role tag named as a noun ("wrap in <user> tags") is prose,
+    # unless the rest of the line asserts a role (re-probe 3 D5). The
+    # look-ahead is bounded so a line of many tags stays linear.
+    InjectionPattern("GUARD-INJ-015", re.compile(r"</?(?:system|assistant|human|user)>(?!(?:[ \t]*(?:and|or|,|/|\.\.\.|\u2026)?[ \t]*</?(?:system|assistant|human|user)>)*[ \t]*(?:tags?|elements?|blocks?)\b(?![^\n]{0,300}?(?:\b(?<!who )(?<!what )you(?:'ll|'re|[ \t]+(?:are|have|will|must|should|shall|obey|now|only))\b|\bfrom[ \t]+now[ \t]+on\b|\b(?:obey|ignore|disregard|forget)\b)))", re.I), "CRITICAL", "Delimiter injection"),
     InjectionPattern("GUARD-INJ-016", re.compile(r"\[SYSTEM\]",                                 re.I), "CRITICAL", "SYSTEM tag injection"),
     InjectionPattern("GUARD-INJ-017", re.compile(r"\[INST\]",                                   re.I), "CRITICAL", "INST tag injection"),
     InjectionPattern("GUARD-INJ-018", re.compile(r"<<\s*SYS\s*>>",                              re.I), "CRITICAL", "SYS tag injection"),
