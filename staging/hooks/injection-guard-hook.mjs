@@ -1720,6 +1720,124 @@ function parseSettings(text) {
   }
 }
 
+// Base types of Claude Code's top-level settings keys, taken from the
+// schemastore claude-code-settings schema (2026-11-10). Claude Code loads
+// nothing from a settings file in which one of these has another type,
+// hooks and permission rules included, and says so only in its startup
+// notice (re-probe 3, D2). A key not listed is allowed: Claude Code
+// ignores an unknown key. "strings" is an array of strings.
+const SETTINGS_KEY_TYPES = Object.fromEntries(Object.entries({
+  boolean: "agentPushNotifEnabled allowAllClaudeAiMcps allowManagedHooksOnly allowManagedMcpServersOnly " +
+    "allowManagedPermissionRulesOnly alwaysThinkingEnabled autoCompactEnabled autoConnectIde autoInstallIdeExtension " +
+    "autoMemoryEnabled autoScrollEnabled awaySummaryEnabled axScreenReader channelsEnabled disableAgentView " +
+    "disableAllHooks disableArtifact disableBrowserExternalNavigation disableBundledSkills disableClaudeAiConnectors " +
+    "disableMobileSimulatorTools disableRemoteControl disableSideloadFlags disableSkillShellExecution disableWorkflows " +
+    "emojiCompletionEnabled enableAllProjectMcpServers enableArtifact enforceAvailableModels externalEditorContext " +
+    "fastMode fastModePerSessionOptIn fileCheckpointingEnabled forceRemoteSettingsRefresh includeCoAuthoredBy " +
+    "includeGitInstructions inputNeededNotifEnabled permissionExplainerEnabled prefersReducedMotion " +
+    "remoteControlAtStartup requireCoworkFullVmSandbox respectGitignore respondToBashCommands " +
+    "showClearContextOnPlanAccept showThinkingSummaries showTurnDuration skipDangerousModePermissionPrompt " +
+    "skipWebFetchPreflight spinnerTipsEnabled syntaxHighlightingDisabled terminalProgressBarEnabled " +
+    "useAutoModeDuringPlan verbose voiceEnabled wheelScrollAccelerationEnabled workflowKeywordTriggerEnabled " +
+    "wslInheritsWindowsSettings",
+  string: "$schema advisorModel agent apiKeyHelper askUserQuestionTimeout autoMemoryDirectory autoUpdatesChannel " +
+    "awsAuthRefresh awsCredentialExport browserExternalPageTools claudeMd defaultShell diffTool disableAutoMode " +
+    "disableDeepLinkRegistration editorMode effortLevel forceLoginGatewayUrl forceLoginMethod gcpAuthRefresh language " +
+    "minimumVersion model otelHeadersHelper outputStyle parentSettingsBehavior plansDirectory pluginTrustMessage " +
+    "prUrlTemplate preferredNotifChannel processWrapper requiredMaximumVersion requiredMinimumVersion teammateMode " +
+    "theme tui viewMode workflowSizeGuideline",
+  integer: "cleanupPeriodDays skillListingMaxDescChars",
+  number: "feedbackSurveyRate skillListingBudgetFraction",
+  object: "attribution autoMode enabledPlugins env extraKnownMarketplaces fileSuggestion hooks modelOverrides " +
+    "permissions pluginConfigs policyHelper sandbox skillOverrides spinnerTipsOverride spinnerVerbs statusLine " +
+    "subagentStatusLine vimInsertModeRemaps voice worktree",
+  strings: "allowedHttpHookUrls availableModels claudeMdExcludes companyAnnouncements disabledMcpjsonServers " +
+    "enabledMcpjsonServers fallbackModel httpHookAllowedEnvVars pluginSuggestionMarketplaces skippedMarketplaces " +
+    "skippedPlugins sshHostAllowlist",
+  array: "allowedChannelPlugins allowedMcpServers blockedMarketplaces deniedMcpServers footerLinksRegexes " +
+    "managedMcpServers sshConfigs strictKnownMarketplaces",
+  "boolean|strings": "strictPluginOnlyCustomization",
+  "string|strings": "forceLoginOrgUUID",
+  "null|string": "teammateDefaultModel",
+}).flatMap(([types, keys]) => keys.split(" ").map((key) => [key, types.split("|")])));
+
+// The fields inside the settings objects that carry Guardian's standing.
+const SETTINGS_FIELD_TYPES = {
+  permissions: { allow: "strings", deny: "strings", ask: "strings", additionalDirectories: "strings",
+    defaultMode: "string", disableBypassPermissionsMode: "string", disableAutoMode: "string" },
+  statusLine: { type: "string", command: "string", padding: "number", refreshInterval: "integer", hideVimModeIndicator: "boolean" },
+};
+// Every field of a hook entry, across the command, prompt, agent, http and mcp kinds.
+const HOOK_FIELD_TYPES = { type: "string", command: "string", timeout: "number", async: "boolean", asyncRewake: "boolean",
+  shell: "string", if: "string", statusMessage: "string", args: "strings", prompt: "string", model: "string",
+  continueOnBlock: "boolean", url: "string", headers: "object", allowedEnvVars: "strings", server: "string",
+  tool: "string", input: "object" };
+
+const TYPE_WORDS = { boolean: "a boolean", string: "a string", integer: "an integer", number: "a number", null: "null",
+  object: "an object", array: "an array", strings: "an array of strings" };
+
+function jsonTypeIs(value, type) {
+  switch (type) {
+    case "boolean":
+    case "string":  return typeof value === type;
+    case "number":  return typeof value === "number" && Number.isFinite(value);
+    case "integer": return Number.isInteger(value);
+    case "null":    return value === null;
+    case "object":  return value !== null && typeof value === "object" && !Array.isArray(value);
+    case "array":   return Array.isArray(value);
+    case "strings": return Array.isArray(value) && value.every((v) => typeof v === "string");
+    default:        return true;
+  }
+}
+
+function jsonTypeWord(value) {
+  if (value === undefined) return "missing";
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "an array";
+  if (Number.isInteger(value)) return "an integer";
+  return TYPE_WORDS[typeof value] ?? typeof value;
+}
+
+/**
+ * Known settings keys whose value has a type Claude Code rejects.
+ * @param {object} settings - a parsed settings object
+ * @returns {string[]} one line per wrong value, naming where it is
+ */
+function settingsTypeProblems(settings) {
+  const problems = [];
+  const check = (where, value, types) => {
+    if (types.some((t) => jsonTypeIs(value, t))) return true;
+    problems.push(`"${safeEcho(where, 80)}" is ${jsonTypeWord(value)} where Claude Code expects ${types.map((t) => TYPE_WORDS[t]).join(" or ")}`);
+    return false;
+  };
+  for (const [key, types] of Object.entries(SETTINGS_KEY_TYPES)) {
+    if (Object.hasOwn(settings, key)) check(key, settings[key], types);
+  }
+  for (const [key, fields] of Object.entries(SETTINGS_FIELD_TYPES)) {
+    if (!jsonTypeIs(settings[key], "object")) continue;
+    for (const [field, type] of Object.entries(fields)) {
+      if (Object.hasOwn(settings[key], field)) check(`${key}.${field}`, settings[key][field], [type]);
+    }
+  }
+  if (!jsonTypeIs(settings.hooks, "object")) return problems;
+  for (const [event, blocks] of Object.entries(settings.hooks)) {
+    if (!check(`hooks.${event}`, blocks, ["array"])) continue;
+    blocks.forEach((block, i) => {
+      const at = `hooks.${event}[${i}]`;
+      if (!check(at, block, ["object"])) return;
+      if (Object.hasOwn(block, "matcher")) check(`${at}.matcher`, block.matcher, ["string"]);
+      if (!check(`${at}.hooks`, block.hooks, ["array"])) return;
+      block.hooks.forEach((h, j) => {
+        if (!check(`${at}.hooks[${j}]`, h, ["object"])) return;
+        for (const [field, type] of Object.entries(HOOK_FIELD_TYPES)) {
+          if (Object.hasOwn(h, field)) check(`${at}.hooks[${j}].${field}`, h[field], [type]);
+        }
+      });
+    });
+  }
+  return problems;
+}
+
 /** Whether Claude Code runs a block with this matcher for `tool`. */
 function matcherCovers(matcher, tool) {
   const m = typeof matcher === "string" ? matcher.trim() : "";
@@ -1885,12 +2003,17 @@ function settingsWeakening(absPath, after) {
       ? []
       : ["Guardian cannot see the resulting file, so it cannot tell whether hooks are removed or disableAllHooks is set"];
   }
-  if (parseSettings(after) === null && parseSettings(current) !== null) {
-    return ["result would not be valid JSON, which unregisters every hook in the file"];
+  // Claude Code loads nothing from a file that is not a JSON object or has
+  // a known key of the wrong type, so either result asks, even when the
+  // file was already broken (re-probe 3, D2).
+  const parsedAfter = parseSettings(after);
+  if (parsedAfter === null) {
+    return ["result would not be a valid JSON object, so Claude Code loads nothing from the file, hooks and permission rules included"];
   }
 
   const now = pair(after);
-  const reasons = [];
+  const reasons = settingsTypeProblems(parsedAfter)
+    .map((p) => `${p}, so Claude Code loads nothing from the file, hooks and permission rules included`);
   if (now.disableAllHooks && !was.disableAllHooks) reasons.push("disableAllHooks is turned on");
   if (now.env !== was.env) reasons.push("the env block changes, and every hook Claude Code runs gets those variables (NODE_OPTIONS can preload code into the hook)");
   for (const key of guarded) {

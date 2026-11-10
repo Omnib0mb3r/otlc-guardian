@@ -1886,6 +1886,57 @@ describe("PreToolUse hook - settings protection reads matchers and hook commands
       expectSilent(change(from, to));
     });
   }
+
+  // Re-probe 3, D2 (T15): Claude Code loads nothing from a settings file
+  // with a known key of the wrong type, hooks and permission rules
+  // included, and says so only in its own startup notice.
+  for (const [name, next, field] of [
+    ['"disableAllHooks": "true"', () => ({ ...settings(), disableAllHooks: "true" }), "disableAllHooks"],
+    ['"disableAllHooks": 1', () => ({ ...settings(), disableAllHooks: 1 }), "disableAllHooks"],
+    ['Guardian\'s "timeout": "1"', () => withFields({ timeout: "1" }), "timeout"],
+    ['"permissions": { "allow": "Bash" }', () => ({ ...settings(), permissions: { allow: "Bash" } }), "permissions.allow"],
+    ['"model": 5', () => ({ ...settings(), model: 5 }), "model"],
+    ['"cleanupPeriodDays": 1.5', () => ({ ...settings(), cleanupPeriodDays: 1.5 }), "cleanupPeriodDays"],
+    ['"hooks": { "Stop": {} }', () => ({ ...settings(), hooks: { ...settings().hooks, Stop: {} } }), "hooks.Stop"],
+  ]) {
+    stagedOnly(`a settings.json change leaving ${name} asks (D2)`, () => {
+      const out = change(() => settings(), next);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+      expectWarning(out, field);
+    });
+  }
+  stagedOnly('a settings.local.json with "disableAllHooks": 1 asks (D2)', () => {
+    const out = writeLocal(null, { disableAllHooks: 1 });
+    assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    expectWarning(out, "disableAllHooks");
+  });
+
+  const writeLocalText = (current, next) => withTempProject((dir) => {
+    mkdirSync(path.join(dir, ".claude"), { recursive: true });
+    writeFileSync(path.join(dir, ".claude", "settings.json"), JSON.stringify(settings(), null, 2));
+    const file = path.join(dir, ".claude", "settings.local.json");
+    if (current !== null) writeFileSync(file, current);
+    return runHook(PRE_HOOK, { tool_name: "Write", cwd: dir, tool_input: { file_path: file, content: next } });
+  });
+  for (const [name, current, next] of [
+    ["an invalid settings.local.json left invalid", "{", "{ \"model\": "],
+    ["a new settings.local.json that is not JSON", null, "disableAllHooks = true"],
+    ["a settings.local.json that is a JSON array", null, "[]"],
+  ]) {
+    stagedOnly(`${name} asks (D2)`, () => {
+      assert.equal(decisionOf(writeLocalText(current, next)), "ask");
+    });
+  }
+
+  for (const [name, next] of [
+    ["an unknown key of any type", { someFutureKey: 5 }],
+    ["known keys of the right types", { model: "opus", cleanupPeriodDays: 30, includeCoAuthoredBy: false, permissions: { allow: ["Bash(npm test)"], defaultMode: "acceptEdits" } }],
+    ["a union-typed key in either form", { forceLoginOrgUUID: ["a", "b"], teammateDefaultModel: null }],
+  ]) {
+    test(`a settings.local.json with ${name} is unchanged (D2)`, () => {
+      expectSilent(writeLocal(null, next));
+    });
+  }
 });
 
 describe("PreToolUse hook - PowerShell parameter prefixes and encoded scripts (BUG-067)", () => {
