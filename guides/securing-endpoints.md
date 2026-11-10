@@ -3,7 +3,7 @@ Source   : The Lazy Developer (thelazydeveloper.org)
 Guide    : https://www.thelazydeveloper.org/securing-endpoints-guide
 Index    : https://www.thelazydeveloper.org/resources
 Retrieved: 2026-07-20
-Stored verbatim. Do not edit the body; re-pull from the source instead.
+Stored verbatim except em and en dashes, replaced by hyphens (2026-11-10). Do not edit the body otherwise; re-pull from the source and apply the same replacement.
 -->
 # Securing Endpoints: Stop Trusting Whoever Can Reach the URL
 
@@ -16,7 +16,7 @@ Stored verbatim. Do not edit the body; re-pull from the source instead.
 An AI assistant scaffolds a "send welcome email" endpoint that's called from your Stripe webhook handler after a successful purchase. It works. You test it. You ship it. Nobody adds authentication, because the *happy path* (webhook fires, email goes out) never touches an unauthenticated request.
 
 ```typescript
-// api/send-welcome-email.ts — looks done, isn't
+// api/send-welcome-email.ts - looks done, isn't
 export default async function handler(req: Request, res: Response) {
   const { customerEmail, customerName, courseLink } = req.body;
 
@@ -105,7 +105,7 @@ That assumption is almost always wrong the moment the URL is guessable or shows 
 3. **Admin-only action → require a verified admin session**, checked server-side against the database, not just a client-side route guard.
 
 ```typescript
-// api/lib/auth.ts — shared helpers
+// api/lib/auth.ts - shared helpers
 import { timingSafeEqual } from 'crypto';
 
 export function verifyInternalSecret(req: Request): boolean {
@@ -126,13 +126,13 @@ export async function verifyUser(req: Request): Promise<{ id: string; email: str
 ```
 
 ```typescript
-// api/send-welcome-email.ts — fixed
+// api/send-welcome-email.ts - fixed
 export default async function handler(req: Request, res: Response) {
   if (!verifyInternalSecret(req)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  // Even internal calls should pass a structured, validated payload —
+  // Even internal calls should pass a structured, validated payload - 
   // Zod-validate it, don't just trust the shape.
   const parsed = welcomeEmailSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid payload' });
@@ -197,7 +197,7 @@ Vercel serverless functions, or equivalent in this stack), check:
 
 2. Does it derive user identity (userId, email, role) from a verified
    session/token, or does it trust `userId`/`email`/`role` fields from the
-   request body/query string? Flag the latter — that's an impersonation bug.
+   request body/query string? Flag the latter - that's an impersonation bug.
 
 3. For any endpoint that is only ever supposed to be called by our own backend
    (e.g. a webhook handler calling an internal email/notification endpoint),
@@ -212,5 +212,5 @@ Vercel serverless functions, or equivalent in this stack), check:
 
 For each finding, give me: the file and line, a one-line description of the
 exploit, and a concrete fix using patterns already present elsewhere in this
-codebase where possible. Do not fix anything yet — just report.
+codebase where possible. Do not fix anything yet - just report.
 ```

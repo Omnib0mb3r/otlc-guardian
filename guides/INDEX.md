@@ -6,7 +6,7 @@
 > you can hand to an assistant.
 >
 > Source: [The Lazy Developer](https://www.thelazydeveloper.org/resources) · retrieved 2026-07-20.
-> Stored verbatim. Do not edit the bodies; re-pull from the source instead.
+> Stored verbatim from the source, with one change: em and en dashes are replaced by hyphens (house rule, 2026-11-10). Do not edit the bodies otherwise; when re-pulling from the source, apply the same replacement.
 
 ---
 
