@@ -76,7 +76,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-062 | SMOKE-TESTING | `guardian check` passes (exit 0, "correctly installed") when the hook smoke test fails, and never checks the hook is registered |
 | BUG-063 | IN-PROGRESS | HIGH: the PreToolUse hook fails open in every CommonJS project: the ESM scanner cannot load under `"type": "commonjs"` |
 | BUG-064 | IN-PROGRESS | Windows path aliases dodge the watch and protected sets: `::$INDEX_ALLOCATION` on a folder, and 8.3 short names (`CLAUDE~1`) |
-| BUG-065 | OPEN | Settings and guard-file protection miss explicit deletes and replaces: `find -delete`, `rsync --delete`, `tar -x`, `cmd /c rd` and `del` |
+| BUG-065 | IN-PROGRESS | Settings and guard-file protection miss explicit deletes and replaces: `find -delete`, `rsync --delete`, `tar -x`, `cmd /c rd` and `del` |
 | BUG-066 | OPEN | Copies into watched paths not judged: directory sources (`cp -r dir/. .claude/agents/`), `sort -o`, `cmd /c copy` |
 | BUG-067 | OPEN | PowerShell parameter prefixes (`-LiteralP`, `-Pat`, `-Val`) are not recognized; `-EncodedCommand` payload text is never scanned |
 | BUG-068 | SMOKE-TESTING | `guardian scan` exits 0 when it finds injection or secret patterns, so a script or pipeline cannot act on the result |
@@ -878,9 +878,11 @@ Fix direction: strip `::$INDEX_ALLOCATION` (and `:$I30` forms) from every compon
 
 ### BUG-065: Explicit deletes and replaces of the settings or guard files pass
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** IN-PROGRESS · **Found:** 2026-11-10
 
 Re-probe R3 (variants of verifier P2), all allowed with the target spelled out: `find .claude -delete`, `rsync -a --delete empty/ .claude/`, `tar -xf evil.tar .claude/settings.local.json`, `cmd /c rd /s /q .claude`, `cmd.exe /c "del .claude\settings.json"`. The shell reader does not know `find -delete`, `rsync` destinations, `tar -x` members or any `cmd` built-in (see BUG-048 for `cmd /c`). `git clean -fdx` is in the documented "git operations" group. Hook edit; waits.
+
+**Fix in staging (2026-11-10), not yet live.** Staging commit: recorded in `staging/APPLY.md`. In `staging/hooks/injection-guard-hook.mjs`, `commandWrites()`: `find` with `-delete` writes each starting point (`.` when none); `rsync` also writes its destination itself; new `tarWrites()` reads extract mode (`-x` in a cluster, `x` in the old-style first word, `--extract`, `--get`), skips option values (`TAR_VALUE_LETTERS`, `--file`, `--directory`), and writes the named members under `-C`/`--directory`, or that directory when none are named; new `unzipWrites()` does the same with `-d`, and writes nothing for `-l`, `-t`, `-v`, `-Z` or `-p`; `gitWrites()` reads `git clean` without `-n`/`--dry-run` as writing its pathspecs or the working directory; and the new `METADATA_COMMANDS` (`chmod`, `chown`, `chgrp`, `chattr`, `setfacl`, `icacls`, `cacls`, `takeown`) write their operands, found in the blast radius: `chmod 000` on the hook makes node fail to load it, which is the same fail-open as deleting it. The `cmd /c rd` and `del` cases were fixed with BUG-048. Not judged: the content an archive puts into a watched path (no source is readable). Tests: `tests/hook.test.js`, group "explicit deletes and replaces of the settings and guard files (BUG-065)": 16 staged tests, all 16 failing against the staged hook before the fix, plus 11 silent cases (other folders, listing, creating, dry-run, `chmod +x` on a script) that pass on both. The bug stays IN-PROGRESS until Michael applies the staged hook. Smoke test after applying, with prompts on: ask Claude to run `find .claude -name 'settings.local.json' -delete` and see a Guardian prompt.
 
 ### BUG-066: Copy forms the content check does not read
 

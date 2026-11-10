@@ -201,6 +201,15 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Explicit deletes and replaces of the settings and guard files ask
+  (BUG-065).** The Bash reader now sees `find ... -delete`, `rsync` into a
+  directory (with or without `--delete`), `tar -x` and `unzip`
+  extractions (the members they name, or the whole target directory),
+  `git clean` (its pathspecs or the working directory) and permission
+  changes (`chmod`, `chown`, `chattr`, `setfacl`, `icacls` and friends),
+  since a hook made unreadable fails open. `cmd /c rd` and `del` were
+  fixed with BUG-048.
+
 - **Windows path aliases reach the real file (BUG-064).** The hook matches
   a path as the file it reaches: a stream suffix is stripped from every
   folder as well as the file (`.claude::$INDEX_ALLOCATION/...`), a

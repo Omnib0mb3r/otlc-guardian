@@ -342,6 +342,8 @@ const INLINE_CODE_FLAGS = new Set(["-c", "-e", "-p", "-r", "--eval", "--print"])
 const POWERSHELLS       = new Set(["powershell", "pwsh"]);
 const COPY_COMMANDS     = new Set(["cp", "mv", "install", "ln", "rsync", "scp"]);
 const DELETE_COMMANDS   = new Set(["rm", "unlink", "truncate", "shred"]);
+// Commands that change who may read a file; every operand counts as written.
+const METADATA_COMMANDS = new Set(["chmod", "chown", "chgrp", "chattr", "setfacl", "icacls", "cacls", "takeown"]);
 // Commands whose stdout is (a selection of) the files they read.
 const CONTENT_PASSERS   = new Set(["cat", "tac", "head", "tail", "sort", "uniq", "nl", "paste", "cut", "grep", "egrep", "fgrep", "sed", "awk", "type", "more"]);
 const MAX_SHELL_DEPTH   = 4;
@@ -596,6 +598,21 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
       const end = args.findIndex((a, k) => k > exec && (a === ";" || a === "+"));
       commandWrites(args.slice(exec + 1, end < 0 ? args.length : end), dir, ctx);
     }
+    // -delete removes whatever matches under each starting point, and
+    // which files match is not visible in the command (BUG-065).
+    if (args.includes("-delete")) {
+      const first = args.findIndex((a) => /^[-(!]/.test(a));
+      const starts = args.slice(0, first < 0 ? args.length : first);
+      for (const p of starts.length > 0 ? starts : ["."]) add(dir, p);
+    }
+  } else if (name === "tar") {
+    tarWrites(args, dir, ctx);
+  } else if (name === "unzip") {
+    unzipWrites(args, dir, ctx);
+  } else if (METADATA_COMMANDS.has(name)) {
+    // A file made unreadable stops the hook loading it as surely as a
+    // delete does (BUG-065).
+    for (const p of operands) add(dir, p);
   } else if (name === "tee") {
     const append = args.some((a) => /^-[a-z]*a/.test(a) || a === "--append");
     for (const p of operands) add(dir, p, stdin, append);
@@ -617,6 +634,9 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     if (intoDir) for (const src of sources) add(dir, `${dest}/${path.basename(src)}`, [abs(dir, src)]);
     else add(dir, dest, sources.map((s) => abs(dir, s)));
     if (name === "mv") for (const src of sources) add(dir, src); // a moved file is gone from its old path
+    // "rsync src/ dest" fills dest with the contents of src, and --delete
+    // removes what src lacks, so the destination itself is written (BUG-065).
+    if (name === "rsync" && dest) add(dir, dest);
   } else if (name === "git") {
     gitWrites(args, dir, ctx);
   } else if (name === "patch") {
@@ -677,8 +697,73 @@ function gitWrites(args, dir, ctx) {
     paths = operands(dashes >= 0 ? rest.filter((_, k) => k !== dashes) : rest);
   } else if (sub === "apply" || sub === "am") {
     for (const p of operands(rest)) patchWrites(ctx.abs(cwd, p), cwd, ctx);
+  } else if (sub === "clean" && !rest.some((a) => a === "--dry-run" || /^-[a-zA-Z]*n/.test(a))) {
+    // Removes untracked (with -x or -X, ignored) files under each pathspec,
+    // or under the working directory; which ones is not visible (BUG-065).
+    const specs = dashes >= 0 ? rest.slice(dashes + 1) : rest.filter((a, k) => !a.startsWith("-") && !["-e", "--exclude"].includes(rest[k - 1]));
+    paths = specs.length > 0 ? specs : ["."];
   }
   for (const p of paths) add(cwd, p);
+}
+
+// Options of tar that take a value, in a cluster ("-xzf a.tar") or alone.
+const TAR_VALUE_LETTERS = new Set(["f", "C", "T", "X", "b", "H", "K", "N", "V", "g", "F", "L"]);
+
+/**
+ * What `tar` extracts: the members it names, under -C/--directory or the
+ * working directory, or that whole directory when it names none, since
+ * the archive's contents are not visible (BUG-065).
+ */
+function tarWrites(args, dir, ctx) {
+  let extract = false;
+  let into = ".";
+  const members = [];
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    const long = /^--([a-z-]+)(?:=(.*))?$/.exec(a);
+    if (long) {
+      if (long[1] === "extract" || long[1] === "get") extract = true;
+      const value = long[2] ?? (["file", "directory", "files-from", "exclude-from"].includes(long[1]) ? args[++k] : undefined);
+      if (long[1] === "directory" && value !== undefined) into = value;
+    } else if (/^-[a-zA-Z]+$/.test(a) || (k === 0 && /^[a-zA-Z]+$/.test(a))) {
+      // Short options, or the old style "tar xzf a.tar" first word.
+      for (const letter of a.replace(/^-/, "")) {
+        if (letter === "x") extract = true;
+        if (!TAR_VALUE_LETTERS.has(letter)) continue;
+        const value = args[++k];
+        if (letter === "C" && value !== undefined) into = value;
+      }
+    } else {
+      members.push(a);
+    }
+  }
+  if (!extract) return;
+  if (members.length === 0) ctx.add(dir, into);
+  for (const m of members) ctx.add(dir, `${into}/${m}`);
+}
+
+/**
+ * What `unzip` extracts: the members it names, under -d or the working
+ * directory, or that whole directory when it names none. Listing and
+ * testing (-l, -t, -v, -Z) and extracting to stdout (-p) write nothing.
+ */
+function unzipWrites(args, dir, ctx) {
+  let into = ".";
+  let archive = null;
+  let excluding = false;
+  const members = [];
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    if (a === "-d") into = args[++k] ?? into;
+    else if (a === "-x") excluding = true;
+    else if (/^-[a-zA-Z]+$/.test(a)) {
+      if (/[ltvZp]/.test(a.slice(1))) return;
+    } else if (archive === null) archive = a;
+    else if (!excluding) members.push(a);
+  }
+  if (archive === null) return;
+  if (members.length === 0) ctx.add(dir, into);
+  for (const m of members) ctx.add(dir, `${into}/${m}`);
 }
 
 // ---------------------------------------------------------------------------

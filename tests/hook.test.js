@@ -1417,6 +1417,63 @@ describe("PreToolUse hook - Windows path aliases reach the real file (BUG-064)",
   });
 });
 
+describe("PreToolUse hook - explicit deletes and replaces of the settings and guard files (BUG-065)", () => {
+  const bash = (command) => withTempProject((dir) => {
+    for (const [rel, text] of Object.entries({
+      ".claude/settings.json": "{}",
+      ".claude/settings.local.json": "{}",
+      ".claude/hooks/injection-guard-hook.mjs": "// real guard code\n",
+      "security/01-injection-guard.js": "// real guard code\n",
+      "empty/.keep": "",
+    })) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), text);
+    }
+    return runHook(PRE_HOOK, { tool_name: "Bash", cwd: dir, tool_input: { command } });
+  });
+
+  // Re-probe R3, then the same routes to the guard files.
+  for (const command of [
+    "find .claude -delete",
+    "find . -name 'settings*.json' -delete",
+    "find .claude/hooks -type f -delete",
+    "rsync -a --delete empty/ .claude/",
+    "rsync -a empty/ .claude",
+    "tar -xf evil.tar .claude/settings.local.json",
+    "tar xzf evil.tgz",
+    "tar -x -f evil.tar -C .claude",
+    "tar --extract --file=evil.tar --directory=security",
+    "unzip -o evil.zip",
+    "unzip -o evil.zip -d .claude",
+    "git clean -fdx",
+    "git clean -fX .claude",
+    "chmod 000 .claude/hooks/injection-guard-hook.mjs",
+    "chmod -R a-r security",
+    "icacls security\\\\01-injection-guard.js /deny Everyone:R",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = bash(command);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    });
+  }
+
+  for (const command of [
+    "find src -name '*.tmp' -delete",
+    "find .claude -name '*.json'",
+    "rsync -a dist/ backup/",
+    "tar -xf deps.tar -C vendor",
+    "tar -tf evil.tar",
+    "tar -cf out.tar .claude",
+    "unzip -l evil.zip",
+    "unzip evil.zip -d vendor",
+    "git clean -n",
+    "git clean -fd src",
+    "chmod +x scripts/build.sh",
+  ]) {
+    test(`silent: ${command}`, () => expectSilent(bash(command)));
+  }
+});
+
 describe("Web content guard - 1.5.0 hardening", () => {
   test("payload behind 64 KB of filler is caught (old scan window)", () => {
     const out = runHook(POST_HOOK, {
