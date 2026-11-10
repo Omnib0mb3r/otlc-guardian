@@ -40,6 +40,16 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-026 | SMOKE-TESTING | Secret rules missed OpenSSH/EC keys, `github_pat_`, `ghs_`, Slack, Stripe live, Anthropic OAuth |
 | BUG-027 | OPEN | Hook files and scanner are writable by the agent they guard (only settings.json is protected) |
 | BUG-028 | OPEN | Hook command path is cwd-relative; `$CLAUDE_PROJECT_DIR` form untested on Windows |
+| BUG-029 | OPEN | Scanner bypasses: base64 candidate cap can be spent, chained encodings pass, confusables gaps |
+| BUG-030 | OPEN | `AUTHZ-013` misses a textbook IDOR: a 404 and a `user_id` path parameter count as ownership checks |
+| BUG-031 | OPEN | `AUTHZ-011` blind spots: router-level `Depends(get_db)`, substring public-route list, bare `api_key` mention |
+| BUG-032 | OPEN | `AUTHZ-011` flags reads: `GET` plus `db.execute(select(...))` reports HIGH |
+| BUG-033 | OPEN | `WEB-001` misses token constants and JSON-wrapped tokens; flags `refreshCount` |
+| BUG-034 | OPEN | Bash in the PreToolUse matcher makes BUG-028 worse: hook error on every Bash call after a `cd` |
+| BUG-035 | OPEN | "ask" stalls unattended workers in default and acceptEdits modes |
+| BUG-036 | OPEN | Web guard MCP tool names (`mcp__firecrawl__crawl`, `mcp__exa__search`) are probably wrong |
+| BUG-037 | OPEN | `guardian update` hook migration overrides a custom wider matcher and duplicates the `$CLAUDE_PROJECT_DIR` form |
+| BUG-038 | OPEN | Small hook and audit defects: deny message loses the file name, NGINX check cost, CSP comment suppresses WEB-002 |
 
 <!-- INDEX END -->
 
@@ -405,7 +415,7 @@ CHANGELOG entry.
 
 ### BUG-021 to BUG-026 — 2026-11-10 review (fixed in 1.5.0, awaiting live verification)
 
-**Status:** SMOKE-TESTING · **Found:** 2026-11-10 · **Fix applied:** 2026-11-10 (1.5.0, uncommitted)
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10 · **Fix applied:** 2026-11-10 (1.5.0, commit da927d8; BUG-021 and BUG-022 reopened by the independent review `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`, findings 1 to 5, and fixed again in e8481d8, d8346da, 17d049c, 3d18992, a55d884)
 
 Found in one review pass and reproduced against 1.4.1 before any change. Full write-up
 per item in the `CHANGELOG.md` 1.5.0 entry. Regression tests: `tests/hook.test.js`
@@ -418,6 +428,9 @@ Still to verify outside the test suite before marking RESOLVED:
   a Bash append to it prompts, and an edit that removes the hook from
   `.claude/settings.json` prompts.
 - `guardian update` run in one real project, diff reviewed, then the rest.
+- For the review fixes, in the same live session: a full rewrite of a CLAUDE.md that
+  carries Guardian's section is allowed, `grep` over CLAUDE.md quoting a pattern is not
+  blocked, and a `{"disableAllHooks":true}` write to `settings.local.json` prompts.
 
 ### BUG-027 — Hook files and scanner are not write-protected
 
@@ -437,5 +450,94 @@ guard boundary noted in `TODO.md`.
 Code's documented form is `"$CLAUDE_PROJECT_DIR"/.claude/hooks/...`. Not changed in 1.5.0
 because the expansion was not tested on Windows. The hook itself now resolves the project
 root from `CLAUDE_PROJECT_DIR`, so only the launch path is affected.
+
+### BUG-029: Scanner bypasses: base64 candidate cap can be spent, chained encodings pass, confusables gaps
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Review finding 6 (MEDIUM). Source: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`. Logged when 1.5.0 landed; not fixed in it.
+
+- The 64-candidate cap on embedded base64 runs (`MAX_BASE64_CANDIDATES`, `security/01-injection-guard.js`) can be spent on harmless tokens: 65 git SHAs, then a base64 payload. `scanChange()` applies the same cap per changed window, so a large edit can still exhaust it.
+- Decoders run one at a time, so chained encodings pass: `ign&#1086;re` (entity that decodes to a Cyrillic lookalike), `%2569gnore` (double percent-encoding).
+- The confusables table misses U+0261 (Latin script g) and Armenian `ո`.
+
+### BUG-030: `AUTHZ-013` misses a textbook IDOR: a 404 and a `user_id` path parameter count as ownership checks
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Review finding 7 (HIGH). Source: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`. Logged when 1.5.0 landed; not fixed in it.
+
+- A handler that returns 404 when the row is missing is treated as checking ownership (`security/03-audit.js` around line 690), though a 404 says nothing about whose row it is.
+- A `user_id:` path parameter also counts as an ownership check (around line 662), though it is caller-supplied.
+
+### BUG-031: `AUTHZ-011` blind spots: router-level `Depends(get_db)`, substring public-route list, bare `api_key` mention
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Review finding 8 (HIGH). Source: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`. Logged when 1.5.0 landed; not fixed in it.
+
+- A router-level `Depends(get_db)` silences the whole file, though a database dependency is not auth.
+- The public-route list matches substrings, so `/api/tokens/{id}` is treated as public.
+- Any mention of `api_key` counts as auth.
+
+### BUG-032: `AUTHZ-011` flags reads: `GET` plus `db.execute(select(...))` reports HIGH
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Review finding 9 (MEDIUM). Source: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`. Logged when 1.5.0 landed; not fixed in it.
+
+- A read-only `GET` handler that runs `db.execute(select(...))` is reported as an unauthenticated side effect at HIGH.
+
+### BUG-033: `WEB-001` misses token constants and JSON-wrapped tokens; flags `refreshCount`
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Review finding 10 (MEDIUM). Source: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`. Logged when 1.5.0 landed; not fixed in it.
+
+- Missed: `setItem(TOKEN_KEY, accessToken)` and `setItem("auth", JSON.stringify({accessToken}))`.
+- Falsely flagged: `setItem("refreshCount", "1")`.
+
+### BUG-034: Bash in the PreToolUse matcher makes BUG-028 worse: hook error on every Bash call after a `cd`
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Review finding 11 (MEDIUM). Related: BUG-028. Source: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`. Logged when 1.5.0 landed; not fixed in it.
+
+- The hook command path is cwd-relative (`node .claude/hooks/injection-guard-hook.mjs`). With Bash in the matcher, every Bash call made after the session changes directory fails to launch the hook and shows a hook error, so the hook does not run for those calls.
+
+### BUG-035: "ask" stalls unattended workers in default and acceptEdits modes
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Review finding 12 (MEDIUM). Source: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`. Logged when 1.5.0 landed; not fixed in it.
+
+- Only `bypassPermissions` mode turns the hook's "ask" into "deny". An unattended worker running in default or acceptEdits mode waits on a prompt nobody will answer. Needs a way to tell an attended session from an unattended one, or a policy setting. Relates to the hard-no hook design in `TODO.md` ("must not disturb unattended workers").
+
+### BUG-036: Web guard MCP tool names (`mcp__firecrawl__crawl`, `mcp__exa__search`) are probably wrong
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Review finding 13 (LOW). Source: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`. Logged when 1.5.0 landed; not fixed in it.
+
+- The PostToolUse matcher (`bin/guardian.js`, `.claude/settings.json`) names `mcp__firecrawl__crawl` and `mcp__exa__search`, which probably do not match the servers' real tool names, so the hook would not fire on them. Fix: match on the `mcp__firecrawl__` and `mcp__exa__` prefixes. Docs describe the matcher as registered today (finding 15 commit).
+
+### BUG-037: `guardian update` hook migration overrides a custom wider matcher and duplicates the `$CLAUDE_PROJECT_DIR` form
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Review finding 14 (LOW). Source: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`. Logged when 1.5.0 landed; not fixed in it.
+
+- The migration replaces a matcher the user had widened on purpose.
+- An entry written in the `"$CLAUDE_PROJECT_DIR"/.claude/hooks/...` form is not recognized as Guardian's, so a second entry is added.
+
+### BUG-038: Small hook and audit defects: deny message loses the file name, NGINX check cost, CSP comment suppresses WEB-002
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Review finding 16 (LOW). Source: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`. Logged when 1.5.0 landed; not fixed in it.
+
+- The hook's deny message truncates a long path from the end (`safeEcho`), so the file name is cut off. Truncate from the start instead.
+- The `NGINX_SERVER_BLOCK` check's cost grows with the file size.
+- A comment that mentions ContentSecurityPolicy suppresses `WEB-002`.
 
 <!-- DETAILS END -->
