@@ -277,8 +277,10 @@ async def chat(body: ChatRequest, request: Request):
 > (Tier 1 in the README). Jump to Step 7.
 
 Guardian installs two Claude Code hooks. The PreToolUse hook denies a
-write that carries a CRITICAL injection pattern into a watched file and
-warns on lower severities. The PostToolUse hook runs after the fetch, so
+write that adds a CRITICAL injection pattern to a watched file and warns
+on lower severities. It compares the write with the file on disk, so
+patterns a file already quotes (Guardian's own CLAUDE.md section does)
+do not block a rewrite; a new copy of one does. The PostToolUse hook runs after the fetch, so
 it can only warn. If a hook itself fails, the tool call is not blocked,
 but the failure is printed and reported as a hook error. Both are wired up
 automatically by `guardian init` and registered in `.claude/settings.json`.

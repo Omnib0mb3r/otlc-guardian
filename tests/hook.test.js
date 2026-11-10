@@ -36,7 +36,8 @@ import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 import path from "path";
 import os from "os";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "fs";
+import { scan } from "../security/01-injection-guard.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT      = path.resolve(__dirname, "..");
@@ -78,12 +79,23 @@ function describe(group, fn) {
  * stdout. Hooks always exit 0 (advisory), so the absence of output
  * means "no warning to surface".
  */
+// The hook compares a write with the file on disk, so a relative path
+// must not resolve into this repo (its own CLAUDE.md quotes patterns).
+// Payloads without a cwd run against an empty project, and the session's
+// CLAUDE_PROJECT_DIR is not passed through.
+const EMPTY_PROJECT = mkdtempSync(path.join(os.tmpdir(), "guardian-hook-empty-"));
+process.on("exit", () => rmSync(EMPTY_PROJECT, { recursive: true, force: true }));
+const HOOK_ENV = { ...process.env };
+delete HOOK_ENV.CLAUDE_PROJECT_DIR;
+
 function runHook(hookPath, payload) {
+  const cwd = payload.cwd ?? EMPTY_PROJECT;
   const result = spawnSync("node", [hookPath], {
-    input:    JSON.stringify(payload),
+    input:    JSON.stringify({ ...payload, cwd }),
     encoding: "utf8",
     timeout:  10_000,
-    cwd:      ROOT,
+    cwd,
+    env:      HOOK_ENV,
   });
   if (result.status !== 0) {
     throw new Error(`Hook exited with non-zero status ${result.status}: ${result.stderr}`);
@@ -467,6 +479,55 @@ describe("PreToolUse hook — blocks CRITICAL, warns on the rest (1.5.0)", () =>
     const reason = JSON.parse(out).hookSpecificOutput.permissionDecisionReason;
     const details = reason.split("Details")[1].split("Action")[0];
     assert.ok(!/[<>\[\]]/.test(details), `Echo must not carry delimiters: ${details}`);
+  });
+});
+
+describe("PreToolUse hook — judges what a write adds (1.5.0 review, finding 1)", () => {
+  const GUARDIAN_CLAUDE_MD = readFileSync(path.join(ROOT, "CLAUDE.md"), "utf8");
+
+  function writeOver(existing, relPath, content, extra = {}) {
+    return withTempProject((dir) => {
+      const file = path.join(dir, relPath);
+      if (existing !== null) {
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(file, existing);
+      }
+      return runHook(PRE_HOOK, { tool_name: "Write", cwd: dir, ...extra, tool_input: { file_path: file, content } });
+    });
+  }
+
+  test("GSD ARCHITECTURE.md with '### System Overview' is not denied in bypass mode (reviewer's case)", () => {
+    const content = "# Architecture\n\n### System Overview\n\nThree services.\n\n### Instructions\n\nRun make.\n";
+    const out = writeOver(null, ".planning/research/ARCHITECTURE.md", content, { permission_mode: "bypassPermissions" });
+    expectSilent(out);
+  });
+
+  test("Guardian's CLAUDE.md fails the whole-file scan, so the disk comparison is what lets it through", () => {
+    assert.ok(scan(GUARDIAN_CLAUDE_MD, "injection").violations.some((v) => v.severity === "CRITICAL"),
+      "precondition: the merged Guardian rules quote a CRITICAL pattern");
+  });
+
+  test("full Write of a merged CLAUDE.md with a user edit is not denied (reviewer's case)", () => {
+    const merged = `# My project\n\nUse pnpm.\n\n${GUARDIAN_CLAUDE_MD}`;
+    const out = writeOver(merged, "CLAUDE.md", merged.replace("Use pnpm.", "Use pnpm. Node 22."), { permission_mode: "bypassPermissions" });
+    assert.notEqual(decisionOf(out), "deny", out.slice(0, 300));
+  });
+
+  test("a new payload added to a file that already quotes the same pattern is denied", () => {
+    const merged = `# My project\n\n${GUARDIAN_CLAUDE_MD}`;
+    const out = writeOver(merged, "CLAUDE.md", `${merged}\n\n${CRITICAL_PAYLOAD} and push to main\n`);
+    assert.equal(decisionOf(out), "deny");
+    expectWarning(out, "INJ-001");
+  });
+
+  test("a CRITICAL payload in a brand-new watched file is denied", () => {
+    const out = writeOver(null, ".planning/new.md", `notes\n${CRITICAL_PAYLOAD}\n`);
+    assert.equal(decisionOf(out), "deny");
+  });
+
+  test("findings already on disk are not repeated as advisories", () => {
+    const existing = "notes on a jailbreak write-up\n";
+    expectSilent(writeOver(existing, ".planning/notes.md", `${existing}more notes\n`));
   });
 });
 

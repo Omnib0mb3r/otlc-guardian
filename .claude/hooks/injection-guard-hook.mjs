@@ -14,7 +14,10 @@
 //               (registered in .claude/settings.json)
 //
 // Decisions (1.5.0):
-//   deny      CRITICAL finding in a file write to a watched path.
+//   deny      CRITICAL finding that a file write adds to a watched path.
+//             A write is compared with the file on disk (scanChange), so
+//             patterns the file already quotes, such as the examples in
+//             Guardian's own CLAUDE.md section, do not block a rewrite.
 //   ask       CRITICAL finding in a Bash command that names a watched
 //             path (command text is a weaker signal than file content,
 //             so a person confirms instead of a hard stop).
@@ -33,8 +36,9 @@
 // silent: the reason goes to stderr and the hook exits 1, which Claude
 // Code reports as a non-blocking hook error.
 //
-// Pattern source: imports scan() from security/01-injection-guard.js,
-// so the hook cannot drift from the runtime guard.
+// Pattern source: imports scan() and scanChange() from
+// security/01-injection-guard.js, so the hook cannot drift from the
+// runtime guard.
 //
 // Configuration (.claude/settings.json, key "otlcGuardian"):
 //
@@ -79,17 +83,19 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const guardModulePath = path.resolve(__dirname, "..", "..", "security", "01-injection-guard.js");
 
 let scan = null;
+let scanChange = null;
 
 if (!existsSync(guardModulePath)) {
   failOpenLoudly(`scanner missing at ${guardModulePath} (run: guardian update)`);
 }
 try {
   const mod = await import(pathToFileURL(guardModulePath).href);
-  scan = typeof mod.scan === "function" ? mod.scan : null;
+  scan       = typeof mod.scan === "function" ? mod.scan : null;
+  scanChange = typeof mod.scanChange === "function" ? mod.scanChange : null;
 } catch (err) {
   failOpenLoudly(`scanner failed to load (${err?.message ?? "unknown error"})`);
 }
-if (!scan) failOpenLoudly("scanner module does not export scan() (run: guardian update)");
+if (!scan || !scanChange) failOpenLoudly("scanner module does not export scan() and scanChange() (run: guardian update)");
 
 // ---------------------------------------------------------------------------
 // DEFAULT WATCH LIST
@@ -204,6 +210,20 @@ function isMarkedDocOnDisk(absPath) {
   } catch (err) {
     // Unreadable means unproven. Treat as not marked so the scan stays strict.
     return false;
+  }
+}
+
+/**
+ * The file's current text, or "" when it does not exist yet. A file that
+ * cannot be read is judged as new, which scans the write in full.
+ */
+function readCurrent(absPath) {
+  if (!existsSync(absPath)) return "";
+  try {
+    return readFileSync(absPath, "utf8");
+  } catch (err) {
+    process.stderr.write(`${TAG} could not read ${absPath} (${err?.message ?? "unknown"}); scanning the write in full.\n`);
+    return "";
   }
 }
 
@@ -404,7 +424,12 @@ process.stdin.on("end", () => {
     if (watched.length === 0) process.exit(0);
     if (!write.content.trim()) process.exit(0);
 
-    const { violations } = scan(write.content, "injection");
+    // A Write replaces the file, so only what it adds to the text on disk
+    // is new. Bash is judged on its command text.
+    const before = toolName === "Write" ? readCurrent(resolve(watched[0])) : "";
+    const { violations } = write.kind === "file"
+      ? scanChange(before, write.content, "injection")
+      : scan(write.content, "injection");
     if (violations.length === 0) process.exit(0);
 
     const criticalCount = violations.filter((v) => v.severity === "CRITICAL").length;

@@ -101,8 +101,10 @@ INJECTION_PATTERNS: list[InjectionPattern] = [
     InjectionPattern("INJ-016", re.compile(r"\[SYSTEM\]",                                 re.I), "CRITICAL", "SYSTEM tag injection"),
     InjectionPattern("INJ-017", re.compile(r"\[INST\]",                                   re.I), "CRITICAL", "INST tag injection"),
     InjectionPattern("INJ-018", re.compile(r"<<\s*SYS\s*>>",                              re.I), "CRITICAL", "SYS tag injection"),
-    InjectionPattern("INJ-019", re.compile(r"###\s*(?:System|Instruction|Prompt)",        re.I), "CRITICAL", "Markdown system tag"),
-    InjectionPattern("INJ-020", re.compile(r"---\s*SYSTEM",                               re.I), "CRITICAL", "YAML system override"),
+    # INJ-019 / INJ-020 match prompt-template delimiters ("### Instruction:",
+    # "--- SYSTEM ---"), not ordinary headings or YAML front matter.
+    InjectionPattern("INJ-019", re.compile(r"#{3,6}[ \t]*(?:system(?:[ \t]+prompt)?|instructions?|prompt)[ \t]*:", re.I), "CRITICAL", "Markdown system tag"),
+    InjectionPattern("INJ-020", re.compile(r"-{3,}[ \t]*system(?:[ \t]+(?:prompt|message|instructions?))?[ \t]*(?:-{3,}|:|$)", re.I | re.M), "CRITICAL", "YAML system override"),
     InjectionPattern("INJ-021", re.compile(r"do\s+anything\s+now",                        re.I), "HIGH",     "DAN variant"),
     InjectionPattern("INJ-022", re.compile(r"DAN\s+mode",                                 re.I), "HIGH",     "DAN mode"),
     InjectionPattern("INJ-023", re.compile(r"developer\s+mode",                           re.I), "HIGH",     "Developer mode jailbreak"),

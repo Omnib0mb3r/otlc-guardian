@@ -13,9 +13,23 @@ project (each project picks it up when `guardian update` is run there).
 ### Security
 
 - **The PreToolUse hook can now block (BUG-022).** It was advisory only.
-  A CRITICAL injection pattern in a write to a watched path is denied. A
-  Bash command that carries one and names a watched path asks for
+  A CRITICAL injection pattern that a write adds to a watched path is
+  denied. A Bash command that carries one and names a watched path asks for
   confirmation. HIGH and MEDIUM findings stay advisory.
+- **A write is judged by what it adds (review finding 1).** The first deny
+  build scanned the whole new content, so a rewrite of any file that
+  already quoted a pattern was denied, including every CLAUDE.md that
+  `init` had merged Guardian's rules into. The hook now compares the write
+  with the file on disk through the new `scanChange()` export: a finding
+  counts only when the change adds a matched string that was not there
+  before, view by view (plain, decoded, folded). A second copy of an
+  already-quoted pattern is still new.
+- **INJ-019 / INJ-020 match template delimiters, not headings (review
+  finding 1).** `### System Overview`, `### Instructions` and
+  `### Prompt Injection Defense` scanned CRITICAL, and so did YAML front
+  matter that began with a `system` key. INJ-019 now needs the colon form
+  (`### Instruction:`, `### System Prompt:`) and INJ-020 needs a delimited
+  `--- SYSTEM ---`, `--- SYSTEM:` or `--- SYSTEM` alone on its line.
 - **A payload can no longer exempt itself (BUG-021).** The
   `otlc-guardian:doc` marker inside the content being written used to skip
   the scan, and the warning text told the model about the marker. The

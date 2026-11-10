@@ -48,8 +48,13 @@ export const INJECTION_PATTERNS = [
   { pattern: /\[SYSTEM\]/i,                                          severity: "CRITICAL", id: "INJ-016" },
   { pattern: /\[INST\]/i,                                            severity: "CRITICAL", id: "INJ-017" },
   { pattern: /<<\s*SYS\s*>>/i,                                       severity: "CRITICAL", id: "INJ-018" },
-  { pattern: /###\s*(?:System|Instruction|Prompt)/i,                 severity: "CRITICAL", id: "INJ-019" },
-  { pattern: /---\s*SYSTEM/i,                                        severity: "CRITICAL", id: "INJ-020" },
+  // INJ-019 / INJ-020 match the prompt-template delimiter forms
+  // ("### Instruction:", "--- SYSTEM ---"), not ordinary headings. The
+  // 1.4 forms matched "### System Overview", "### Instructions" and any
+  // YAML front matter whose first key starts with "system", which made
+  // the hook deny legitimate writes to planning files.
+  { pattern: /#{3,6}[ \t]*(?:system(?:[ \t]+prompt)?|instructions?|prompt)[ \t]*:/i, severity: "CRITICAL", id: "INJ-019" },
+  { pattern: /-{3,}[ \t]*system(?:[ \t]+(?:prompt|message|instructions?))?[ \t]*(?:-{3,}|:|$)/im, severity: "CRITICAL", id: "INJ-020" },
 
   // Jailbreak classics
   { pattern: /do\s+anything\s+now/i,                                 severity: "HIGH",     id: "INJ-021" },
@@ -69,34 +74,36 @@ export const INJECTION_PATTERNS = [
   // so the cost is linear in the input. It is also more precise: the
   // keyword has to sit inside one comment, where the regex could span
   // from one comment into the next. `pattern` is kept as a cheap
-  // descriptor for callers that report `pattern.source`.
-  { pattern: /<!--/,  match: commentMatcher("<!--", "-->"), severity: "MEDIUM", id: "INJ-027" },
-  { pattern: /\/\*/,  match: commentMatcher("/*", "*/"),    severity: "MEDIUM", id: "INJ-028" },
+  // descriptor for callers that report `pattern.source`. `matchAll`
+  // yields every hit, for scanChange().
+  { pattern: /<!--/,  ...commentMatcher("<!--", "-->"), severity: "MEDIUM", id: "INJ-027" },
+  { pattern: /\/\*/,  ...commentMatcher("/*", "*/"),    severity: "MEDIUM", id: "INJ-028" },
 ];
 
 /**
  * Builds a linear-time matcher for "comment containing a control word".
- * Returns the full comment text on a hit, or null.
+ * `match` returns the first such comment or null; `matchAll` yields each.
  * @param {string} open  - comment opener, e.g. "<!--"
  * @param {string} close - comment closer, e.g. "-->"
- * @returns {(text: string) => string | null}
+ * @returns {{ match: (text: string) => string | null, matchAll: (text: string) => Generator<string> }}
  */
 function commentMatcher(open, close) {
   const keyword = /ignore|override|system/i;
-  return (text) => {
+  function* matchAll(text) {
     let pos = 0;
     for (;;) {
       const start = text.indexOf(open, pos);
-      if (start < 0) return null;
+      if (start < 0) return;
       const end = text.indexOf(close, start + open.length);
       // No closer anywhere after this opener means no later opener can
       // be closed either, so the search is over.
-      if (end < 0) return null;
+      if (end < 0) return;
       const comment = text.slice(start, end + close.length);
-      if (keyword.test(comment)) return comment;
+      if (keyword.test(comment)) yield comment;
       pos = end + close.length;
     }
-  };
+  }
+  return { match: (text) => matchAll(text).next().value ?? null, matchAll };
 }
 
 // ---------------------------------------------------------------------------
@@ -202,8 +209,9 @@ function decodeHtmlEntities(text) {
 }
 
 /**
- * Normalizes text before scanning and returns every decoded view of it,
- * joined by newlines, so the patterns run over all of them in one pass.
+ * Every decoded view of the text, always in this order. A view that does
+ * not apply is the empty string, so view N of one text can be compared
+ * with view N of another (scanChange() relies on that).
  *
  * Views:
  *   1. NFKC-normalized text with invisible characters removed
@@ -212,39 +220,53 @@ function decodeHtmlEntities(text) {
  *   4. Percent-decoded (tolerant of stray "%")
  *   5. HTML entities decoded
  *   6. Markdown emphasis markers removed ("**previous**" -> "previous")
- *   7. Each embedded base64 run that decodes to printable text
+ *   7. The whole input as base64 (whitespace-wrapped payloads)
+ *   8. Each embedded base64 run that decodes to printable text
  *
+ * @param {string} text
+ * @returns {string[]}
+ */
+function scanViews(text) {
+  const base   = text.normalize("NFKC").replace(INVISIBLE_STRIP_PATTERN, "");
+  const tagRun = text.match(TAG_CHAR_PATTERN);
+
+  const compact = text.replace(/\s/g, "");
+  const wholeBase64 = compact.length <= 20000 && /^[A-Za-z0-9+/_-]{20,}={0,2}$/.test(compact)
+    ? decodeBase64Printable(compact) ?? ""
+    : "";
+
+  const decodedRuns = [];
+  let candidates = 0;
+  for (const run of text.matchAll(BASE64_RUN_PATTERN)) {
+    if (++candidates > MAX_BASE64_CANDIDATES) break;
+    const decoded = decodeBase64Printable(run[0]);
+    if (decoded) decodedRuns.push(decoded);
+  }
+
+  return [
+    base,
+    tagRun ? tagRun.map((ch) => String.fromCodePoint(ch.codePointAt(0) - 0xE0000)).join("") : "",
+    base.replace(CONFUSABLE_PATTERN, (ch) => CONFUSABLES.get(ch) ?? ch),
+    percentDecodeTolerant(base),
+    decodeHtmlEntities(base),
+    base.replace(/[*_`~]+/g, ""),
+    wholeBase64,
+    decodedRuns.join("\n"),
+  ];
+}
+
+/**
+ * Normalizes text before scanning: the distinct views of it, joined by
+ * newlines, so the patterns run over all of them in one pass.
  * @param {string} text
  * @returns {string} normalized text ready for pattern scanning
  */
 function normalizeForScan(text) {
-  const base  = text.normalize("NFKC").replace(INVISIBLE_STRIP_PATTERN, "");
+  const [base, ...rest] = scanViews(text);
   const views = [base];
-  const addView = (view) => {
-    if (view && view !== base && !views.includes(view)) views.push(view);
-  };
-
-  const tagRun = text.match(TAG_CHAR_PATTERN);
-  if (tagRun) {
-    addView(tagRun.map((ch) => String.fromCodePoint(ch.codePointAt(0) - 0xE0000)).join(""));
+  for (const view of rest) {
+    if (view && !views.includes(view)) views.push(view);
   }
-
-  addView(base.replace(CONFUSABLE_PATTERN, (ch) => CONFUSABLES.get(ch) ?? ch));
-  addView(percentDecodeTolerant(base));
-  addView(decodeHtmlEntities(base));
-  addView(base.replace(/[*_`~]+/g, ""));
-
-  // Whole-input base64 (whitespace-wrapped payloads), then embedded runs.
-  const compact = text.replace(/\s/g, "");
-  if (compact.length <= 20000 && /^[A-Za-z0-9+/_-]{20,}={0,2}$/.test(compact)) {
-    addView(decodeBase64Printable(compact));
-  }
-  let candidates = 0;
-  for (const run of text.matchAll(BASE64_RUN_PATTERN)) {
-    if (++candidates > MAX_BASE64_CANDIDATES) break;
-    addView(decodeBase64Printable(run[0]));
-  }
-
   return views.join("\n");
 }
 
@@ -422,6 +444,109 @@ export function scan(text, mode = "all") {
   const hasCritical = violations.some((v) => v.severity === "CRITICAL");
 
   return { violations, hasSecrets, hasCritical };
+}
+
+// ---------------------------------------------------------------------------
+// CHANGE SCANNER
+// ---------------------------------------------------------------------------
+
+/**
+ * Characters kept on each side of a change. A pattern that joins new text
+ * to the text around it ("...previous" on disk, "instructions" added) is
+ * seen whole as long as the old part sits within this distance.
+ */
+const CHANGE_CONTEXT = 2048;
+
+const INVISIBLE_UNICODE_GLOBAL = new RegExp(INVISIBLE_UNICODE_PATTERN.source, "gu");
+
+/** Every matched string of one rule in one view. */
+function* ruleMatches(rule, view) {
+  if (!view) return;
+  if (rule.matchAll) {
+    yield* rule.matchAll(view);
+    return;
+  }
+  const flags = rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`;
+  for (const m of view.matchAll(new RegExp(rule.pattern.source, flags))) yield m[0];
+}
+
+/** Trims the common prefix and suffix, keeping CHANGE_CONTEXT around the change. */
+function changedWindows(before, after) {
+  const shorter = Math.min(before.length, after.length);
+  let head = 0;
+  while (head < shorter && before.charCodeAt(head) === after.charCodeAt(head)) head++;
+  let tail = 0;
+  while (tail < shorter - head && before.charCodeAt(before.length - 1 - tail) === after.charCodeAt(after.length - 1 - tail)) tail++;
+  const from = Math.max(0, head - CHANGE_CONTEXT);
+  const keep = Math.max(0, tail - CHANGE_CONTEXT);
+  return [before.slice(from, before.length - keep), after.slice(from, after.length - keep)];
+}
+
+/**
+ * The first string a rule matches in `after` more often than in `before`,
+ * view by view, or null when the change adds no match of that rule.
+ */
+function firstAddedMatch(rule, beforeViews, afterViews) {
+  for (let i = 0; i < afterViews.length; i++) {
+    const seen = new Map();
+    for (const m of ruleMatches(rule, beforeViews[i])) seen.set(m, (seen.get(m) ?? 0) + 1);
+    for (const m of ruleMatches(rule, afterViews[i])) {
+      const left = seen.get(m) ?? 0;
+      if (left === 0) return m;
+      seen.set(m, left - 1);
+    }
+  }
+  return null;
+}
+
+/**
+ * Scans what a change adds to a text: the findings in `after` that
+ * `before` does not already account for.
+ *
+ * `scan()` reports one finding per rule, so judging a whole file would
+ * either flag every edit to a file that already quotes a pattern (a
+ * security doc, Guardian's own CLAUDE.md) or, judged by rule id, let a
+ * second copy of the same rule through. Here each rule's matched strings
+ * are counted per decoded view, and a finding is new when some view of
+ * `after` holds a matched string more often than the same view of
+ * `before`. Removing a pattern is never a finding.
+ *
+ * Only the changed region plus CHANGE_CONTEXT on each side is compared,
+ * so a small edit to a large file costs a small scan, and a payload
+ * appended past the 1 MB scan limit of the whole file is still seen.
+ *
+ * @param {string} before - text as it is now ("" for a new file)
+ * @param {string} after  - text as it will be
+ * @param {'injection'|'secrets'|'all'} mode
+ * @returns {{ violations: Array, hasSecrets: boolean, hasCritical: boolean }}
+ */
+export function scanChange(before, after, mode = "all") {
+  if (typeof after !== "string") return { violations: [], hasSecrets: false, hasCritical: false };
+  const [oldWindow, newWindow] = changedWindows(typeof before === "string" ? before : "", after);
+
+  const { violations } = scan(newWindow, mode);
+  const oldViews = scanViews(oldWindow.slice(0, MAX_SCAN_LENGTH));
+  const newViews = scanViews(newWindow.slice(0, MAX_SCAN_LENGTH));
+  const rules    = new Map([...INJECTION_PATTERNS, ...SECRET_PATTERNS].map((r) => [r.id, r]));
+  const countInvisible = (text) => text.match(INVISIBLE_UNICODE_GLOBAL)?.length ?? 0;
+
+  const added = [];
+  for (const v of violations) {
+    if (v.id === "INJ-OVERSIZE") {
+      added.push(v); // unscanned text is never "already accounted for"
+    } else if (v.id === "INJ-UNICODE") {
+      if (countInvisible(newWindow) > countInvisible(oldWindow)) added.push(v);
+    } else {
+      const matched = firstAddedMatch(rules.get(v.id), oldViews, newViews);
+      if (matched !== null) added.push(v.type === "secret" ? v : { ...v, matched });
+    }
+  }
+
+  return {
+    violations:  added,
+    hasSecrets:  added.some((v) => v.type === "secret"),
+    hasCritical: added.some((v) => v.severity === "CRITICAL"),
+  };
 }
 
 // ---------------------------------------------------------------------------
