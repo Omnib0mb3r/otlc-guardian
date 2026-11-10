@@ -201,6 +201,13 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Copies of folders, and `sort -o` and `uniq` outputs, are judged by
+  content (BUG-066).** A folder copied into a watched path (`cp -r
+  staged/. .claude/agents/`, `mv`, `rsync`, `Copy-Item -Recurse`,
+  `src/*`) is judged file by file where each file lands, up to 1,000
+  files. `sort -o FILE`, `--output=FILE` and `uniq IN OUT` are read as
+  writes of their input. `cmd /c copy` was fixed with BUG-048.
+
 - **Explicit deletes and replaces of the settings and guard files ask
   (BUG-065).** The Bash reader now sees `find ... -delete`, `rsync` into a
   directory (with or without `--delete`), `tar -x` and `unzip`

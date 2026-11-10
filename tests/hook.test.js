@@ -1474,6 +1474,64 @@ describe("PreToolUse hook - explicit deletes and replaces of the settings and gu
   }
 });
 
+describe("PreToolUse hook - copies of folders and sort/uniq outputs are judged by content (BUG-066)", () => {
+  const run = (tool, command, files, existing = []) => withTempProject((dir) => {
+    for (const rel of existing) mkdirSync(path.join(dir, rel), { recursive: true });
+    for (const [rel, text] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), text);
+    }
+    return runHook(PRE_HOOK, { tool_name: tool, cwd: dir, tool_input: { command } });
+  });
+  const BAD = { "staged/a.md": "fine\n", "staged/sub/b.md": `${CRITICAL_PAYLOAD}\n` };
+  const GOOD = { "staged/a.md": "fine\n", "staged/sub/b.md": "Use pnpm.\n" };
+
+  // Re-probe R4, then the forms around it.
+  for (const [tool, command, existing] of [
+    ["Bash", "cp -r staged/. .claude/agents/", [".claude/agents"]],
+    ["Bash", "cp -r staged .planning", [".planning"]],
+    ["Bash", "cp -R staged .planning/new", [".planning"]],
+    ["Bash", "cp -a staged/ .claude/agents", []],
+    ["Bash", "mv staged .claude/agents", [".claude"]],
+    ["Bash", "rsync -a staged/ .claude/agents/", []],
+    ["Bash", "rsync -a staged .planning", [".planning"]],
+    ["PowerShell", "Copy-Item -Recurse staged -Destination .claude\\agents", [".claude/agents"]],
+    ["PowerShell", "Copy-Item staged\\* .planning -Recurse", [".planning"]],
+  ]) {
+    stagedOnly(`${tool}: a folder copy carrying a payload is denied: ${command}`, () => {
+      const out = run(tool, command, BAD, existing);
+      assert.equal(decisionOf(out), "deny", out.slice(0, 200));
+      expectWarning(out, "b.md");
+    });
+  }
+
+  for (const command of [
+    "sort notes/x.md -o CLAUDE.md",
+    "sort -o CLAUDE.md notes/x.md",
+    "sort --output=AGENTS.md notes/x.md",
+    "sort -oCLAUDE.md notes/x.md",
+    "cat notes/x.md | sort -o CLAUDE.md",
+    "uniq notes/x.md CLAUDE.md",
+  ]) {
+    stagedOnly(`Bash: ${command} is denied`, () => {
+      const out = run("Bash", command, { "notes/x.md": `${CRITICAL_PAYLOAD}\n` });
+      assert.equal(decisionOf(out), "deny", out.slice(0, 200));
+    });
+  }
+
+  for (const [command, files, existing] of [
+    ["cp -r staged/. .claude/agents/", GOOD, [".claude/agents"]],
+    ["cp -r staged backup", BAD, []],
+    ["sort notes/x.md -o notes/sorted.md", { "notes/x.md": `${CRITICAL_PAYLOAD}\n` }, []],
+    ["sort -r CLAUDE.md", { "CLAUDE.md": "b\na\n" }, []],
+    ["uniq notes/x.md", { "notes/x.md": `${CRITICAL_PAYLOAD}\n` }, []],
+  ]) {
+    test(`Bash: silent: ${command}${files === GOOD ? " (clean folder)" : ""}`, () => {
+      expectSilent(run("Bash", command, files, existing));
+    });
+  }
+});
+
 describe("Web content guard - 1.5.0 hardening", () => {
   test("payload behind 64 KB of filler is caught (old scan window)", () => {
     const out = runHook(POST_HOOK, {

@@ -55,7 +55,7 @@ Specifically:
   - a PowerShell tool command is read only for redirections and Guardian's list of cmdlets, so `git`, `bash -c`, `node -e` and `curl -o` typed into the PowerShell tool are not read (BUG-048; fix staged in `staging/`, not yet live);
   - PowerShell parameter prefixes (`-LiteralP`, `-Pat`, `-Val`) are not recognized as the parameters they abbreviate (BUG-067);
   - the script inside `powershell -EncodedCommand` is decoded and read for write targets, but its text is not scanned for patterns (BUG-067);
-  - copies whose content is not read: a directory source (`cp -r staged/. .claude/agents/`), `sort -o`, `cmd /c copy` (BUG-066);
+  - copies whose content is not read: a directory source (`cp -r staged/. .claude/agents/`), `sort -o`, `cmd /c copy` (BUG-066; fix staged in `staging/`, not yet live);
   - `security/package.json`, which keeps the scanner loadable in a CommonJS project, is not in the protected set, so a write that changes its `type` switches the scanner off (BUG-063; fix staged in `staging/`, not yet live).
 
   Detection is also pattern-based, so a reworded instruction with no known pattern passes. An agent that is already compromised can use any of these routes. They belong to the planned hard-no hook, which DevNeural hosts and which judges a command by its effect instead of its text (see `TODO.md`, "Self-Growing Gate spec").

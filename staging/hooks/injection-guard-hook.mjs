@@ -64,7 +64,7 @@
 //   the self-protection below guards.
 // ============================================================
 
-import { readFileSync, existsSync, statSync, openSync, readSync, closeSync, realpathSync } from "node:fs";
+import { readFileSync, existsSync, statSync, openSync, readSync, closeSync, realpathSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -308,6 +308,65 @@ function readSource(absPath) {
     process.stderr.write(`${TAG} could not read copy source ${absPath} (${err?.message ?? "unknown"}).\n`);
     return "";
   }
+}
+
+/**
+ * The regular files under a folder, as paths relative to it: every level
+ * when `deep`, else the top level only. At most MAX_TREE_FILES; the rest
+ * is reported on stderr and not judged. Links are not followed. null when
+ * `absDir` is not a folder.
+ */
+const MAX_TREE_FILES = 1000;
+function treeFiles(absDir, deep) {
+  if (!statSync(absDir, { throwIfNoEntry: false })?.isDirectory()) return null;
+  const files = [];
+  const pending = [""];
+  while (pending.length > 0) {
+    const rel = pending.pop();
+    let entries;
+    try {
+      entries = readdirSync(path.join(absDir, rel), { withFileTypes: true });
+    } catch (err) {
+      process.stderr.write(`${TAG} could not list copy source ${path.join(absDir, rel)} (${err?.message ?? "unknown"}); its files are not judged.\n`);
+      continue;
+    }
+    for (const entry of entries) {
+      const child = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory() && deep) pending.push(child);
+      else if (entry.isFile()) files.push(child);
+      if (files.length >= MAX_TREE_FILES) {
+        process.stderr.write(`${TAG} copy source ${absDir} holds more than ${MAX_TREE_FILES} files; the rest are not judged.\n`);
+        return files;
+      }
+    }
+  }
+  return files;
+}
+
+/**
+ * Records a copy of `src` to `dest`, both as the command spells them. A
+ * folder is recorded file by file at the path each file lands on, so its
+ * content is judged like a single file's (BUG-066).
+ *   contents  "src/." and "src/*" copy what is inside src (and "src/" for
+ *             rsync, `slashMeansContents`), so its files land in dest;
+ *   intoDir   otherwise src lands under dest by its own name, else as dest.
+ * A folder is descended into only when the command copies folders
+ * (`recursive`), except for "src/*", whose top-level files are copied anyway.
+ */
+function addCopy(dir, ctx, src, dest, { intoDir, recursive, slashMeansContents }) {
+  const { add, abs } = ctx;
+  const spelled = src.replace(/\\/g, "/");
+  const inside = /^(.*?)\/(\.|\*)$/.exec(spelled);
+  const contents = Boolean(inside) || (slashMeansContents && /\/$/.test(spelled));
+  const folder = inside ? inside[1] || "." : spelled.replace(/\/+$/, "") || "/";
+  const tree = recursive || inside?.[2] === "*" ? treeFiles(abs(dir, folder), recursive) : null;
+  if (tree === null) {
+    add(dir, intoDir ? `${dest}/${path.posix.basename(spelled)}` : dest, [abs(dir, src)]);
+    return;
+  }
+  const base = contents || !intoDir ? dest : `${dest}/${path.posix.basename(folder)}`;
+  add(dir, base);
+  for (const rel of tree) add(dir, `${base}/${rel}`, [abs(dir, `${folder}/${rel}`)]);
 }
 
 /** The lines a unified diff adds, without their "+" marker. */
@@ -613,6 +672,24 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     // A file made unreadable stops the hook loading it as surely as a
     // delete does (BUG-065).
     for (const p of operands) add(dir, p);
+  } else if (name === "sort") {
+    // "sort -o FILE" (also -oFILE, --output=FILE) writes what it sorts to
+    // FILE instead of stdout (BUG-066).
+    let target = null;
+    const inputs = [];
+    for (let k = 0; k < args.length; k++) {
+      const a = args[k];
+      const long = /^--output(?:=(.*))?$/.exec(a);
+      const short = /^-[a-zA-Z]*o(.*)$/.exec(a); // getopt: the rest of the cluster, else the next word
+      if (long) target = long[1] ?? args[++k] ?? null;
+      else if (short) target = short[1] || args[++k] || null;
+      else if (!a.startsWith("-")) inputs.push(a);
+    }
+    if (target) add(dir, target, [...stdin, ...inputs.map((p) => abs(dir, p))]);
+  } else if (name === "uniq") {
+    // "uniq IN OUT" writes to OUT. -f, -s and -w take a number.
+    const files = args.filter((a, k) => !a.startsWith("-") && !/^-[fsw]$/.test(args[k - 1] ?? ""));
+    if (files[1]) add(dir, files[1], files[0] && files[0] !== "-" ? [abs(dir, files[0])] : stdin);
   } else if (name === "tee") {
     const append = args.some((a) => /^-[a-z]*a/.test(a) || a === "--append");
     for (const p of operands) add(dir, p, stdin, append);
@@ -631,8 +708,13 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     // Into a directory each source keeps its name; onto a file the sources replace it.
     const intoDir = Boolean(inline) || t >= 0 || sources.length > 1 || /[\\/]$/.test(dest ?? "")
       || Boolean(dest && statSync(abs(dir, dest), { throwIfNoEntry: false })?.isDirectory());
-    if (intoDir) for (const src of sources) add(dir, `${dest}/${path.basename(src)}`, [abs(dir, src)]);
-    else add(dir, dest, sources.map((s) => abs(dir, s)));
+    const recursive = name === "mv" || args.some((a) => /^-[a-zA-Z]*[rRa]/.test(a) || a === "--recursive" || a === "--archive");
+    if (dest) {
+      for (const src of sources) {
+        // rsync always puts a folder under the destination, by name unless "src/".
+        addCopy(dir, ctx, src, dest, { intoDir: intoDir || name === "rsync", recursive, slashMeansContents: name === "rsync" });
+      }
+    }
     if (name === "mv") for (const src of sources) add(dir, src); // a moved file is gone from its old path
     // "rsync src/ dest" fills dest with the contents of src, and --delete
     // removes what src lacks, so the destination itself is written (BUG-065).
@@ -835,8 +917,8 @@ function powershellWrites(name, args, dir, ctx, stdin) {
     const dest = psPaths(args, ["destination"], 1)[0];
     if (dest) {
       const intoDir = sources.length > 1 || /[\\/]$/.test(dest) || Boolean(statSync(abs(dir, dest), { throwIfNoEntry: false })?.isDirectory());
-      if (intoDir) for (const src of sources) add(dir, `${dest}/${path.basename(src)}`, [abs(dir, src)]);
-      else add(dir, dest, sources.map((s) => abs(dir, s)));
+      const recursive = PS_MOVERS.has(name) || named.has("recurse");
+      for (const src of sources) addCopy(dir, ctx, src, dest, { intoDir, recursive, slashMeansContents: false });
     }
     if (PS_MOVERS.has(name)) for (const src of sources) add(dir, src);
   } else if (PS_REMOVERS.has(name)) {

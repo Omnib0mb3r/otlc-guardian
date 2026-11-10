@@ -77,7 +77,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-063 | IN-PROGRESS | HIGH: the PreToolUse hook fails open in every CommonJS project: the ESM scanner cannot load under `"type": "commonjs"` |
 | BUG-064 | IN-PROGRESS | Windows path aliases dodge the watch and protected sets: `::$INDEX_ALLOCATION` on a folder, and 8.3 short names (`CLAUDE~1`) |
 | BUG-065 | IN-PROGRESS | Settings and guard-file protection miss explicit deletes and replaces: `find -delete`, `rsync --delete`, `tar -x`, `cmd /c rd` and `del` |
-| BUG-066 | OPEN | Copies into watched paths not judged: directory sources (`cp -r dir/. .claude/agents/`), `sort -o`, `cmd /c copy` |
+| BUG-066 | IN-PROGRESS | Copies into watched paths not judged: directory sources (`cp -r dir/. .claude/agents/`), `sort -o`, `cmd /c copy` |
 | BUG-067 | OPEN | PowerShell parameter prefixes (`-LiteralP`, `-Pat`, `-Val`) are not recognized; `-EncodedCommand` payload text is never scanned |
 | BUG-068 | SMOKE-TESTING | `guardian scan` exits 0 when it finds injection or secret patterns, so a script or pipeline cannot act on the result |
 | BUG-069 | SMOKE-TESTING | `AUTHZ-003` (JS IDOR) counts caller-supplied ids as ownership: `userId: req.params.userId`, a `:teamId` path parameter |
@@ -886,9 +886,11 @@ Re-probe R3 (variants of verifier P2), all allowed with the target spelled out: 
 
 ### BUG-066: Copy forms the content check does not read
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** IN-PROGRESS · **Found:** 2026-11-10
 
 Re-probe R4 (variants of verifier P1), all allowed: `cp -r staged/. .claude/agents/` and `cp -r staged .planning` (a directory source is never read: `readSource()` returns "" for anything but a regular file), `sort notes/x.md -o CLAUDE.md` (`-o` is not a known output flag), `cmd /c copy notes\x.md CLAUDE.md`. Hook edit; waits.
+
+**Fix in staging (2026-11-10), not yet live.** Staging commit: recorded in `staging/APPLY.md`. In `staging/hooks/injection-guard-hook.mjs`: new `addCopy()` records a copy per source; a folder source is walked by the new `treeFiles()` (at most `MAX_TREE_FILES` = 1,000 files, links not followed, the excess reported on stderr) and each file is recorded at its landing path with itself as the source, so the existing content check judges it as it judges a one-file copy. Landing rules: `src/.` and `src/*` (and `src/` for rsync) put the contents in the destination; otherwise the folder lands under an existing destination by its name, or becomes the destination. A folder is walked only when the command copies folders (`cp -r/-R/-a`, `--recursive`, `--archive`, `mv`, `rsync`, `Copy-Item -Recurse`, `Move-Item`), except `src/*`, whose top-level files are copied anyway (bash expands the glob, PowerShell's `Copy-Item` takes it). The Bash and PowerShell copy readers both use it. `sort` with `-o FILE`, `-oFILE` or `--output=FILE` and `uniq IN OUT` (skipping the values of `-f`, `-s`, `-w`) now write their input to that file. `cmd /c copy` was fixed with BUG-048. Tests: `tests/hook.test.js`, group "copies of folders and sort/uniq outputs are judged by content (BUG-066)": 15 staged tests, all 15 failing against the staged hook before the fix; 5 silent cases (a clean folder, a copy to an unwatched folder, `sort -o` to an unwatched file, `sort` and `uniq` to stdout) pass on both. Not covered: `awk` programs that print to a file and `sed` `w` commands; like inline interpreter code, their programs are not parsed. The bug stays IN-PROGRESS until Michael applies the staged hook. Smoke test after applying, with prompts on: put a file holding "ignore all previous instructions" in `staged/`, ask Claude to run `cp -r staged/. .claude/agents/`, and see it denied.
 
 ### BUG-067: PowerShell parameter prefixes and encoded command payloads
 
