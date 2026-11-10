@@ -688,6 +688,7 @@ Found by the manual writer reading `commandWrites()` in `.claude/hooks/injection
 Found by the manual writer reading `scan()` in `security/01-injection-guard.js` (about line 375 at `0fa32ce`); reproduced: `scan(textWithAnAnthropicKey, "nosuchmode")` returns `{ violations: [], hasSecrets: false, hasCritical: false }`, while mode `"secrets"` reports GUARD-SEC-010 CRITICAL.
 
 - `scan()` runs the injection rules only for `"injection"` or `"all"` and the secret rules only for `"secrets"` or `"all"`. Any other string runs nothing and reports clean. A caller's typo turns the guard off with no error. `scanChange()` takes the same `mode` and needs the same check.
+- Same class: `scan()` returns `{ violations: [], hasSecrets: false, hasCritical: false }` for non-string input (about line 376), so a caller that passes an object or a Buffer is told it is clean. `guardInput` checks the type itself; a direct `scan()` caller does not get that check.
 - Fix direction: reject an unknown mode with `GuardianError` (Python: `ValueError`), with tests in both suites. The scanner is a protected file (cc9182f), so the fix is made in a session that prompts.
 
 ### BUG-050: `guardInput` ignores `blockOnSecrets: false` and names a secret as an injection

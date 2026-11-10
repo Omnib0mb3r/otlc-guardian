@@ -1,0 +1,405 @@
+<section class="chapter" id="ch-runtime" data-num="03" data-title="The runtime guard and helpers" data-blurb="The injection and secret scanner every other layer calls, its Python port, and the server and SQL helpers that ship beside it.">
+
+<p>The runtime layer is four files in <code>security/</code>. <code>01-injection-guard.js</code> is the scanner: it reads a string, normalizes it, runs 28 injection rules and 16 secret rules over every decoded view, and returns the findings. <code>injection_guard.py</code> is its Python port. <code>02-code-security.js</code> holds Express helpers (headers, request ids, a logger, a rate limiter, error shapes, a health route). <code>04-sql-guard.js</code> is a tagged-template SQL helper that turns every interpolation into a bound parameter. Nothing in the layer has a dependency outside the Node or Python standard library.</p>
+
+<p>This chapter describes the code at git <code>0fa32ce</code> plus the 1.5.0 working tree (unreleased). Where the README, SECURITY.md or SETUP.md say something different, the code wins and the gap is listed in <a href="#rg-docs">Code versus docs</a>.</p>
+
+<h3 id="rg-overview">Where it sits</h3>
+
+<div class="tbl"><table><thead><tr><th>File</th><th>Language</th><th>Package entry</th><th>What it is</th></tr></thead><tbody>
+<tr><td><code>security/01-injection-guard.js</code></td><td>Node ESM</td><td><code>"."</code> (also <code>main</code>)</td><td>Scanner, sanitizer, input and output guards, Express middleware. The single source of the patterns.</td></tr>
+<tr><td><code>security/injection_guard.py</code></td><td>Python 3</td><td>none (copied into the project)</td><td>Port of the scanner and guards, plus a FastAPI dependency and a small CLI.</td></tr>
+<tr><td><code>security/02-code-security.js</code></td><td>Node ESM</td><td><code>"./security"</code></td><td>Express helpers: headers, request id, logger, rate limit, error and success shapes, health route, env validation.</td></tr>
+<tr><td><code>security/04-sql-guard.js</code></td><td>Node ESM</td><td><code>"./sql"</code></td><td>The <code>sql</code> tagged template for <code>pg</code>, <code>mysql2</code> and <code>better-sqlite3</code>.</td></tr>
+</tbody></table></div>
+
+<p>The fourth entry in <code>package.json</code> <code>"exports"</code>, <code>"./audit"</code>, points at <code>security/03-audit.js</code>, which is the static audit and does not import the scanner. <code>package.json</code> requires Node 22 or later (<code>"engines"</code>).</p>
+
+<h3 id="rg-pipeline">How one scan runs</h3>
+
+<figure><div class="frame"><svg class="dg" viewBox="0 0 1100 300" role="img" aria-label="scan pipeline: input, length cap, normalizer views, rule sets, verdict, with the oversize and invisible-Unicode side checks">
+<defs><marker id="rg-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" class="ah"/></marker>
+<marker id="rg-b" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" class="ah-hot"/></marker></defs>
+<text class="col-h" x="20" y="24">INPUT</text><text class="col-h" x="200" y="24">CAP</text><text class="col-h" x="390" y="24">NORMALIZE</text><text class="col-h" x="660" y="24">RULES</text><text class="col-h" x="880" y="24">VERDICT</text>
+<rect class="bx" x="20" y="40" width="150" height="90" rx="8"/>
+<text class="t1" x="34" y="66">text, mode</text>
+<text class="t2" x="34" y="88">non-string: empty</text>
+<text class="t2" x="34" y="106">result, no throw</text>
+<rect class="bx-hot" x="200" y="40" width="160" height="90" rx="8"/>
+<text class="t1" x="214" y="66">MAX_SCAN_LENGTH</text>
+<text class="t3" x="214" y="88">1,000,000 chars</text>
+<text class="t2" x="214" y="108">slice, warn on console</text>
+<rect class="bx" x="390" y="40" width="240" height="160" rx="8"/>
+<text class="t1" x="404" y="66">scanViews(): 8 views</text>
+<text class="t3" x="404" y="88">1 NFKC + strip invisibles</text>
+<text class="t3" x="404" y="106">2 tag chars to ASCII</text>
+<text class="t3" x="404" y="124">3 confusables folded</text>
+<text class="t3" x="404" y="142">4 percent  5 entities</text>
+<text class="t3" x="404" y="160">6 markdown markers removed</text>
+<text class="t3" x="404" y="178">7 whole base64  8 base64 runs</text>
+<text class="t2" x="404" y="196">dedupe, join with newlines</text>
+<rect class="bx" x="660" y="40" width="190" height="90" rx="8"/>
+<text class="t1" x="674" y="66">28 injection rules</text>
+<text class="t1" x="674" y="88">16 secret rules</text>
+<text class="t2" x="674" y="110">mode picks the set</text>
+<rect class="bx-ok" x="880" y="40" width="200" height="90" rx="8"/>
+<text class="t1" x="894" y="66">{ violations,</text>
+<text class="t1" x="894" y="86">  hasSecrets,</text>
+<text class="t1" x="894" y="106">  hasCritical }</text>
+<rect class="bx-soft" x="200" y="220" width="160" height="62" rx="8"/>
+<text class="t1" x="214" y="244">GUARD-INJ-OVERSIZE</text>
+<text class="t2" x="214" y="266">MEDIUM, cut chars</text>
+<rect class="bx-soft" x="660" y="160" width="190" height="62" rx="8"/>
+<text class="t1" x="674" y="184">GUARD-INJ-UNICODE</text>
+<text class="t2" x="674" y="206">HIGH, raw text only</text>
+<path class="ln" d="M170,85 H198" marker-end="url(#rg-a)"/>
+<path class="ln-hot" d="M360,85 H388" marker-end="url(#rg-b)"/>
+<path class="ln" d="M630,85 H658" marker-end="url(#rg-a)"/>
+<path class="ln" d="M850,85 H878" marker-end="url(#rg-a)"/>
+<path class="ln-hot" d="M280,130 V218" marker-end="url(#rg-b)"/>
+<path class="ln" d="M370,110 C380,110 380,191 658,191" marker-end="url(#rg-a)"/>
+<path class="ln" d="M850,191 H980 V132" marker-end="url(#rg-a)"/>
+<path class="ln" d="M360,251 H980 V132" marker-end="url(#rg-a)"/>
+</svg></div><figcaption><b>One pass, every view.</b> <code>scan()</code> caps the raw text, builds the decoded views, joins the distinct ones and runs each rule once over the joined string. The invisible-Unicode check reads the capped raw text, not the views; the oversize finding records what the cap cut off.</figcaption></figure>
+
+<p>Every pattern is a single regex or a linear comment walker, and every normalizer pass is linear in its input, so the cap is a memory bound rather than a guard against slow regexes (comment above <code>MAX_SCAN_LENGTH</code>). Each rule reports at most once per call: <code>scan()</code> keeps the first match only.</p>
+
+<h3 id="rg-api">01-injection-guard.js: the exports</h3>
+
+<p>The module exports nine names. <code>SECRET_PATTERNS</code>, <code>scanViews()</code>, <code>normalizeForScan()</code> and the caps are module-private.</p>
+
+<div class="tbl dense"><table><thead><tr><th>Export</th><th>Kind</th><th>Signature</th><th>Returns or throws</th></tr></thead><tbody>
+<tr><td><code>scan</code></td><td>function</td><td><code>scan(text, mode = "all")</code></td><td><code>{ violations, hasSecrets, hasCritical }</code>; never throws</td></tr>
+<tr><td><code>scanChange</code></td><td>function</td><td><code>scanChange(before, after, mode = "all")</code></td><td>same shape as <code>scan()</code>, holding only findings the change adds</td></tr>
+<tr><td><code>guardInput</code></td><td>function</td><td><code>guardInput(input, options = {})</code></td><td>sanitized string, or throws <code>GuardianError</code></td></tr>
+<tr><td><code>guardOutput</code></td><td>function</td><td><code>guardOutput(output, options = {})</code></td><td>the output unchanged, or throws <code>GuardianError</code></td></tr>
+<tr><td><code>sanitize</code></td><td>function</td><td><code>sanitize(input)</code></td><td>string with delimiter tokens and invisible characters removed</td></tr>
+<tr><td><code>reportViolations</code></td><td>function</td><td><code>reportViolations(violations, context = "input")</code></td><td>nothing; writes to <code>console.warn</code> / <code>console.error</code></td></tr>
+<tr><td><code>injectionMiddleware</code></td><td>function</td><td><code>injectionMiddleware(options = {})</code></td><td>Express middleware <code>(req, res, next)</code></td></tr>
+<tr><td><code>GuardianError</code></td><td>class</td><td><code>new GuardianError(message, violations = [])</code></td><td><code>Error</code> with <code>name</code>, <code>violations</code>, <code>timestamp</code></td></tr>
+<tr><td><code>INJECTION_PATTERNS</code></td><td>array</td><td>28 entries <code>{ pattern, severity, id }</code>, two with <code>match</code> and <code>matchAll</code></td><td>read by callers that list rules</td></tr>
+</tbody></table></div>
+
+<h4>scan(text, mode)</h4>
+<p><code>mode</code> is <code>"injection"</code>, <code>"secrets"</code> or <code>"all"</code>. Any other string runs no rules and returns an empty result, so a typo reads as clean. A non-string <code>text</code> returns <code>{ violations: [], hasSecrets: false, hasCritical: false }</code>.</p>
+<p>Text longer than <code>MAX_SCAN_LENGTH</code> (1,000,000 UTF-16 code units) is sliced to the cap and a warning goes to <code>console.warn</code>. In injection or all mode the remainder raises <code>GUARD-INJ-OVERSIZE</code>, so padding a payload behind filler never reads as clean. In secrets mode the cut is not reported as a finding.</p>
+<p>Each violation is a plain object:</p>
+<div class="tbl dense"><table><thead><tr><th>Field</th><th>Injection finding</th><th>Secret finding</th></tr></thead><tbody>
+<tr><td><code>type</code></td><td><code>"injection"</code></td><td><code>"secret"</code></td></tr>
+<tr><td><code>id</code></td><td><code>GUARD-INJ-NNN</code>, <code>GUARD-INJ-UNICODE</code> or <code>GUARD-INJ-OVERSIZE</code></td><td><code>GUARD-SEC-NNN</code> or <code>GUARD-SEC-001b</code></td></tr>
+<tr><td><code>legacyId</code></td><td colspan="2">the id with <code>GUARD-</code> removed; 1.5.0 only, see <a href="#rg-ids">Rule ids</a></td></tr>
+<tr><td><code>severity</code></td><td>from the rule</td><td>always <code>CRITICAL</code></td></tr>
+<tr><td><code>matched</code></td><td>the matched text from the normalized string (for 027/028 the whole comment)</td><td>a redaction marker naming the label; the secret itself is never returned</td></tr>
+<tr><td><code>pattern</code> / <code>label</code></td><td><code>pattern</code>: the regex source (<code>"length"</code> for OVERSIZE)</td><td><code>label</code>: e.g. <code>"Stripe Live Key"</code></td></tr>
+<tr><td><code>timestamp</code></td><td colspan="2">ISO 8601 at detection</td></tr>
+</tbody></table></div>
+<p><code>hasSecrets</code> is true when any secret rule fired. <code>hasCritical</code> is true when any violation has severity <code>CRITICAL</code>, and since every secret finding is CRITICAL, a secret alone sets it.</p>
+
+<h4>guardInput(input, options)</h4>
+<div class="tbl dense"><table><thead><tr><th>Option</th><th>Default</th><th>Effect</th></tr></thead><tbody>
+<tr><td><code>maxLength</code></td><td><code>4000</code></td><td>Longer input is truncated (warning on <code>console.warn</code>), then scanned and returned truncated. Not an error.</td></tr>
+<tr><td><code>blockOnCritical</code></td><td><code>true</code></td><td>Throw when <code>hasCritical</code>.</td></tr>
+<tr><td><code>blockOnSecrets</code></td><td><code>true</code></td><td>Throw when <code>hasSecrets</code>.</td></tr>
+<tr><td><code>onViolation</code></td><td><code>null</code></td><td>Called once per violation, before any throw.</td></tr>
+<tr><td><code>context</code></td><td><code>"user input"</code></td><td>Label in the console report.</td></tr>
+</tbody></table></div>
+<p>Order of work: type check (a non-string throws <code>GuardianError("guardInput requires a string.")</code>), length cut, <code>scan(input, "all")</code>, <code>reportViolations()</code>, callbacks, secret block, critical block, <code>sanitize()</code>, then a second <code>scan(sanitized, "injection")</code>. The second scan catches a payload that only forms once delimiters are stripped; its findings are reported with <code>[post-sanitize]</code> in the context and throw when CRITICAL and <code>blockOnCritical</code> is on. HIGH and MEDIUM findings never block: they are reported and the sanitized string is returned.</p>
+<p>Because <code>hasCritical</code> counts secret findings, a caller that sets <code>blockOnSecrets: false</code> but keeps <code>blockOnCritical: true</code> still gets a throw on a secret, with the message for a critical injection. The Python port does not do this (see <a href="#rg-python">The Python port</a>).</p>
+
+<h4>guardOutput(output, options)</h4>
+<p>Options: <code>blockOnSecrets</code> (default <code>true</code>), <code>onViolation</code>, <code>context</code> (default <code>"AI output"</code>). It runs <code>scan(output, "secrets")</code> and then <code>scan(output, "injection")</code> as two separate calls, reports both sets, fires the callback for both, and throws only on secrets. The thrown error carries the secret violations only. Injection findings in output are informational: the function returns <code>output</code> unchanged, never sanitized.</p>
+
+<h4>sanitize(input)</h4>
+<p>Removes chat role tags (opening or closing <code>system</code>, <code>assistant</code>, <code>human</code>, <code>user</code> in angle brackets), <code>[SYSTEM]</code>, <code>[INST]</code>, the Llama SYS markers, a run of three hashes followed by <code>System</code>, <code>Instruction</code> or <code>Prompt</code>, three hyphens followed by <code>SYSTEM</code>, and every character in the strip set (see <a href="#rg-normalize">Normalizer</a>). It does not type-check, so a non-string throws a <code>TypeError</code> from <code>.replace</code>.</p>
+<p>The heading strip is wider than detection. Since 1.5.0, <code>GUARD-INJ-019</code> only fires on the colon form, but <code>sanitize()</code> still removes the words, so <code>"### System Overview"</code> comes back from <code>guardInput()</code> as <code>" Overview"</code>. Verified by running it.</p>
+
+<h4>reportViolations(violations, context)</h4>
+<p>Prints a <code>PROMPT INJECTION DETECTED</code> block on <code>console.warn</code> (severity, id, matched text per finding) and a <code>SECRET LEAK DETECTED</code> block on <code>console.error</code> (id and label, no secret text). An empty array prints nothing. This is plain console text, not the JSON logger from <code>02-code-security.js</code>; a project that needs structured logs passes <code>onViolation</code>.</p>
+
+<h4>injectionMiddleware(options)</h4>
+<p>Express middleware. For each field in <code>options.fields</code> (default <code>message</code>, <code>prompt</code>, <code>query</code>, <code>input</code>, <code>content</code>) that is truthy on <code>req.body</code>, it replaces the value with <code>guardInput(value, { ...options, context: "METHOD path" })</code>. A <code>GuardianError</code> becomes a 400 with <code>{ success: false, error: { code: "ERR_INJECTION_DETECTED", message: "Input rejected by security guard." }, requestId }</code>; <code>requestId</code> is <code>req.requestId</code> or a fresh UUID. Any other error goes to <code>next(err)</code>. A truthy non-string field (a number, an object) fails the type check and gets the same 400. The body must already be parsed (<code>express.json()</code> before it).</p>
+
+<h4>GuardianError</h4>
+<p><code>name</code> is <code>"GuardianError"</code>, <code>violations</code> is the array that caused the block, <code>timestamp</code> is the ISO time of construction.</p>
+
+<h3 id="rg-injection">Injection rules</h3>
+
+<p>28 entries in <code>INJECTION_PATTERNS</code> plus two findings <code>scan()</code> raises itself. All regexes are case-insensitive. None uses word boundaries, so a rule fires on a substring inside a longer word or an ordinary mention: <code>scan("the developer mode toggle")</code> returns <code>GUARD-INJ-023</code>, and a block comment that contains the word "system" returns <code>GUARD-INJ-028</code> (both checked by running them). Severity counts: 11 CRITICAL, 14 HIGH, 3 MEDIUM.</p>
+
+<div class="tbl dense"><table><thead><tr><th>Id</th><th>Severity</th><th>Matches</th></tr></thead><tbody>
+<tr><td colspan="3"><b>Instruction override</b></td></tr>
+<tr><td><code>GUARD-INJ-001</code></td><td>CRITICAL</td><td>A request to ignore the earlier instructions (optional "all").</td></tr>
+<tr><td><code>GUARD-INJ-002</code></td><td>CRITICAL</td><td>The same, aimed at the instructions "above".</td></tr>
+<tr><td><code>GUARD-INJ-003</code></td><td>CRITICAL</td><td>"disregard" followed by "previous" (optional "all").</td></tr>
+<tr><td><code>GUARD-INJ-004</code></td><td>CRITICAL</td><td>"forget" followed by "instructions", optional "all" and "your" between.</td></tr>
+<tr><td><code>GUARD-INJ-005</code></td><td>CRITICAL</td><td>"override" followed by system or previous, then prompt or instructions.</td></tr>
+<tr><td colspan="3"><b>Role hijacking</b></td></tr>
+<tr><td><code>GUARD-INJ-006</code></td><td>HIGH</td><td>Telling the model it is now a, an or the something.</td></tr>
+<tr><td><code>GUARD-INJ-007</code></td><td>HIGH</td><td>"pretend" followed by you're, you are, or to be.</td></tr>
+<tr><td><code>GUARD-INJ-008</code></td><td>HIGH</td><td>"from now on" then "you" then are, will, should or must.</td></tr>
+<tr><td><code>GUARD-INJ-009</code></td><td>HIGH</td><td>"act as" a, an or the, except when the next word is user, customer or person.</td></tr>
+<tr><td><code>GUARD-INJ-010</code></td><td>HIGH</td><td>"roleplay as".</td></tr>
+<tr><td><code>GUARD-INJ-011</code></td><td>MEDIUM</td><td>"simulate" a, an or the.</td></tr>
+<tr><td colspan="3"><b>Prompt extraction</b></td></tr>
+<tr><td><code>GUARD-INJ-012</code></td><td>HIGH</td><td>print, output, reveal, show, display or repeat, then optional "your" and "system", then prompt or instructions.</td></tr>
+<tr><td><code>GUARD-INJ-013</code></td><td>HIGH</td><td>A question asking what the model's (original) instructions are or were.</td></tr>
+<tr><td><code>GUARD-INJ-014</code></td><td>HIGH</td><td>A request to be told the model's (system) prompt.</td></tr>
+<tr><td colspan="3"><b>Chat-template delimiters</b></td></tr>
+<tr><td><code>GUARD-INJ-015</code></td><td>CRITICAL</td><td>An opening or closing role tag in angle brackets: system, assistant, human or user.</td></tr>
+<tr><td><code>GUARD-INJ-016</code></td><td>CRITICAL</td><td><code>[SYSTEM]</code>.</td></tr>
+<tr><td><code>GUARD-INJ-017</code></td><td>CRITICAL</td><td><code>[INST]</code>.</td></tr>
+<tr><td><code>GUARD-INJ-018</code></td><td>CRITICAL</td><td>The Llama 2 SYS marker in double angle brackets, spaces allowed.</td></tr>
+<tr><td><code>GUARD-INJ-019</code></td><td>CRITICAL</td><td>3 to 6 hashes, then system, system prompt, instruction(s) or prompt, then a colon. Since 1.5.0 the colon is required, so ordinary headings pass.</td></tr>
+<tr><td><code>GUARD-INJ-020</code></td><td>CRITICAL</td><td>3 or more hyphens, then system (optionally prompt, message, instruction(s)), then 3 or more hyphens, a colon, or end of line (multiline flag).</td></tr>
+<tr><td colspan="3"><b>Jailbreak vocabulary</b></td></tr>
+<tr><td><code>GUARD-INJ-021</code></td><td>HIGH</td><td>The three-word phrase that the "DAN" acronym stands for.</td></tr>
+<tr><td><code>GUARD-INJ-022</code></td><td>HIGH</td><td>"DAN mode".</td></tr>
+<tr><td><code>GUARD-INJ-023</code></td><td>HIGH</td><td>"developer mode".</td></tr>
+<tr><td><code>GUARD-INJ-024</code></td><td>HIGH</td><td>The word "jailbreak" anywhere.</td></tr>
+<tr><td><code>GUARD-INJ-025</code></td><td>HIGH</td><td>"without (any) restrictions".</td></tr>
+<tr><td><code>GUARD-INJ-026</code></td><td>HIGH</td><td>"bypass", optional "your", then safety, filter or guideline.</td></tr>
+<tr><td colspan="3"><b>Markup context poisoning</b></td></tr>
+<tr><td><code>GUARD-INJ-027</code></td><td>MEDIUM</td><td>An HTML comment that contains ignore, override or system inside the same comment.</td></tr>
+<tr><td><code>GUARD-INJ-028</code></td><td>MEDIUM</td><td>A <code>/* ... */</code> block comment with the same keywords.</td></tr>
+<tr><td colspan="3"><b>Raised by scan() itself</b></td></tr>
+<tr><td><code>GUARD-INJ-UNICODE</code></td><td>HIGH</td><td>Any character of the detect set in the capped raw text.</td></tr>
+<tr><td><code>GUARD-INJ-OVERSIZE</code></td><td>MEDIUM</td><td>Input longer than 1,000,000 characters; <code>matched</code> states how many were not scanned.</td></tr>
+</tbody></table></div>
+
+<h4>The comment walker (027, 028)</h4>
+<p>These two rules carry a <code>match</code> and a <code>matchAll</code> built by <code>commentMatcher(open, close)</code> instead of a regex. It finds each opener with <code>indexOf</code>, finds the next closer, tests the keyword regex on that one comment, and moves past the closer. When no closer follows an opener the search ends, because no later opener can close either. Cost is linear. The regex form it replaced was cubic on a flood of unterminated openers (44 KB took 16 s; BUG-023). <code>pattern</code> on these entries (<code>/&lt;!--/</code>, <code>/\/\*/</code>) is only a descriptor for callers that print <code>pattern.source</code>.</p>
+
+<h3 id="rg-secrets">Secret rules</h3>
+
+<p>16 entries in <code>SECRET_PATTERNS</code>, listed in array order. Every finding is CRITICAL. The table describes each shape; no key is reproduced.</p>
+
+<div class="tbl dense"><table><thead><tr><th>Id</th><th>Label</th><th>Matches</th></tr></thead><tbody>
+<tr><td><code>GUARD-SEC-001</code></td><td>OpenAI Project API Key</td><td><code>sk-proj-</code> then 20+ letters, digits, <code>_</code> or <code>-</code>.</td></tr>
+<tr><td><code>GUARD-SEC-010</code></td><td>Anthropic API Key</td><td><code>sk-ant-</code> then <code>api</code>, <code>oat</code> or <code>admin</code>, two digits, <code>-</code>, 20+ key characters.</td></tr>
+<tr><td><code>GUARD-SEC-001b</code></td><td>OpenAI API Key (legacy)</td><td><code>sk-</code> then 20+ alphanumerics, with a lookahead that skips the two tagged forms above.</td></tr>
+<tr><td><code>GUARD-SEC-002</code></td><td>Google API Key</td><td><code>AIza</code> then exactly 35 key characters.</td></tr>
+<tr><td><code>GUARD-SEC-003</code></td><td>GitHub Token</td><td><code>ghp_</code> then 36 alphanumerics.</td></tr>
+<tr><td><code>GUARD-SEC-004</code></td><td>GitHub OAuth Token</td><td><code>gho_</code> then 36 alphanumerics.</td></tr>
+<tr><td><code>GUARD-SEC-005</code></td><td>AWS Access Key</td><td><code>AKIA</code> then 16 uppercase letters or digits.</td></tr>
+<tr><td><code>GUARD-SEC-006</code></td><td>Context-Adjacent Base64 Secret</td><td>secret, token, key, password or auth, then <code>:</code> or <code>=</code>, then 40+ base64 characters. Needs the keyword, so bare JWTs and image data do not fire.</td></tr>
+<tr><td><code>GUARD-SEC-007</code></td><td>Private Key</td><td>A PEM <code>BEGIN ... PRIVATE KEY</code> header with up to three words between (RSA, EC, OPENSSH, ENCRYPTED, bare). A public key header does not match.</td></tr>
+<tr><td><code>GUARD-SEC-008</code></td><td>Inline Password</td><td><code>password</code>, <code>:</code> or <code>=</code>, then 8+ non-space, non-quote characters.</td></tr>
+<tr><td><code>GUARD-SEC-009</code></td><td>Inline API Key</td><td><code>api_key</code>, <code>api-key</code> or <code>apikey</code>, then the same value shape.</td></tr>
+<tr><td><code>GUARD-SEC-011</code></td><td>Connection String with Embedded Credentials</td><td>postgres(ql), mysql, mongodb(+srv), redis(s) or amqp(s) URL with a <code>user:pass@</code> authority (user may be empty). Both parts are length-bounded (256, 512) so the rule stays linear.</td></tr>
+<tr><td><code>GUARD-SEC-012</code></td><td>GitHub Fine-Grained Token</td><td><code>github_pat_</code> then 40+ characters.</td></tr>
+<tr><td><code>GUARD-SEC-013</code></td><td>GitHub App/Server Token</td><td><code>ghs_</code>, <code>ghu_</code> or <code>ghr_</code> then 36+ alphanumerics.</td></tr>
+<tr><td><code>GUARD-SEC-014</code></td><td>Slack Token</td><td><code>xox</code> then a, b, p, r or s, <code>-</code>, 10+ characters.</td></tr>
+<tr><td><code>GUARD-SEC-015</code></td><td>Stripe Live Key</td><td><code>sk_live_</code> or <code>rk_live_</code> then 20+ alphanumerics.</td></tr>
+</tbody></table></div>
+
+<p>The secret rules run over the same normalized string as the injection rules, so a key that is percent-encoded or base64-wrapped is still found. The comment in <code>03-audit.js</code> near its own secret rules says it is kept in lockstep with this list; the audit uses its own ids (<code>SEC-*</code>), which is why the runtime ids carry <code>GUARD-</code>.</p>
+
+<h3 id="rg-normalize">Normalizer, decode views and caps</h3>
+
+<p><code>scanViews(text)</code> returns eight strings in a fixed order. A view that does not apply is the empty string, so view N of one text lines up with view N of another (<code>scanChange()</code> depends on that). <code>normalizeForScan()</code> keeps view 1, adds every later view that is non-empty and not already present, and joins them with newlines. The rules then run once over that joined string.</p>
+
+<div class="tbl"><table><thead><tr><th>#</th><th>View</th><th>Built from</th><th>What it defeats</th></tr></thead><tbody>
+<tr><td>1</td><td>base</td><td><code>text.normalize("NFKC")</code>, then the strip set removed</td><td>Fullwidth and other compatibility forms; invisible characters splitting a keyword.</td></tr>
+<tr><td>2</td><td>tag characters</td><td>Each character in U+E0020 to U+E007E from the raw text, shifted back by 0xE0000 and concatenated</td><td>ASCII smuggling: a payload written entirely in invisible tag characters.</td></tr>
+<tr><td>3</td><td>confusables</td><td>base with the <code>CONFUSABLES</code> map applied (Cyrillic and Greek lookalikes to Latin, 53 entries)</td><td>A keyword with one lookalike letter, which NFKC leaves alone.</td></tr>
+<tr><td>4</td><td>percent</td><td><code>percentDecodeTolerant(base)</code>: each run of <code>%XX</code> decoded on its own; a run that is not valid UTF-8 stays as written</td><td>Encoded payloads. The old whole-string decode threw on any stray <code>%</code> and skipped decoding entirely.</td></tr>
+<tr><td>5</td><td>entities</td><td><code>decodeHtmlEntities(base)</code>: decimal and hex numeric entities (1 to 0x10FFFF), and only six named ones: <code>lt gt amp quot apos nbsp</code></td><td>A keyword or tag written as entities.</td></tr>
+<tr><td>6</td><td>markdown</td><td>base with every run of <code>* _ ` ~</code> removed</td><td>Emphasis markers placed inside a phrase.</td></tr>
+<tr><td>7</td><td>whole base64</td><td>Raw text with whitespace removed, when it is 20 to 20,000 base64 or base64url characters and decodes to printable text</td><td>A line-wrapped base64 payload.</td></tr>
+<tr><td>8</td><td>base64 runs</td><td>Each match of <code>BASE64_RUN_PATTERN</code> (24 to 20,000 characters plus padding) in the raw text that decodes to printable text, joined by newlines</td><td>Base64 embedded in prose.</td></tr>
+</tbody></table></div>
+
+<p>"Printable" means at least 10 characters, all in <code>\x20</code> to <code>\x7E</code> or whitespace (<code>PRINTABLE_PATTERN</code>). Base64url characters are mapped to standard base64 before decoding. Each view is one decode step from base or from the raw text; views are not chained, so a payload encoded twice (base64 of a percent-encoded string, for example) is decoded once and not seen (BUG-029).</p>
+
+<h4>Invisible characters: two sets</h4>
+<div class="tbl"><table><thead><tr><th>Set</th><th>Constant</th><th>Contents</th><th>Effect</th></tr></thead><tbody>
+<tr><td>Detect</td><td><code>INVISIBLE_UNICODE_PATTERN</code></td><td>Soft hyphen U+00AD, Arabic letter mark U+061C, Mongolian vowel separator U+180E, zero-width and direction marks U+200B to U+200F, line and paragraph separators and bidi embeddings U+2028 to U+202F, word joiner and invisible operators U+2060 to U+2064, bidi isolates and deprecated format controls U+2066 to U+206F, BOM U+FEFF, tag block U+E0000 to U+E007F</td><td>Presence raises <code>GUARD-INJ-UNICODE</code> (HIGH).</td></tr>
+<tr><td>Strip</td><td><code>INVISIBLE_STRIP_PATTERN</code></td><td>The detect set (U+2060 to U+206F in full) plus combining grapheme joiner U+034F, Hangul fillers U+115F, U+1160, U+3164, U+FFA0, Khmer vowels U+17B4, U+17B5, Mongolian selectors U+180B to U+180F, variation selectors U+FE00 to U+FE0F, and the whole range U+E0000 to U+E0FFF</td><td>Removed before matching and by <code>sanitize()</code>; no finding on their own.</td></tr>
+</tbody></table></div>
+<p>The split exists so an emoji followed by a variation selector is not a finding (test: "emoji with a variation selector is not GUARD-INJ-UNICODE") while still being unable to split a keyword.</p>
+
+<h4>Caps</h4>
+<div class="tbl dense"><table><thead><tr><th>Constant</th><th>Value</th><th>Bounds</th></tr></thead><tbody>
+<tr><td><code>MAX_SCAN_LENGTH</code></td><td>1,000,000 characters</td><td>Raw input to <code>scan()</code>, applied before normalization. Excess raises <code>GUARD-INJ-OVERSIZE</code>.</td></tr>
+<tr><td><code>MAX_BASE64_CANDIDATES</code></td><td>64</td><td>Base64 runs tried for view 8. Candidates past 64 are not decoded.</td></tr>
+<tr><td>Run length</td><td>24 to 20,000</td><td>One run in <code>BASE64_RUN_PATTERN</code>; also the 20,000 limit on the whole-text decode of view 7.</td></tr>
+<tr><td><code>guardInput</code> <code>maxLength</code></td><td>4000 (option)</td><td>Input to the guard; truncated, not reported as a finding.</td></tr>
+<tr><td><code>CHANGE_CONTEXT</code></td><td>2048 characters</td><td>Context kept on each side of a change in <code>scanChange()</code>.</td></tr>
+</tbody></table></div>
+<p>The candidate cap can be spent: 64 harmless base64-shaped runs placed first mean a 65th run carrying a payload is never decoded (BUG-029).</p>
+
+<h3 id="rg-scanchange">scanChange(): judging what a change adds</h3>
+
+<p><code>scanChange(before, after, mode)</code> answers "does this edit add a finding", which a whole-file <code>scan()</code> cannot: a file that already quotes a pattern (a security document, Guardian's own CLAUDE.md section) would be flagged on every edit, and judging by rule id alone would let a second copy of an already-present rule through. The PreToolUse hook calls it for every Write, Edit and MultiEdit it judges (<a href="#ch-hooks">chapter 04</a>).</p>
+
+<h4>Steps</h4>
+<ol>
+<li>A non-string <code>after</code> returns an empty result. A non-string <code>before</code> is treated as <code>""</code> (a new file, judged in full).</li>
+<li><code>changedWindows()</code> trims the common prefix and common suffix (compared by UTF-16 code unit) but keeps up to 2048 characters of each on both sides. The result is an old window and a new window. A small edit to a large file costs a small scan, and a payload appended past the 1 MB mark of the whole file is still inside the new window.</li>
+<li><code>scan(newWindow, mode)</code> lists the candidate findings.</li>
+<li><code>scanViews()</code> runs on both windows (each capped at 1,000,000).</li>
+<li>Each candidate is kept or dropped:
+<ul>
+<li><code>GUARD-INJ-OVERSIZE</code> is always kept: unscanned text is never "already accounted for".</li>
+<li><code>GUARD-INJ-UNICODE</code> is kept when the new window holds more detect-set characters than the old one.</li>
+<li>Every other rule goes through <code>firstAddedMatch()</code>: for each view index, the rule's matched strings in the old view are counted into a multiset, then the new view's matches consume those counts. The first match with no count left is the added one. For an injection finding <code>matched</code> is replaced with that new string; a secret finding keeps its redaction.</li>
+</ul></li>
+<li>The return is <code>{ violations, hasSecrets, hasCritical }</code> over the kept findings only.</li>
+</ol>
+
+<p>What this gives (each case has a test in <code>tests/injection-guard.test.js</code>, group "scanChange()"): rewriting a file that already quotes a pattern is clean; adding a second copy is a finding; swapping the quoted example for a different payload is a finding; a payload completed across old and new text is a finding; an encoded copy of a quoted pattern is a finding (it is a new string in a decoded view); removing a pattern is never a finding.</p>
+
+<h4>Known limits</h4>
+<ul>
+<li><b>Moving is not adding (BUG-042).</b> The judgement is a count. Cutting an already-quoted pattern out of a data context (an example block) and pasting it into a live instruction in the same window leaves every count unchanged, so nothing is reported.</li>
+<li><b>The window can be crossed (BUG-046).</b> The multi-word rules allow any run of whitespace between words. If the existing half of a phrase sits more than 2048 characters of whitespace away from the added half, the window cuts the old half off and neither window holds the whole match.</li>
+<li>A new window over 1,000,000 characters always yields <code>GUARD-INJ-OVERSIZE</code> (MEDIUM), which the hook treats as advisory.</li>
+</ul>
+
+<h3 id="rg-ids">Rule ids and legacyId</h3>
+
+<p>Before 1.5.0 the scanner and the audit both numbered rules <code>INJ-*</code> and <code>SEC-*</code>, so one id named two different rules (scanner <code>INJ-001</code> was the instruction-override rule, audit <code>INJ-001</code> is <code>eval()</code>). In 1.5.0 every scanner id gained the engine prefix <code>GUARD-</code>; audit ids did not change. Each violation also carries the old id for one release: <code>legacyId</code> in Node (computed by <code>legacyId(id)</code>, hard-coded for UNICODE and OVERSIZE), <code>legacy_id</code> in Python (filled by <code>Violation.__post_init__</code>). CHANGELOG.md says it is removed in 1.6.0.</p>
+
+<div class="tbl dense"><table><thead><tr><th>Old scanner id</th><th>New id</th></tr></thead><tbody>
+<tr><td><code>INJ-001</code> to <code>INJ-028</code></td><td><code>GUARD-INJ-001</code> to <code>GUARD-INJ-028</code></td></tr>
+<tr><td><code>INJ-UNICODE</code>, <code>INJ-OVERSIZE</code></td><td><code>GUARD-INJ-UNICODE</code>, <code>GUARD-INJ-OVERSIZE</code></td></tr>
+<tr><td><code>SEC-001</code>, <code>SEC-001b</code>, <code>SEC-002</code> to <code>SEC-015</code></td><td><code>GUARD-SEC-001</code>, <code>GUARD-SEC-001b</code>, <code>GUARD-SEC-002</code> to <code>GUARD-SEC-015</code></td></tr>
+</tbody></table></div>
+<p>A caller that matches on ids should move to <code>id</code> now. A test ("every scanner id starts with GUARD- and none is reused by the audit") holds the split.</p>
+
+<h3 id="rg-python">The Python port</h3>
+
+<p><code>security/injection_guard.py</code> (header version 1.5.0) carries the same 28 injection regexes, the same 16 secret regexes in the same order, the same severities, the same detect and strip sets, the same confusables table, the same base64 run pattern, candidate cap and printable test, the same 1,000,000 cap with <code>GUARD-INJ-OVERSIZE</code>, and a linear <code>_comment_matcher</code> for 027 and 028. The public functions are <code>scan</code>, <code>report_violations</code>, <code>sanitize</code>, <code>guard_input</code>, <code>guard_output</code>, <code>make_fastapi_guard</code> and the <code>GuardianError</code> class. It imports only the standard library (FastAPI is imported lazily inside <code>make_fastapi_guard</code>). Running it as a script scans its arguments or one line from stdin.</p>
+
+<p>Differences, each read from the code:</p>
+<div class="tbl"><table><thead><tr><th>Area</th><th>Node</th><th>Python</th></tr></thead><tbody>
+<tr><td>Change scanner</td><td><code>scanChange()</code></td><td>None. Only the Node hooks need it.</td></tr>
+<tr><td><code>scan()</code> return</td><td><code>{ violations, hasSecrets, hasCritical }</code></td><td><code>list[Violation]</code>; callers compute the flags.</td></tr>
+<tr><td>Violation fields</td><td><code>type id legacyId severity matched pattern|label timestamp</code></td><td>dataclass <code>type id severity matched description timestamp legacy_id</code>; no <code>pattern</code> or <code>label</code>, the rule description or secret label goes in <code>description</code>.</td></tr>
+<tr><td>Non-string to the guards</td><td>throws <code>GuardianError</code></td><td>raises <code>TypeError</code></td></tr>
+<tr><td>Critical block</td><td>any CRITICAL, secrets included</td><td>injection CRITICAL only, so <code>block_on_secrets=False</code> really lets a secret through</td></tr>
+<tr><td>Percent view</td><td>per-run decode, invalid runs left as written</td><td><code>urllib.parse.unquote(base)</code> on the whole string; invalid UTF-8 becomes U+FFFD (standard library default)</td></tr>
+<tr><td>Entity view</td><td>numeric entities and six named ones</td><td><code>html.unescape(base)</code>: the full HTML5 named set, including some forms without a semicolon</td></tr>
+<tr><td>View list</td><td>fixed 8 slots; all runs joined into one view</td><td>views appended only when new; whole-text base64 and each run are separate views</td></tr>
+<tr><td>Base64 decode</td><td><code>Buffer.from(..., "base64")</code></td><td>pads to a multiple of 4, <code>b64decode</code>, UTF-8 with <code>errors="ignore"</code></td></tr>
+<tr><td>Comment matcher</td><td><code>match</code> and <code>matchAll</code></td><td>first match only (no change scanner to feed)</td></tr>
+<tr><td>Output</td><td><code>console.warn</code> / <code>console.error</code></td><td><code>logging</code> logger <code>"otlc-guardian"</code>; the module calls <code>logging.basicConfig()</code> at import with a JSON-like format and <code>LOG_LEVEL</code>, which configures the root logger of the host process if nothing has yet</td></tr>
+<tr><td>Framework glue</td><td><code>injectionMiddleware()</code> writes sanitized fields back into <code>req.body</code></td><td><code>make_fastapi_guard(field, **kwargs)</code> returns a dependency that reads one JSON field and returns the sanitized value; on a block it raises <code>HTTPException(400)</code> whose <code>detail</code> has the error shape but no <code>requestId</code></td></tr>
+<tr><td>UNICODE <code>matched</code> text</td><td>"invisible unicode characters detected"</td><td>"invisible unicode characters"</td></tr>
+</tbody></table></div>
+
+<p>No test in <code>tests/</code> exercises the Python module; parity is held by hand. A quick run confirmed that <code>legacy_id</code> is filled and that an unknown mode returns an empty list, as in Node. The comment above <code>MAX_SCAN_LENGTH</code> still says 100 KB; the value is 1,000,000. The comment above 027/028 still describes a lazy-quantifier regex; the code uses the matcher.</p>
+
+<h3 id="rg-codesec">02-code-security.js: server helpers</h3>
+
+<p>Express helpers for a Node API (file header still says version 1.4.1). Imported as <code>otlc-guardian/security</code> or from the copied file. It is on the audit allowlist (<code>security/.audit-allowlist</code>) because the logger has to call <code>console.*</code> to be the logger.</p>
+
+<div class="tbl dense"><table><thead><tr><th>Export</th><th>What it does</th><th>Failure behavior and notes</th></tr></thead><tbody>
+<tr><td><code>validateEnv(required, recommended)</code></td><td>Checks <code>process.env</code> for each name. Logs the missing required names, then throws; logs missing recommended names as a warning; logs success on <code>console.info</code>.</td><td>Throws <code>GuardianConfigError</code> with <code>missing</code>. Never calls <code>process.exit</code>: the caller decides. An empty string counts as missing.</td></tr>
+<tr><td><code>GuardianConfigError</code></td><td>Error class with <code>missing</code> array.</td><td></td></tr>
+<tr><td><code>SECURE_HEADERS</code></td><td>Header map: <code>X-Content-Type-Options: nosniff</code>, <code>X-Frame-Options: DENY</code>, <code>X-XSS-Protection: 1; mode=block</code>, <code>Referrer-Policy: strict-origin-when-cross-origin</code>, a <code>Permissions-Policy</code> denying camera, microphone and geolocation, HSTS for one year with subdomains, and a CSP of <code>'self'</code> for default, script and connect, <code>'unsafe-inline'</code> styles, images from self, data: and https:.</td><td>Fixed values; a project that needs a different CSP edits the map or sets headers after.</td></tr>
+<tr><td><code>applySecureHeaders</code></td><td>Middleware: sets every header in the map, removes <code>X-Powered-By</code> and <code>Server</code>.</td><td>Mount as <code>app.use(applySecureHeaders)</code> (not a factory).</td></tr>
+<tr><td><code>requestIdMiddleware</code></td><td>Uses the incoming <code>x-request-id</code> header or <code>crypto.randomUUID()</code>; sets <code>req.requestId</code> and the <code>X-Request-ID</code> response header.</td><td>The incoming header is used as given, with no length or format check, and ends up in logs.</td></tr>
+<tr><td><code>logger</code></td><td><code>debug info warn error</code>, each <code>(message, meta)</code>. Writes one JSON line <code>{ timestamp, level, message, ...meta }</code>; error to stderr, warn to <code>console.warn</code>, others to stdout.</td><td>Level from <code>LOG_LEVEL</code> read once at import (unknown value means info). It does not add <code>requestId</code> itself; pass it in <code>meta</code>. Keys in <code>meta</code> can overwrite <code>timestamp</code>, <code>level</code> or <code>message</code>.</td></tr>
+<tr><td><code>checkRateLimit(key, limit = 20, windowMs = 60000)</code></td><td>Fixed-window counter in an in-process <code>Map</code>. Returns <code>{ allowed, remaining, resetAt }</code>.</td><td>Per process: not shared across cluster workers or hosts (the file marks the Redis swap point). When the map passes <code>RATE_LIMIT_SWEEP_THRESHOLD</code> (env, default 10000) expired windows are deleted on each call.</td></tr>
+<tr><td><code>rateLimitMiddleware({ limit, windowMs, keyFn })</code></td><td>Keys on <code>keyFn(req)</code>, else <code>req.ip</code>, else <code>x-forwarded-for</code>, else <code>"unknown"</code>. Sets <code>X-RateLimit-Limit</code>, <code>-Remaining</code>, <code>-Reset</code>.</td><td>Over the limit: logs a warning and returns 429 <code>ERR_RATE_LIMITED</code>. Its <code>requestId</code> is <code>req.requestId</code>, so without <code>requestIdMiddleware</code> mounted first the field is dropped from the JSON.</td></tr>
+<tr><td><code>sendError(res, status, code, message, requestId)</code></td><td><code>{ success: false, error: { code, message }, requestId }</code>.</td><td>Generates a UUID when <code>requestId</code> is missing.</td></tr>
+<tr><td><code>sendSuccess(res, data, requestId, status = 200)</code></td><td><code>{ success: true, data, requestId }</code>.</td><td>Same UUID fallback.</td></tr>
+<tr><td><code>errorHandler(err, req, res, next)</code></td><td>Last <code>app.use()</code>. Logs message, stack, path and method at error, then answers with <code>err.status</code> or <code>err.statusCode</code> or 500.</td><td>Below 500 the client sees <code>err.message</code>; at 500 and above a generic message. The code is always <code>ERR_SERVER</code>, even for a 4xx.</td></tr>
+<tr><td><code>healthCheck(req, res)</code></td><td>200 with <code>status: "ok"</code>, timestamp, <code>process.uptime()</code> and <code>npm_package_version</code>.</td><td>Version reads <code>"unknown"</code> unless the process was started by npm.</td></tr>
+<tr><td><code>printWindowsEnvSetup(keys)</code></td><td>Prints PowerShell commands to set each variable for the session and for the user.</td><td>Setup scripts only.</td></tr>
+</tbody></table></div>
+
+<p>SETUP.md's full Express example wires them in this order: <code>validateEnv([...])</code> before the app is built, then <code>express.json()</code>, <code>requestIdMiddleware</code>, <code>applySecureHeaders</code>, <code>app.get("/health", healthCheck)</code>, the chat route with <code>rateLimitMiddleware(...)</code> calling <code>guardInput()</code> and <code>guardOutput()</code> inside, and <code>errorHandler</code> last. <code>injectionMiddleware()</code> can take the place of the inline <code>guardInput()</code> call on a route.</p>
+
+<h3 id="rg-sql">04-sql-guard.js: the parameterized SQL helper</h3>
+
+<p>A zero-dependency tagged template that makes the parameterized query the easy path (file header version 1.4.1). It is not a filter: it never inspects values and never rejects SQL text. The static audit (<code>03-audit.js</code>) is what flags string-built SQL; this helper is the safe replacement.</p>
+
+<h4>Exports</h4>
+<div class="tbl dense"><table><thead><tr><th>Export</th><th>Use</th></tr></thead><tbody>
+<tr><td><code>sql</code></td><td>Tag bound to postgres: <code>sql`SELECT * FROM users WHERE id = ${id}`</code> gives <code>{ text: "... = $1", values: [id], driver: "postgres" }</code>.</td></tr>
+<tr><td><code>createSqlHelper({ driver })</code></td><td>Returns a tag bound to <code>"postgres"</code>, <code>"mysql"</code> or <code>"sqlite"</code>.</td></tr>
+<tr><td><code>sql.identifier(name, allowList)</code></td><td>The one way to put a column or table name into the text. Also on every tag from <code>createSqlHelper</code>.</td></tr>
+</tbody></table></div>
+
+<h4>Drivers</h4>
+<div class="tbl dense"><table><thead><tr><th>Driver</th><th>Library</th><th>Placeholder</th><th>Identifier quote</th></tr></thead><tbody>
+<tr><td><code>postgres</code></td><td><code>pg</code></td><td><code>$1</code>, <code>$2</code>, ...</td><td><code>"name"</code></td></tr>
+<tr><td><code>mysql</code></td><td><code>mysql2</code></td><td><code>?</code></td><td><code>`name`</code></td></tr>
+<tr><td><code>sqlite</code></td><td><code>better-sqlite3</code></td><td><code>?</code></td><td><code>"name"</code></td></tr>
+</tbody></table></div>
+
+<h4>Behavior</h4>
+<ul>
+<li>Every interpolation becomes one placeholder and one entry in <code>values</code>, whatever it is: strings, numbers, <code>0</code>, <code>""</code>, <code>null</code>, <code>undefined</code>, objects, buffers. An array is one value, not a list; an <code>IN</code> list needs the driver's own form (for example <code>= ANY(${arr})</code> on postgres).</li>
+<li>A nested <code>sql`...`</code> result is inlined; placeholders are renumbered and values concatenated in document order, in the outer tag's dialect.</li>
+<li>The result carries <code>toPostgres()</code>, <code>toMysql()</code>, <code>toSqlite()</code>, which re-render the stored parts without mutating the original. The parts sit under a non-enumerable Symbol key, so spreading or <code>JSON.stringify</code> does not expose them, and a user object cannot pass itself off as a query.</li>
+<li>Text between interpolations is kept byte for byte.</li>
+</ul>
+
+<h4>What it refuses (all throw <code>Error</code>)</h4>
+<ul>
+<li><code>createSqlHelper()</code> with any driver outside the three.</li>
+<li><code>sql.identifier()</code> when the allow-list is not a non-empty array.</li>
+<li><code>sql.identifier()</code> when the name is not a string matching <code>^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$</code> (an optional single <code>schema.</code> prefix). This check runs before the allow-list check, so a bad name is rejected even if someone put it on the list.</li>
+<li><code>sql.identifier()</code> when the name is not on the allow-list. There is no fallback to a default.</li>
+</ul>
+<p>A bare string in <code>ORDER BY ${col}</code> is a value, not an identifier, so it binds as a parameter (test: "raw string interpolation in ORDER BY is a parameter, NOT an identifier"). No Python equivalent exists; the README points Python users to SQLAlchemy or DB-API <code>execute(sql, params)</code>.</p>
+
+<h3 id="rg-deps">Who depends on it</h3>
+
+<div class="tbl"><table><thead><tr><th>Caller</th><th>Uses</th><th>Expects back</th><th>If it breaks</th></tr></thead><tbody>
+<tr><td><code>.claude/hooks/injection-guard-hook.mjs</code> (PreToolUse)</td><td>Dynamic import of <code>security/01-injection-guard.js</code> two folders up from the hook; calls <code>scanChange(before, after, "injection")</code> for file writes and <code>scan(text, "injection")</code> where there is no file to compare</td><td>The <code>{ violations }</code> shape with <code>id</code>, <code>severity</code>, <code>matched</code></td><td>Missing file, failed import, or either export missing: the hook writes the reason to stderr and exits 1 without blocking. See <a href="#ch-hooks">chapter 04</a>.</td></tr>
+<tr><td><code>.claude/hooks/web-content-guard.mjs</code> (PostToolUse)</td><td><code>scan(text, "injection")</code> on fetched web content, with no local size window since 1.5.0</td><td>Same shape</td><td>Same loud non-blocking exit.</td></tr>
+<tr><td><code>bin/guardian.js</code> <code>guardian scan</code></td><td><code>scan(text, "all")</code> and <code>reportViolations()</code></td><td>Same shape</td><td>The command fails.</td></tr>
+<tr><td>Projects (per CLAUDE.md)</td><td><code>guardInput()</code> before every AI API call, <code>guardOutput()</code> on the reply, or <code>injectionMiddleware()</code> on the route; Python: <code>guard_input</code>, <code>guard_output</code>, <code>make_fastapi_guard</code></td><td>A string, or a <code>GuardianError</code> to turn into a 400</td><td>A changed id or shape breaks any project that matches on it; <code>legacyId</code> covers the id change until 1.6.0.</td></tr>
+<tr><td>Projects using the helpers</td><td><code>otlc-guardian/security</code>, <code>otlc-guardian/sql</code></td><td>The exports listed above</td><td></td></tr>
+</tbody></table></div>
+
+<p>Because the hooks import the scanner instead of carrying their own patterns, there is one pattern list in Node (BUG-019 was the old drift). The cost is that the scanner is code the hook trusts: since 1.5.0 the hook asks before any change to <code>security/01-injection-guard.js</code> or the hook files, and denies it in bypass mode (BUG-027, still in progress). <code>guardian update</code> replaces <code>security/*</code> in a project, so local edits to these files are overwritten.</p>
+
+<h3 id="rg-tests">What the tests verify</h3>
+
+<p><code>node tests/injection-guard.test.js</code> passed 106 checks and <code>node tests/sql-guard.test.js</code> passed 40 on this tree (run while writing this chapter).</p>
+<ul>
+<li>Injection: one or more cases per rule family, the <code>GUARD-INJ-009</code> user exception, legitimate questions that must not fire, empty string.</li>
+<li>Bypasses: fullwidth, zero-width, percent-encoding, word joiner, tag characters (payload found and <code>GUARD-INJ-UNICODE</code> raised), Cyrillic lookalikes, ordinary Cyrillic text not flagged, stray <code>%</code>, embedded base64, entities, markdown emphasis, emoji with a variation selector not flagged, oversize input, a payload at 150 KB.</li>
+<li>Time: unterminated comment floods for 027 and 028 and a connection-string prefix flood for SEC-011 stay fast; 027 needs the keyword inside one comment.</li>
+<li>Secrets: each provider format, including the 1.5.0 additions; the legacy OpenAI rule does not double-fire; public key headers and credential-less URLs do not fire.</li>
+<li>Ids: every scanner id starts with <code>GUARD-</code>, none is an audit id, <code>legacyId</code> is present.</li>
+<li>019 and 020: ordinary headings and front matter do not fire, template delimiters do.</li>
+<li><code>scanChange()</code>: eleven tests, covering the cases listed in <a href="#rg-scanchange">scanChange()</a> plus the reported text being the new one, a large file staying cheap, an append past 1 MB, and new versus existing invisible characters.</li>
+<li>Guards: clean pass-through, truncation, CRITICAL throw with a violations array, non-string throw, <code>guardOutput</code> secret detection and reflected injection, no throw with <code>blockOnSecrets: false</code>.</li>
+<li>SQL: placeholders per dialect, text preserved, injection payloads bound as values, identifier allow-list and shape checks, nested composition, values passed through unfiltered (including <code>0</code>, <code>""</code>, <code>null</code>), pure dialect conversion.</li>
+</ul>
+<p>Not covered by any test: <code>injectionMiddleware()</code>, everything in <code>02-code-security.js</code>, and the whole Python module.</p>
+
+<h3 id="rg-docs">Code versus docs</h3>
+
+<div class="tbl"><table><thead><tr><th>Doc says</th><th>Code does</th></tr></thead><tbody>
+<tr><td>README.md: <code>scan()</code> "hard-caps input at 100 KB"</td><td><code>MAX_SCAN_LENGTH</code> is 1,000,000 characters in both modules (raised in 1.5.0, BUG-024). The Python comment above it also still says 100 KB.</td></tr>
+<tr><td>README.md: Node and Python have "same patterns, same normalizer, same shape" and work "identically"</td><td>Same patterns, yes. The normalizers differ in the percent and entity views, the return shapes differ, the critical-block rule differs, and Python has no <code>scanChange()</code>. See <a href="#rg-python">The Python port</a>.</td></tr>
+<tr><td>README.md and SECURITY.md describe the normalizer as NFKC, invisible stripping, URL and base64 decoding</td><td>Also tag-character mapping, confusable folding, HTML entities and markdown removal (1.5.0). Not wrong, incomplete.</td></tr>
+<tr><td>README.md secret list names OpenAI, Anthropic <code>sk-ant-api03-</code>, Google, GitHub, AWS, private keys, passwords, connection strings</td><td>16 rules; also Anthropic OAuth and admin keys, GitHub fine-grained and server tokens, Slack, Stripe live keys, inline API keys and context-adjacent base64.</td></tr>
+<tr><td>Comment on <code>MAX_SCAN_LENGTH</code> in <code>01-injection-guard.js</code>: <code>scan()</code> is used directly by "the audit CLI"</td><td><code>03-audit.js</code> imports only <code>fs</code> and <code>path</code>. The caller is the <code>guardian scan</code> command in <code>bin/guardian.js</code>.</td></tr>
+<tr><td>Test group comment for 027/028: "Rewritten with lazy <code>[\s\S]*?</code>"</td><td>Both modules use the linear comment walker; the comment predates BUG-023.</td></tr>
+<tr><td>File headers of <code>02-code-security.js</code> and <code>04-sql-guard.js</code>: version 1.4.1</td><td><code>package.json</code> is 1.5.0 and 02 changed in 1.5.0 (rate-limit sweep).</td></tr>
+</tbody></table></div>
+<p>Counts agree: README.md, SECURITY.md and SETUP.md say 28 injection patterns, and SECURITY.md says 16 secret patterns; the code has 28 and 16 (plus the two findings <code>scan()</code> raises itself, which no doc counts).</p>
+
+<h3 id="rg-open">Open bugs</h3>
+
+<div class="limit"><b>Open on 2026-11-10</b>
+<p><b>BUG-029 (OPEN).</b> Scanner bypasses still open: the 64-candidate base64 cap can be spent by decoys, chained encodings (two decode steps) pass because each view is one step, and the confusables table has gaps.</p>
+<p><b>BUG-042 (OPEN).</b> <code>scanChange()</code> judges by counts, so moving an already-quoted pattern into a live directive is not a new finding.</p>
+<p><b>BUG-046 (OPEN).</b> Whitespace padding longer than the 2 KB <code>CHANGE_CONTEXT</code> window separates the old half of a phrase from the added half, and neither window sees the whole match.</p>
+<p><b>BUG-043 (OPEN).</b> False denies from the hook on scanner matches: <code>### System: Billing</code>, <code>### Prompt:</code>, a <code>--- System ---</code> line, prose that mentions wrapping text in a user role tag, and a CLAUDE.md line that quotes a pattern as data. Rules 015, 019 and 020 match these by design; the fix belongs to the rules or to the hook.</p>
+<p><b>BUG-023, BUG-024, BUG-026 (SMOKE-TESTING).</b> The cubic comment rules, the eight normalizer bypasses and the missed secret formats are fixed in the 1.5.0 tree and covered by tests; they stay open until verified in a real project.</p>
+<p><b>BUG-049 (OPEN).</b> <code>scan()</code> with an unknown <code>mode</code> runs no rules and returns clean, so a typo turns the guard off.</p>
+<p><b>BUG-050 (OPEN).</b> <code>guardInput</code> with <code>blockOnSecrets: false</code> still throws on a secret, because <code>hasCritical</code> counts secret findings, and the message calls it an injection.</p>
+<p><b>BUG-027 (IN-PROGRESS).</b> The hook now protects the scanner file and itself; the remaining half sits outside this chapter.</p>
+<p>Detection is pattern-based. A reworded instruction that matches none of the 28 rules passes, and the substring rules (023, 024, 028 and others) fire on ordinary mentions. Neither has a bug entry. CHANGELOG.md lists the first under known limits; the second follows from the regexes having no word boundaries.</p>
+</div>
+
+</section>

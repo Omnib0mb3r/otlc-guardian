@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install and update | OTLC Guardian Manual</title>
+<meta name="description" content="How guardian init puts Guardian into a project, how guardian update keeps it current, and how to take it out again by hand.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Inter+Tight:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="manual.css">
+</head>
+<body>
+<nav class="rail" aria-label="Chapters">
+<a class="brand" href="index.html"><span class="mark"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 5 6v5c0 4.4 3 8.3 7 9.5 4-1.2 7-5.1 7-9.5V6z"/><path d="m9 12 2 2 4-4"/></svg></span><span><b>OTLC Guardian</b><small>The manual</small></span></a>
+<div class="tools"><button type="button" data-theme-toggle>Theme</button><a class="chip" href="../GUARDIAN-MANUAL.html" style="border:0">One page</a></div>
+<ol><li><a href="ch-what.html" data-ch="ch-what"><span class="n">01</span><span>What Guardian is</span></a><ul class="sub"><li><a href="ch-what.html#wh-parts">The parts</a></li><li><a href="ch-what.html#wh-ids">Rule ids</a></li><li><a href="ch-what.html#wh-state">Version and release state</a></li><li><a href="ch-what.html#wh-layout">Repo layout</a></li></ul></li><li><a href="ch-audit.html" data-ch="ch-audit"><span class="n">02</span><span>The audit engine</span></a><ul class="sub"><li><a href="ch-audit.html#au-what">What the audit is and is not</a></li><li><a href="ch-audit.html#au-pipeline">One run, start to finish</a></li><li><a href="ch-audit.html#au-cli">Command line</a></li><li><a href="ch-audit.html#au-json">JSON output</a></li><li><a href="ch-audit.html#au-files">Which files get scanned</a></li><li><a href="ch-audit.html#au-roots">Scan root and project root</a></li><li><a href="ch-audit.html#au-tests">Test-file detection</a></li><li><a href="ch-audit.html#au-kinds">The three rule kinds</a></li><li><a href="ch-audit.html#au-analyzers">Route-handler analyzers</a></li><li><a href="ch-audit.html#au-rules">Rule reference</a></li><li><a href="ch-audit.html#au-severity">Severity, summary and exit code</a></li><li><a href="ch-audit.html#au-suppress">Suppression</a></li><li><a href="ch-audit.html#au-verified">What the tests verify</a></li><li><a href="ch-audit.html#au-bugs">Known open bugs</a></li><li><a href="ch-audit.html#au-found">Found while writing this chapter</a></li><li><a href="ch-audit.html#au-deps">Who depends on it</a></li><li><a href="ch-audit.html#au-docs">Where the docs and the code disagree</a></li></ul></li><li><a href="ch-runtime.html" data-ch="ch-runtime"><span class="n">03</span><span>The runtime guard and helpers</span></a><ul class="sub"><li><a href="ch-runtime.html#rg-overview">Where it sits</a></li><li><a href="ch-runtime.html#rg-pipeline">How one scan runs</a></li><li><a href="ch-runtime.html#rg-api">01-injection-guard.js: the exports</a></li><li><a href="ch-runtime.html#rg-injection">Injection rules</a></li><li><a href="ch-runtime.html#rg-secrets">Secret rules</a></li><li><a href="ch-runtime.html#rg-normalize">Normalizer, decode views and caps</a></li><li><a href="ch-runtime.html#rg-scanchange">scanChange(): judging what a change adds</a></li><li><a href="ch-runtime.html#rg-ids">Rule ids and legacyId</a></li><li><a href="ch-runtime.html#rg-python">The Python port</a></li><li><a href="ch-runtime.html#rg-codesec">02-code-security.js: server helpers</a></li><li><a href="ch-runtime.html#rg-sql">04-sql-guard.js: the parameterized SQL helper</a></li><li><a href="ch-runtime.html#rg-deps">Who depends on it</a></li><li><a href="ch-runtime.html#rg-tests">What the tests verify</a></li><li><a href="ch-runtime.html#rg-docs">Code versus docs</a></li><li><a href="ch-runtime.html#rg-open">Open bugs</a></li></ul></li><li><a href="ch-hooks.html" data-ch="ch-hooks"><span class="n">04</span><span>The Claude Code hooks</span></a><ul class="sub"><li><a href="ch-hooks.html#hk-overview">The two hooks at a glance</a></li><li><a href="ch-hooks.html#hk-protocol">How Claude Code calls a hook</a></li><li><a href="ch-hooks.html#hk-flow">The PreToolUse decision flow</a></li><li><a href="ch-hooks.html#hk-bypass">The bypassPermissions rule</a></li><li><a href="ch-hooks.html#hk-watch">The watch list and its settings</a></li><li><a href="ch-hooks.html#hk-files">How a file write is judged</a></li><li><a href="ch-hooks.html#hk-shell">The shell readers</a></li><li><a href="ch-hooks.html#hk-copy">Copy sources are judged by content</a></li><li><a href="ch-hooks.html#hk-self">Self-protection</a></li><li><a href="ch-hooks.html#hk-failure">Failure behavior</a></li><li><a href="ch-hooks.html#hk-web">web-content-guard.mjs</a></li><li><a href="ch-hooks.html#hk-blind">What the PreToolUse hook cannot see</a></li><li><a href="ch-hooks.html#hk-tests">What the tests verify</a></li><li><a href="ch-hooks.html#hk-bugs">Known bugs</a></li><li><a href="ch-hooks.html#hk-deps">Who depends on it</a></li></ul></li><li class="open"><a href="ch-install.html" class="on" data-ch="ch-install"><span class="n">05</span><span>Install and update</span></a><ul class="sub"><li><a href="ch-install.html#in-package">The package and the source directory</a></li><li><a href="ch-install.html#in-commands">Commands and flags</a></li><li><a href="ch-install.html#in-init">What init writes</a></li><li><a href="ch-install.html#in-markers">The marker block in the behavior files</a></li><li><a href="ch-install.html#in-settings">The settings merge</a></li><li><a href="ch-install.html#in-never">What init never overwrites</a></li><li><a href="ch-install.html#in-update">How update decides</a></li><li><a href="ch-install.html#in-hookblind">Update and the PreToolUse hook</a></li><li><a href="ch-install.html#in-check">guardian check</a></li><li><a href="ch-install.html#in-exit">Exit codes and failures</a></li><li><a href="ch-install.html#in-agents">How agents are made to run Guardian</a></li><li><a href="ch-install.html#in-uninstall">Uninstall</a></li><li><a href="ch-install.html#in-tests">What the tests verify</a></li><li><a href="ch-install.html#in-open">Known open bugs</a></li></ul></li><li><a href="ch-suppression.html" data-ch="ch-suppression"><span class="n">06</span><span>Exemptions and suppression</span></a><ul class="sub"><li><a href="ch-suppression.html#sp-summary">All mechanisms at a glance</a></li><li><a href="ch-suppression.html#sp-allowlist">The central allowlist</a></li><li><a href="ch-suppression.html#sp-marker">The audit-exempt marker</a></li><li><a href="ch-suppression.html#sp-report">Where audit exemptions are reported</a></li><li><a href="ch-suppression.html#sp-notcovered">What an audit exemption does not cover</a></li><li><a href="ch-suppression.html#sp-builtin">Built-in rule scope</a></li><li><a href="ch-suppression.html#sp-inline">Text that silences a rule (a defect)</a></li><li><a href="ch-suppression.html#sp-repo">This repo's allowlist</a></li><li><a href="ch-suppression.html#sp-ignorepaths">Hook exemption: otlcGuardian.ignorePaths</a></li><li><a href="ch-suppression.html#sp-narrowing">Settings that narrow the hook</a></li><li><a href="ch-suppression.html#sp-docmarker">History of the otlc-guardian:doc marker</a></li><li><a href="ch-suppression.html#sp-none">Where no exemption is needed, or none exists</a></li><li><a href="ch-suppression.html#sp-policy">When to use one</a></li></ul></li><li><a href="ch-connections.html" data-ch="ch-connections"><span class="n">07</span><span>Systems that touch Guardian</span></a><ul class="sub"><li><a href="ch-connections.html#cn-table">Who depends on what</a></li><li><a href="ch-connections.html#cn-planned">Planned: the hard-no hook planned</a></li><li><a href="ch-connections.html#cn-change">When Guardian changes</a></li></ul></li></ol>
+<div class="foot">7 chapters<br>Built 2026-11-10<br>From the code, not the brochure.</div>
+</nav>
+<main class="page">
+<section class="chapter" id="ch-install" data-num="05" data-title="Install and update" data-blurb="How guardian init puts Guardian into a project, how guardian update keeps it current, and how to take it out again by hand.">
+<header class="chapter-head"><div class="num">05</div><div><h2>Install and update</h2><p>How guardian init puts Guardian into a project, how guardian update keeps it current, and how to take it out again by hand.</p></div></header>
+
+<p>The CLI is one file, <code>bin/guardian.js</code>, with no dependencies. It installs Guardian into a project by copying and merging files from its own source directory, and it never deletes anything. This chapter covers each command, what <code>init</code> writes where, how <code>update</code> differs from it, and how a project is taken back out. Everything here comes from <code>bin/guardian.js</code> at git HEAD <code>0fa32ce</code> (1.5.0, unreleased).</p>
+
+<h3 id="in-package">The package and the source directory</h3>
+
+<p><code>package.json</code> declares two executables: <code>guardian</code> (<code>bin/guardian.js</code>) and <code>guardian-audit</code> (<code>security/03-audit.js</code> run directly). It requires Node 22 or later (<code>engines.node</code> is <code>&gt;=22.0.0</code>), has empty <code>dependencies</code> and <code>devDependencies</code>, and exports four modules: <code>.</code> (the injection guard), <code>./security</code>, <code>./audit</code> and <code>./sql</code>. The <code>files</code> list ships <code>bin/</code>, <code>security/</code>, <code>guides/</code>, <code>skill/</code>, <code>.claude/</code>, <code>.github/</code>, the behavior and doc files, <code>.env.example</code> and <code>.gitleaks.toml</code>. <code>tests/</code> is not in it.</p>
+
+<p>The documented install is a clone plus <code>npm install -g .</code> (SETUP.md steps 1 and 2). Inside the CLI, <code>ROOT</code> is the directory one level above <code>bin/</code>, and every file <code>init</code> copies is read from there. <code>runInit()</code> prints it as <code>Guardian source:</code> at the top of every run, so the output always says which copy of Guardian a project received. Whatever that directory holds at the time is what gets copied, uncommitted edits included.</p>
+
+<div class="note"><b>On this PC</b><p>On 2026-11-10 no global <code>guardian</code> command was installed (<code>npm ls -g</code> lists no <code>otlc-guardian</code> and none is on <code>PATH</code>). The OTLC-Guardian skill does not need it: it runs the audit by path from the source repo (see <a href="#in-agents">How agents are made to run Guardian</a>). To run the CLI without a global install, use <code>node C:\dev\Projects\otlc-guardian\bin\guardian.js &lt;command&gt;</code>.</p></div>
+
+<h3 id="in-commands">Commands and flags</h3>
+
+<p>The router at the bottom of <code>bin/guardian.js</code> runs only when the file is the main module, so tests can import its helpers without side effects. It knows seven commands. There is no <code>uninstall</code>, <code>doctor</code> or <code>version</code> command.</p>
+
+<div class="tbl dense"><table>
+<thead><tr><th>Command</th><th>Function</th><th>What it does</th><th>Exit code</th></tr></thead>
+<tbody>
+<tr><td><code>guardian audit [path] [flags]</code></td><td><code>runAudit()</code></td><td>Runs <code>security/03-audit.js</code> from <code>ROOT</code> with <code>spawnSync("node", [script, ...args])</code>, <code>shell: false</code>, so arguments are never parsed by a shell (the 1.1.1 shell-injection fix). Every argument after <code>audit</code> is passed through as is. The audit takes the first argument not starting with <code>--</code> as the target (default <code>.</code>), plus <code>--json</code> and <code>--fail-on-error</code>. See <a href="ch-audit.html#ch-audit">chapter 02</a>.</td><td>The audit's own code. 1 when the script is missing or cannot be launched. The audit exits 1 only with <code>--fail-on-error</code> and at least one CRITICAL or HIGH finding.</td></tr>
+<tr><td><code>guardian scan "text"</code></td><td><code>runScan()</code></td><td>Scans a string with <code>scan(text, "all")</code> from <code>security/01-injection-guard.js</code> and prints the violations. With no argument and piped stdin it reads stdin (5 second timeout, <code>readStdinSync()</code>).</td><td>1 when there is no text. 0 otherwise, <b>including when patterns are found</b>.</td></tr>
+<tr><td><code>guardian check</code></td><td><code>runCheck()</code></td><td>Checks for the installed files, smoke-tests the PreToolUse hook and prints a per-editor coverage table. See <a href="#in-check">guardian check</a>.</td><td>1 when a required item is missing. Warnings, including a failed smoke test, leave it at 0.</td></tr>
+<tr><td><code>guardian init</code></td><td><code>runInit()</code></td><td>Copies and merges Guardian into the current directory. Never overwrites a file.</td><td>0, or 1 from an uncaught error (see <a href="#in-exit">Exit codes and failures</a>).</td></tr>
+<tr><td><code>guardian update</code></td><td><code>runInit({ refresh: true })</code></td><td>Everything <code>init</code> does, and also replaces Guardian-owned files and the marker sections. See <a href="#in-update">How update decides</a>.</td><td>Same as <code>init</code>.</td></tr>
+<tr><td><code>guardian list-watched</code></td><td><code>runListWatched()</code></td><td>Prints the hook's effective watch list: the defaults, <code>otlcGuardian.watchPaths</code> and <code>ignorePaths</code> from <code>.claude/settings.json</code>. The default list is a hand-kept copy of the hook's <code>DEFAULT_WATCH_DIR_PATTERNS</code> and <code>DEFAULT_WATCH_FILE_PATTERNS</code>, not an import.</td><td>0. A missing or unreadable settings file is a warning.</td></tr>
+<tr><td><code>guardian help</code>, <code>--help</code>, <code>-h</code>, or nothing</td><td><code>showHelp()</code></td><td>Prints the command list.</td><td>0</td></tr>
+<tr><td>anything else</td><td>router <code>default</code></td><td>Prints <code>Unknown command</code>.</td><td>1</td></tr>
+</tbody>
+</table></div>
+
+<p>One global flag, <code>--no-color</code>, is removed from the argument list before routing. Color and emoji are also off when <code>NO_COLOR</code> is <code>1</code> or <code>true</code>, or when the stream is not a TTY; stdout and stderr are checked separately. With color off, the status glyphs become <code>[ok]</code>, <code>[warn]</code> and <code>[err]</code>, so redirected output is plain ASCII.</p>
+
+<h3 id="in-init">What init writes</h3>
+
+<p><code>runInit()</code> works on <code>process.cwd()</code>; there is no target argument. It runs eight steps in a fixed order, and each step picks one of four ways to write.</p>
+
+<figure><div class="frame"><svg class="dg" viewBox="0 0 1100 560" role="img" aria-label="What guardian init and guardian update write: each Guardian source file on the left, the project file it becomes on the right, and the write mode between them">
+<defs>
+<marker id="in-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+<marker id="in-ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-hot" d="M0,0 L10,5 L0,10 z"/></marker>
+</defs>
+<text class="col-h" x="40" y="40">GUARDIAN SOURCE (ROOT)</text>
+<text class="col-h" x="420" y="40">MODE (INIT / UPDATE)</text>
+<text class="col-h" x="720" y="40">PROJECT (CWD)</text>
+
+<rect class="bx-ok" x="40" y="60" width="300" height="50" rx="6"/>
+<text class="t1" x="54" y="82">CLAUDE.md AGENTS.md GEMINI.md</text>
+<text class="t3" x="54" y="100">STANDARDS.md</text>
+<path class="ln" d="M340,85 L716,85" marker-end="url(#in-ah)"/>
+<text class="lbl" x="360" y="78">mergeMd(): marker block / block replaced</text>
+<rect class="bx-ok" x="720" y="60" width="340" height="50" rx="6"/>
+<text class="t1" x="734" y="82">same four files in the root</text>
+<text class="t3" x="734" y="100">your text outside the markers kept</text>
+
+<rect class="bx-ok" x="40" y="124" width="300" height="50" rx="6"/>
+<text class="t1" x="54" y="146">.gitignore  .env.example</text>
+<text class="t3" x="54" y="164">entry and key lists</text>
+<path class="ln" d="M340,149 L716,149" marker-end="url(#in-ah)"/>
+<text class="lbl" x="360" y="142">copy if missing, else append missing entries</text>
+<rect class="bx-ok" x="720" y="124" width="340" height="50" rx="6"/>
+<text class="t1" x="734" y="146">.gitignore  .env.example</text>
+<text class="t3" x="734" y="164"># OTLC-GUARDIAN-START block, once</text>
+
+<rect class="bx-hot" x="40" y="188" width="300" height="50" rx="6"/>
+<text class="t1" x="54" y="210">security/*.js  injection_guard.py</text>
+<text class="t3" x="54" y="228">01 to 04, Python module</text>
+<path class="ln-hot" d="M340,213 L716,213" marker-end="url(#in-ah-hot)"/>
+<text class="lbl-hot" x="360" y="206">copy if missing / replaced when bytes differ</text>
+<rect class="bx-hot" x="720" y="188" width="340" height="50" rx="6"/>
+<text class="t1" x="734" y="210">security/</text>
+<text class="t3" x="734" y="228">Guardian-owned</text>
+
+<rect class="bx-soft" x="40" y="252" width="300" height="50" rx="6"/>
+<text class="t1" x="54" y="274">security/.audit-allowlist</text>
+<text class="t3" x="54" y="292">Guardian's own 7 entries</text>
+<path class="ln" d="M340,277 L716,277" marker-end="url(#in-ah)"/>
+<text class="lbl" x="360" y="270">copy if missing / never replaced</text>
+<rect class="bx-soft" x="720" y="252" width="340" height="50" rx="6"/>
+<text class="t1" x="734" y="274">security/.audit-allowlist</text>
+<text class="t3" x="734" y="292">project-owned after the first copy</text>
+
+<rect class="bx-ok" x="40" y="316" width="300" height="50" rx="6"/>
+<text class="t1" x="54" y="338">.claude/settings.json</text>
+<text class="t3" x="54" y="356">2 hooks + otlcGuardian block</text>
+<path class="ln" d="M340,341 L716,341" marker-end="url(#in-ah)"/>
+<text class="lbl" x="360" y="334">copy if missing, else mergeClaudeSettings()</text>
+<rect class="bx-ok" x="720" y="316" width="340" height="50" rx="6"/>
+<text class="t1" x="734" y="338">.claude/settings.json</text>
+<text class="t3" x="734" y="356">hooks added or moved; invalid JSON aborts</text>
+
+<rect class="bx-hot" x="40" y="380" width="300" height="50" rx="6"/>
+<text class="t1" x="54" y="402">.claude/hooks/*.mjs</text>
+<text class="t3" x="54" y="420">injection-guard-hook, web-content-guard</text>
+<path class="ln-hot" d="M340,405 L716,405" marker-end="url(#in-ah-hot)"/>
+<text class="lbl-hot" x="360" y="398">copy if missing / replaced when bytes differ</text>
+<rect class="bx-hot" x="720" y="380" width="340" height="50" rx="6"/>
+<text class="t1" x="734" y="402">.claude/hooks/</text>
+<text class="t3" x="734" y="420">Guardian-owned</text>
+
+<rect class="bx-soft" x="40" y="444" width="300" height="50" rx="6"/>
+<text class="t1" x="54" y="466">.github/**</text>
+<text class="t3" x="54" y="484">workflow, CODEOWNERS, templates</text>
+<path class="ln" d="M340,469 L716,469" marker-end="url(#in-ah)"/>
+<text class="lbl" x="360" y="462">copy if missing / never replaced</text>
+<rect class="bx-soft" x="720" y="444" width="340" height="50" rx="6"/>
+<text class="t1" x="734" y="466">.github/**</text>
+<text class="t3" x="734" y="484">existing files skipped</text>
+
+<rect class="bx-ok" x="40" y="520" width="14" height="14" rx="3"/><text class="t2" x="62" y="532">merged: your content and Guardian's share a file</text>
+<rect class="bx-hot" x="400" y="520" width="14" height="14" rx="3"/><text class="t2" x="422" y="532">Guardian-owned: update overwrites</text>
+<rect class="bx-soft" x="700" y="520" width="14" height="14" rx="3"/><text class="t2" x="722" y="532">copied once: never overwritten</text>
+</svg></div><figcaption><b>Four write modes.</b> <code>init</code> takes the left half of each mode label, <code>update</code> the right half. Nothing is ever deleted, and <code>tests/</code> and build caches are never copied.</figcaption></figure>
+
+<div class="tbl dense"><table>
+<thead><tr><th>Step</th><th>Target</th><th>When missing</th><th>When present (init)</th><th>Helper</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>CLAUDE.md</code></td><td>Created with Guardian's content inside the marker block</td><td>Block appended below your content; skipped if the start marker is already there</td><td><code>mergeMd()</code></td></tr>
+<tr><td>1b</td><td><code>AGENTS.md</code></td><td>Same</td><td>Same</td><td><code>mergeMd()</code></td></tr>
+<tr><td>1c</td><td><code>GEMINI.md</code></td><td>Same</td><td>Same</td><td><code>mergeMd()</code></td></tr>
+<tr><td>2</td><td><code>STANDARDS.md</code></td><td>Same</td><td>Same</td><td><code>mergeMd()</code></td></tr>
+<tr><td>3</td><td><code>.gitignore</code></td><td>Guardian's file copied whole</td><td>Entries you lack appended in a <code># OTLC-GUARDIAN-START</code> block</td><td><code>mergeGitignore()</code></td></tr>
+<tr><td>4</td><td><code>.env.example</code></td><td>Guardian's file copied whole</td><td>Keys you lack appended in a <code># OTLC-GUARDIAN-START</code> block</td><td><code>mergeEnvExample()</code></td></tr>
+<tr><td>5</td><td><code>security/</code></td><td>Each file copied</td><td>Each existing file skipped</td><td><code>copyDirSafe()</code></td></tr>
+<tr><td>6</td><td><code>.claude/settings.json</code></td><td>Guardian's file copied whole (both hooks and an empty <code>otlcGuardian</code> block)</td><td>Hooks merged into your JSON</td><td><code>mergeClaudeSettings()</code></td></tr>
+<tr><td>7</td><td><code>.claude/hooks/</code></td><td>Each file copied</td><td>Each existing file skipped</td><td><code>copyDirSafe()</code></td></tr>
+<tr><td>8</td><td><code>.github/</code></td><td>Each file copied</td><td>Each existing file skipped</td><td><code>copyDirSafe()</code></td></tr>
+</tbody>
+</table></div>
+
+<p>Run in an empty directory on 2026-11-10, <code>init</code> produced 21 files: the four behavior files, <code>.gitignore</code>, <code>.env.example</code>, six files in <code>security/</code> (<code>.audit-allowlist</code>, <code>01-injection-guard.js</code>, <code>02-code-security.js</code>, <code>03-audit.js</code>, <code>04-sql-guard.js</code>, <code>injection_guard.py</code>), <code>.claude/settings.json</code>, the two hook scripts, and six files under <code>.github/</code> (<code>CODEOWNERS</code>, two issue templates, <code>PULL_REQUEST_TEMPLATE.md</code>, <code>secret_scanning.yml</code>, <code>workflows/security-audit.yml</code>).</p>
+
+<p><code>copyDirSafe()</code> recurses and skips any entry named in <code>COPY_IGNORE</code>: <code>__pycache__</code>, <code>.pytest_cache</code>, <code>.mypy_cache</code>, <code>.ruff_cache</code>, <code>.DS_Store</code>, <code>Thumbs.db</code> and <code>node_modules</code>. Guardian's <code>tests/</code> is not copied at all (removed in 1.1.1).</p>
+
+<p>Three things a project receives that are easy to miss:</p>
+<ul>
+<li><b>Guardian's own allowlist.</b> <code>security/.audit-allowlist</code> arrives with the seven entries the Guardian repo uses for itself. Three of them name files <code>init</code> just copied (<code>security/02-code-security.js</code>, <code>03-audit.js</code>, <code>04-sql-guard.js</code>), so those are exempt from the project's audit; a fresh install audits with <code>Exempt : 3 (0 marker, 3 allowlist)</code>. The other four name <code>bin/guardian.js</code> and three files under <code>tests/</code>, and they exempt whatever the project keeps at those paths. See <a href="ch-suppression.html#ch-suppression">chapter 06</a>.</li>
+<li><b>Guardian's CODEOWNERS.</b> <code>.github/CODEOWNERS</code> is the Guardian repo's file and names <code>@Omnib0mb3r</code> as owner of everything. In a project with no CODEOWNERS file of its own, that becomes the project's review rule.</li>
+<li><b>Guardian's issue and PR templates</b>, which describe Guardian, not the project.</li>
+</ul>
+
+<h3 id="in-markers">The marker block in the behavior files</h3>
+
+<p><code>mergeMd()</code> handles all four Markdown files. Guardian's section always sits between <code>&lt;!-- OTLC-GUARDIAN-START --&gt;</code> and <code>&lt;!-- OTLC-GUARDIAN-END --&gt;</code>, followed by a <code>---</code> rule and three comment lines saying not to edit inside the markers. The content is the matching file from <code>ROOT</code>, trimmed.</p>
+
+<ol>
+<li><b>File missing.</b> A new file is written with the marker block at the top and nothing above it. Since 1.1.1 a new file is sealed with markers too, so a second <code>init</code> is a no-op rather than a second append.</li>
+<li><b>File present, no start marker.</b> Your content is kept with trailing whitespace trimmed, then one blank line, then the block.</li>
+<li><b>Start marker present.</b> <code>init</code> prints <code>Guardian section already present, skipping</code> and leaves the file alone.</li>
+</ol>
+
+<p>The test is <code>existing.includes(marker)</code>: a file that contains the start marker anywhere, for example in a quoted example, counts as already merged.</p>
+
+<p><code>.gitignore</code> and <code>.env.example</code> use the shell-comment pair <code># OTLC-GUARDIAN-START</code> / <code># OTLC-GUARDIAN-END</code>. <code>mergeGitignore()</code> compares path tokens after removing an inline <code> #</code> comment (<code>gitignorePathToken()</code>), so your <code>.env # local secrets</code> line covers Guardian's <code>.env</code>. <code>mergeEnvExample()</code> compares keys (the text before <code>=</code>), so your value for a key is never joined by Guardian's. Comment lines from Guardian's templates are dropped. If nothing is missing, no block is written. A whole-file copy (the file was missing) has no markers.</p>
+
+<h3 id="in-settings">The settings merge</h3>
+
+<p><code>mergeClaudeSettings()</code> registers two hooks:</p>
+
+<div class="tbl dense"><table>
+<thead><tr><th>Event</th><th>Matcher</th><th>Command</th></tr></thead>
+<tbody>
+<tr><td><code>PreToolUse</code></td><td><code>Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell</code></td><td><code>node .claude/hooks/injection-guard-hook.mjs</code></td></tr>
+<tr><td><code>PostToolUse</code></td><td><code>WebFetch|WebSearch|mcp__firecrawl__crawl|mcp__exa__search</code></td><td><code>node .claude/hooks/web-content-guard.mjs</code></td></tr>
+</tbody>
+</table></div>
+
+<p>For each one it:</p>
+<ol>
+<li><b>Migrates.</b> It takes Guardian's command out of any block in the same event whose matcher differs from the current one. Your hooks in that block stay; the block is removed only if Guardian's entry was its last. This is the 1.5.0 migration that moves an old <code>Write|Edit</code> registration under the matcher that includes Bash and PowerShell.</li>
+<li><b>Finds or creates</b> the block for the current matcher. Matchers are compared as sorted token sets (<code>canonicalMatcher()</code>, <code>findMatcherBlock()</code>), so <code>Edit|Write</code> and <code>Write|Edit</code> are one block, but a block with more or fewer tools is a different one.</li>
+<li><b>Adds</b> Guardian's command to that block unless the exact same command string is already in it.</li>
+</ol>
+
+<p>The file is written back only if a hook was added or moved, as 2-space JSON. If it does not parse, the function prints the parse error and the path of Guardian's reference copy, and throws. It never overwrites a file it cannot parse. It never adds the <code>otlcGuardian</code> block to an existing file; only a fresh copy carries one. Commands are compared as exact strings, which has consequences listed under <a href="#in-open">open bugs</a> (BUG-037).</p>
+
+<h3 id="in-never">What init never overwrites</h3>
+
+<p><code>init</code> overwrites nothing. Every existing file is either merged or skipped. In detail:</p>
+<ul>
+<li>Your text in the four behavior files, <code>.gitignore</code> and <code>.env.example</code> is never changed or removed. Only a block is appended, and only once.</li>
+<li>Your hooks in <code>.claude/settings.json</code> are never removed or edited. The one exception is the migration step, which moves Guardian's own command entry out of a block with a different matcher; it can also drop a block that held only that entry.</li>
+<li>Every existing file under <code>security/</code>, <code>.claude/hooks/</code> and <code>.github/</code> is skipped, including an old Guardian scanner or hook. Before 1.5.0 this was also true of <code>update</code>, which is BUG-025.</li>
+<li>Files Guardian never creates (<code>.cursorrules</code>, <code>.windsurfrules</code>, <code>.aider.conf.yml</code>, <code>copilot-instructions.md</code>) are never written. The hook scans them; the CLI does not touch them.</li>
+</ul>
+
+<h3 id="in-update">How update decides</h3>
+
+<p>Up to 1.4.1, <code>update</code> was an alias for <code>init</code> (CHANGELOG 1.1.0: "alias for <code>guardian init</code>"). Because <code>init</code> never overwrites, a project that already had Guardian kept its first scanner and hooks forever, and no fix ever reached it. That is BUG-025, now SMOKE-TESTING. Since 1.5.0, <code>update</code> calls <code>runInit({ refresh: true })</code>, which changes three steps:</p>
+
+<div class="tbl dense"><table>
+<thead><tr><th>Target</th><th><code>init</code></th><th><code>update</code></th></tr></thead>
+<tbody>
+<tr><td>Behavior files with a marker block</td><td>Skipped</td><td>Text from the start marker to the first end marker after it is replaced with current content. Everything before and after is written back byte for byte. No end marker: warning, file not touched. Identical result: not written.</td></tr>
+<tr><td><code>security/*</code></td><td>Existing files skipped</td><td><code>refreshOwnedDir()</code>: missing files copied, a file whose bytes differ from <code>ROOT</code>'s is replaced (<code>UPDATED</code>), identical files reported <code>up to date</code></td></tr>
+<tr><td><code>security/.audit-allowlist</code></td><td>Skipped if present</td><td>Skipped if present (<code>PROJECT_OWNED_SECURITY_FILES</code>), copied if missing</td></tr>
+<tr><td><code>.claude/hooks/*</code></td><td>Existing files skipped</td><td><code>refreshOwnedDir()</code>, as for <code>security/</code></td></tr>
+<tr><td><code>.claude/settings.json</code>, <code>.gitignore</code>, <code>.env.example</code>, <code>.github/</code></td><td colspan="2">Identical in both. Settings get the merge and migration above; <code>.github/</code> is never overwritten.</td></tr>
+</tbody>
+</table></div>
+
+<p><b>There are no backups.</b> A local edit to a Guardian-owned file is overwritten without a prompt or a <code>.bak</code> copy; the help text says "git is the undo". Commit or stash before running it. <code>refreshOwnedDir()</code> compares raw bytes, so a file that differs only in line endings (for example after a git <code>autocrlf</code> checkout) is also replaced.</p>
+
+<p>The first <code>update</code> after an <code>init</code> always reports each behavior file as <code>refreshed</code>, even with no change to Guardian's content. The comment header differs: <code>init</code> writes "To update, run: guardian init", the refresh writes "To update, run: guardian update". Later runs report <code>up to date</code>.</p>
+
+<p><code>update</code> prints the same "Guardian initialized successfully" banner as <code>init</code>. The per-file lines above it show what actually changed.</p>
+
+<h3 id="in-hookblind">Update and the PreToolUse hook</h3>
+
+<p>The PreToolUse hook (<a href="ch-hooks.html#ch-hooks">chapter 04</a>) protects the two hook scripts and <code>security/01-injection-guard.js</code>: any change by a file tool, or a Bash or PowerShell command whose write target is one of them or a folder holding one, asks for confirmation, and is denied in bypass mode. <code>guardian update</code> writes those files with <code>copyFileSync()</code> from its own Node process. The hook sees tool calls, not file system writes, so it never sees these writes. If an agent runs <code>guardian update</code> through Bash, the command text spells out no write target for the hook to read, so that is not caught either.</p>
+
+<p>SETUP.md's advice follows from this: run <code>update</code> yourself. What it writes is limited to the content of <code>ROOT</code>, so the real question is who can change the Guardian source directory. That repo's own hook protects its own copies of the hook files and scanner.</p>
+
+<h3 id="in-check">guardian check</h3>
+
+<p><code>runCheck()</code> runs three parts against the current directory.</p>
+
+<h4>File checks</h4>
+<div class="tbl dense"><table>
+<thead><tr><th>Item</th><th>Required</th></tr></thead>
+<tbody>
+<tr><td><code>STANDARDS.md</code>, <code>security/01-injection-guard.js</code>, <code>02-code-security.js</code>, <code>03-audit.js</code></td><td>Yes</td></tr>
+<tr><td><code>security/injection_guard.py</code></td><td>Only when <code>isPythonProject()</code> finds <code>requirements.txt</code>, <code>pyproject.toml</code>, <code>Pipfile</code> or <code>setup.py</code></td></tr>
+<tr><td>At least one of <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>GEMINI.md</code></td><td>Yes, as a joint gate (each alone is optional)</td></tr>
+<tr><td><code>.claude/settings.json</code>, both hook files, <code>.env.example</code>, <code>.github/workflows/security-audit.yml</code></td><td>No (a warning when missing)</td></tr>
+<tr><td><code>.env</code> in the root</td><td>Inverted: a warning when present, telling you to make sure it is in <code>.gitignore</code></td></tr>
+</tbody>
+</table></div>
+
+<p>Every check is <code>existsSync()</code>. <code>security/04-sql-guard.js</code> is not checked. <code>check</code> does not read <code>.claude/settings.json</code>, so it does not confirm that Guardian's hooks are registered there. SETUP.md's troubleshooting says <code>guardian check</code> verifies "the hook is registered correctly"; the code does not do that.</p>
+
+<h4>Hook smoke test</h4>
+<p>When <code>.claude/hooks/injection-guard-hook.mjs</code> exists, <code>smokeTestHook()</code> runs it directly with <code>spawnSync</code> (10 second timeout) and pipes in a <code>Write</code> payload: a known CRITICAL phrase as content and <code>.planning/__guardian_check_smoke.md</code> as the path. It passes if the output contains <code>PROMPT INJECTION BLOCKED</code> or <code>PROMPT INJECTION WARNING</code>. The hook only returns a decision, so no file is written. A failure is a warning, not a required item, so <code>check</code> can exit 0 with a broken hook. The test runs the hook file, not the registered command, so it says nothing about the matcher or the command path.</p>
+
+<h4>Editor coverage</h4>
+<p><code>editorCoverage()</code> prints one row per agent. Claude Code is <code>FULL</code> when <code>CLAUDE.md</code>, <code>settings.json</code> and both hooks exist, <code>PARTIAL</code> with only <code>CLAUDE.md</code>, and <code>DISABLED</code> otherwise. Codex CLI, Cursor, Aider, Continue and Windsurf are <code>BEHAVIOR-ONLY</code> when <code>AGENTS.md</code> exists. Gemini CLI is <code>BEHAVIOR-ONLY</code> only when both <code>GEMINI.md</code> and <code>AGENTS.md</code> exist, because <code>GEMINI.md</code> only points at <code>AGENTS.md</code>. This is all based on file existence.</p>
+
+<h3 id="in-exit">Exit codes and failures</h3>
+
+<p>Most failures inside <code>init</code> and <code>update</code> are not caught. Any file system error (permissions, a locked file) and the invalid-settings throw end the process with a Node stack trace and exit code 1. The steps run in order, so a failure leaves a partial install. Run in a scratch directory with an unparsable <code>.claude/settings.json</code>, <code>init</code> had already written the four behavior files, <code>.gitignore</code>, <code>.env.example</code> and <code>security/</code>, had created an empty <code>.claude/hooks/</code>, and had copied no hook scripts and no <code>.github/</code>. Every step skips what is already in place, so fixing the JSON and running <code>init</code> again completes the install.</p>
+
+<div class="tbl dense"><table>
+<thead><tr><th>Situation</th><th>Exit</th><th>Output</th></tr></thead>
+<tbody>
+<tr><td><code>init</code> or <code>update</code> completes</td><td>0</td><td>One line per file and the summary banner</td></tr>
+<tr><td>Invalid <code>.claude/settings.json</code></td><td>1</td><td><code>INVALID JSON, refusing to overwrite</code>, the parse error, then an uncaught <code>Error</code> stack</td></tr>
+<tr><td>Behavior file has START but no END marker (update)</td><td>0</td><td>Warning; that file is not touched</td></tr>
+<tr><td><code>check</code> with a required item missing</td><td>1</td><td><code>MISSING (required)</code> lines and a pointer to <code>guardian init</code></td></tr>
+<tr><td><code>check</code> with warnings only</td><td>0</td><td><code>Guardian is correctly installed</code></td></tr>
+<tr><td><code>audit</code></td><td>the audit's code</td><td>1 only for <code>--fail-on-error</code> with CRITICAL or HIGH, or a missing script</td></tr>
+<tr><td><code>scan</code> with no input</td><td>1</td><td>Usage</td></tr>
+<tr><td>Unknown command</td><td>1</td><td><code>Unknown command</code></td></tr>
+</tbody>
+</table></div>
+
+<h3 id="in-agents">How agents are made to run Guardian</h3>
+
+<p>There are three layers, and only the last one does not depend on the agent following instructions.</p>
+
+<ol>
+<li><b>The global rule.</b> <code>C:\Users\michael\.claude\CLAUDE.md</code>, section "Project Skills (Design and Guardian)", tells every session to invoke <code>OTLC-Guardian</code> for backend and full-stack code that touches auth, endpoints, user input, secrets, SQL or deployment, before committing or deploying, and to "run its audit rather than eyeballing the diff".</li>
+<li><b>The skill.</b> <code>C:\Users\michael\.claude\skills\OTLC-Guardian</code> is a directory junction to <code>C:\dev\Projects\otlc-guardian\skill\</code>, so <code>skill/SKILL.md</code> is the live copy and edits in the repo take effect at once. Its description lists the trigger phrases (<code>/guardian</code>, "run guardian", "security review", "check for IDOR", commit, merge, deploy). Step 1 runs <code>node C:\dev\Projects\otlc-guardian\security\03-audit.js &lt;project-path&gt;</code> from the source repo, not the project's copy, so a skill-driven audit always uses the current rules even in a project whose <code>security/</code> has not been updated. Step 3 covers suppression (<a href="ch-suppression.html#ch-suppression">chapter 06</a>), Step 4 the self-audit checklist in <code>CLAUDE.md</code>.</li>
+<li><b>The project install.</b> <code>init</code> merges Guardian's rules into the project's <code>CLAUDE.md</code>, <code>AGENTS.md</code> and <code>GEMINI.md</code>, which agents load at session start, and registers the hooks, which Claude Code runs on every matching tool call whatever the agent decides. The copied CI workflow runs <code>node security/03-audit.js . --fail-on-error</code> on GitHub, using the project's copy.</li>
+</ol>
+
+<h3 id="in-uninstall">Uninstall</h3>
+
+<p>There is no <code>guardian uninstall</code>. A 1.2.0 branch had one (marker stripping, a surgical settings edit, byte-compare before delete); it was reverted in 1.2.1, and the reasons are recorded in the comment block after <code>runInit()</code>. Removal is manual, following <code>SETUP.md</code> § Uninstalling; README.md's "Uninstalling" section summarizes it and points there.</p>
+
+<p>The old README instructions blanket-deleted the merged rule files, which destroyed any rules the user had written before <code>init</code>. That is BUG-013, RESOLVED. The current text says to delete only the marker block, never a merged file, and to delete Guardian's files one by one, never with <code>rm -rf security/</code> or <code>rm -rf .claude/hooks/</code>.</p>
+
+<p>In short: remove the marker blocks from the four Markdown files, <code>.gitignore</code> and <code>.env.example</code>; remove Guardian's two command entries from <code>.claude/settings.json</code>; delete Guardian's files by name; optionally remove the workflow and run <code>npm uninstall -g otlc-guardian</code>.</p>
+
+<div class="note"><b>Where the current uninstall text and the code disagree</b><p>1. SETUP.md Step 1 says a file without markers was created whole by Guardian and can be deleted. That holds for <code>.gitignore</code> and <code>.env.example</code>, which <code>init</code> copies whole. It is wrong for the four Markdown files: <code>mergeMd()</code> seals a new file with markers too. A Markdown file Guardian created has the marker block at the very top with nothing above it. 2. SETUP.md Step 3 lists six files to delete and leaves out <code>security/04-sql-guard.js</code> (README.md's list includes it) and <code>security/.audit-allowlist</code>. 3. Step 4 covers only <code>.github/workflows/security-audit.yml</code>; <code>init</code> also copies <code>CODEOWNERS</code>, two issue templates, <code>PULL_REQUEST_TEMPLATE.md</code> and <code>secret_scanning.yml</code>. 4. Step 2 does not mention the <code>otlcGuardian</code> block that a fresh settings copy contains.</p></div>
+
+<p><b>Do it by hand, and in this order.</b> While the hook is registered, an agent that removes Guardian's settings entries or deletes the hook files or scanner gets a confirmation prompt, or a denial in bypass mode. Remove the registrations in <code>settings.json</code> first, then delete the files. If the files go first, Claude Code still runs the registered <code>node .claude/hooks/...</code> command on every matching tool call, and Node fails because the file is missing. Per the hook's failure design that is a non-blocking hook error, reported on every matched call until the entries are removed.</p>
+
+<h3 id="in-tests">What the tests verify</h3>
+
+<p><code>tests/init.test.js</code> (30 tests, all passing on 2026-11-10) imports the helpers exported from <code>bin/guardian.js</code> and runs each in its own <code>mkdtemp</code> directory. It covers: <code>canonicalMatcher()</code> and <code>findMatcherBlock()</code> set comparison; <code>gitignorePathToken()</code>; <code>mergeMd()</code> keeping your content and staying idempotent, and in refresh mode replacing only the block, keeping text above and below byte for byte, and staying idempotent; <code>mergeClaudeSettings()</code> refusing invalid JSON without writing, keeping your hooks, joining a reordered matcher block, staying idempotent, and migrating a pre-1.5.0 <code>Write|Edit</code> registration exactly once; <code>refreshOwnedDir()</code> replacing a stale file, copying a missing one and keeping <code>.audit-allowlist</code>; <code>copyDirSafe()</code> never overwriting; key-based dedupe in <code>mergeEnvExample()</code>; and <code>copyIfNew()</code>. <code>tests/agents-md.test.js</code> covers <code>editorCoverage()</code>.</p>
+
+<p>Not covered by any test: <code>runInit()</code> end to end, the partial install after an invalid-settings abort, <code>runCheck()</code> and its exit codes, the router, the custom-matcher and <code>$CLAUDE_PROJECT_DIR</code> cases of BUG-037, and the uninstall procedure.</p>
+
+<h3 id="in-open">Known open bugs</h3>
+
+<div class="limit"><b>Open on 2026-11-10</b><p><b>BUG-060</b> (OPEN): <code>init</code> copies Guardian's whole <code>.github/</code> folder, including a <code>CODEOWNERS</code> that names Guardian's maintainer, and Guardian's own allowlist entries. <b>BUG-061</b> (OPEN): an invalid <code>.claude/settings.json</code> stops <code>init</code> and <code>update</code> with a stack trace after earlier steps are written. <b>BUG-062</b> (OPEN): <code>guardian check</code> exits 0 and reports a correct install when the hook smoke test fails, and never reads the registration; CI uses it as a gate.</p><p><b>BUG-028</b> (OPEN): the registered hook command, <code>node .claude/hooks/injection-guard-hook.mjs</code>, is relative to the current directory. After a session changes directory, Node cannot find the file. The <code>$CLAUDE_PROJECT_DIR</code> form has not been tested on Windows, so <code>init</code> still writes the relative form. <b>BUG-034</b> (OPEN): Bash is now in the PreToolUse matcher, so after a <code>cd</code> every Bash call hits BUG-028 and reports a hook error. <b>BUG-035</b> (OPEN): an "ask" decision waits for a person, which stalls an unattended worker in default and acceptEdits modes; only bypass mode turns ask into deny. <b>BUG-037</b> (OPEN): the <code>update</code> migration removes Guardian's command from any block whose matcher differs from the default, including a wider custom matcher a user chose, and re-registers it under the default. Commands are compared as exact strings, so a project that changed the command to the <code>$CLAUDE_PROJECT_DIR</code> form gets the relative form added as a second registration. <b>BUG-045</b> (OPEN): the hook's settings protection treats the <code>$CLAUDE_PROJECT_DIR</code> command form as a weakening, so making that switch by hand also gets a prompt. <b>BUG-027</b> (IN-PROGRESS): the hook files and scanner can be written by the agent they guard. The in-hook half landed in 1.5.0; <code>update</code>'s own writes are outside it (see <a href="#in-hookblind">Update and the PreToolUse hook</a>). <b>BUG-025</b> (SMOKE-TESTING): <code>update</code> now overwrites Guardian-owned files; it has not yet been run on another real project. The CHANGELOG says 1.5.0 has not been rolled out to any other project.</p></div>
+
+</section>
+
+<nav class="pager"><a href="ch-hooks.html">&larr; 04 The Claude Code hooks</a><a href="ch-suppression.html">06 Exemptions and suppression &rarr;</a></nav>
+</main>
+<script>
+(function(){
+  var KEY='guardian-manual-theme';
+  var persistOff=function(){document.documentElement.setAttribute('data-theme-persist','off');};
+  try{var t=localStorage.getItem(KEY);if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){persistOff();}
+  document.addEventListener('click',function(e){
+    var b=e.target.closest('[data-theme-toggle]');if(!b)return;
+    var root=document.documentElement;
+    var dark=root.getAttribute('data-theme')?root.getAttribute('data-theme')==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var next=dark?'light':'dark';root.setAttribute('data-theme',next);
+    try{localStorage.setItem(KEY,next);}catch(e2){persistOff();}
+  });
+  if(!('IntersectionObserver' in window))return;
+  var links={};document.querySelectorAll('.rail a[data-ch]').forEach(function(a){links[a.getAttribute('data-ch')]=a;});
+  var secs=document.querySelectorAll('section.chapter');
+  if(secs.length<2)return;
+  var io=new IntersectionObserver(function(es){es.forEach(function(en){
+    if(!en.isIntersecting)return;var id=en.target.id;
+    Object.keys(links).forEach(function(k){links[k].classList.toggle('on',k===id);links[k].parentNode.classList.toggle('open',k===id);});
+  });},{rootMargin:'-20% 0px -70% 0px'});
+  secs.forEach(function(s){io.observe(s);});
+})();
+</script>
+</body>
+</html>

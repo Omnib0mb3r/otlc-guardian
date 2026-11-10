@@ -1,0 +1,88 @@
+<section class="chapter" id="ch-what" data-num="01" data-title="What Guardian is" data-blurb="The parts of Guardian, which layer each one defends, where each runs, and the version and release state of 1.5.0.">
+
+<p>Guardian is one Node package with no runtime dependencies (<code>package.json</code>: <code>"dependencies": {}</code>, <code>"engines": { "node": "&gt;=22.0.0" }</code>, <code>"type": "module"</code>). It has four kinds of part: documents an agent reads, code that runs inside the project being protected, code that runs inside Claude Code, and a command-line tool that installs and checks the rest.</p>
+
+<h3 id="wh-parts">The parts</h3>
+<div class="tbl"><table>
+<thead><tr><th>Part</th><th>Files</th><th>Runs where, and when</th><th>Can it stop something?</th></tr></thead>
+<tbody>
+<tr><td>Rules for agents</td><td><code>CLAUDE.md</code> (how to build), <code>STANDARDS.md</code> (what to build with, 905 lines), <code>AGENTS.md</code> and <code>GEMINI.md</code> (the same rules for other agents)</td><td>Loaded by the coding agent at session start. <code>guardian init</code> merges them into a project's own files.</td><td>No. They shape behavior; nothing enforces them.</td></tr>
+<tr><td>Audit engine</td><td><code>security/03-audit.js</code></td><td>Run by a person, an agent or CI before commit and deploy (<code>guardian audit</code>, <code>npm run audit</code>, or <code>node security/03-audit.js &lt;dir&gt;</code>). Chapter 02.</td><td>Yes, through its exit code with <code>--fail-on-error</code>. It reads code; it never runs it.</td></tr>
+<tr><td>Runtime guard</td><td><code>security/01-injection-guard.js</code>, <code>security/injection_guard.py</code></td><td>Imported by the protected application and called on every input to and output from an AI model. Chapter 03.</td><td>Yes. A blocked input never reaches the model.</td></tr>
+<tr><td>Helpers</td><td><code>security/02-code-security.js</code> (headers and middleware), <code>security/04-sql-guard.js</code> (parameterized SQL)</td><td>Imported by the protected application. Chapter 03.</td><td>They make the safe path the easy one.</td></tr>
+<tr><td>Claude Code hooks</td><td><code>.claude/hooks/injection-guard-hook.mjs</code> (PreToolUse), <code>.claude/hooks/web-content-guard.mjs</code> (PostToolUse)</td><td>Run by Claude Code on every matching tool call in a project that registers them. Chapter 04.</td><td>The PreToolUse hook denies or asks. The PostToolUse hook only warns.</td></tr>
+<tr><td>CLI</td><td><code>bin/guardian.js</code> (<code>guardian</code>), <code>security/03-audit.js</code> (<code>guardian-audit</code>)</td><td>Run by a person to install, update and smoke-test Guardian in a project. Chapter 05.</td><td>No.</td></tr>
+<tr><td>Skill</td><td><code>skill/SKILL.md</code>, linked at <code>~/.claude/skills/OTLC-Guardian</code></td><td>Loaded by a Claude Code session when the work touches auth, endpoints, input, secrets, SQL or deployment. Chapter 07.</td><td>No. It tells the agent to run the audit and how to read it.</td></tr>
+<tr><td>Field guides</td><td><code>guides/*.md</code>, index at <code>guides/INDEX.md</code></td><td>Read by an agent or a person when an audit rule fires. Each audit rule in the AUTHZ and VAL families points at a section.</td><td>No.</td></tr>
+</tbody></table></div>
+
+<figure>
+<div class="frame">
+<svg class="dg" viewBox="0 0 1100 330" role="img" aria-label="Guardian's layers along the life of a change: rules at session start, hooks while the agent writes, the audit before commit and deploy, the runtime guard in production.">
+<defs><marker id="wh-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+<text class="col-h" x="20" y="24">THE LIFE OF A CHANGE</text>
+<path class="ln" d="M40,70 H1060" marker-end="url(#wh-ah)"/>
+<g class="t2">
+<text x="130" y="56" text-anchor="middle">session starts</text>
+<text x="390" y="56" text-anchor="middle">agent writes files</text>
+<text x="660" y="56" text-anchor="middle">commit and deploy</text>
+<text x="930" y="56" text-anchor="middle">app in production</text>
+</g>
+<rect class="bx-soft" x="40" y="96" width="180" height="120" rx="8"/>
+<text class="t1" x="130" y="128" text-anchor="middle">Rules</text>
+<text class="t3" x="130" y="152" text-anchor="middle">CLAUDE.md, STANDARDS.md</text>
+<text class="t3" x="130" y="170" text-anchor="middle">AGENTS.md, GEMINI.md</text>
+<text class="t3" x="130" y="196" text-anchor="middle">shapes behavior only</text>
+<rect class="bx-hot" x="270" y="96" width="240" height="120" rx="8"/>
+<text class="t1" x="390" y="128" text-anchor="middle">Claude Code hooks</text>
+<text class="t3" x="390" y="152" text-anchor="middle">PreToolUse: deny or ask</text>
+<text class="t3" x="390" y="170" text-anchor="middle">PostToolUse: warn on web content</text>
+<text class="t3" x="390" y="196" text-anchor="middle">chapter 04</text>
+<rect class="bx-hot" x="560" y="96" width="200" height="120" rx="8"/>
+<text class="t1" x="660" y="128" text-anchor="middle">Audit</text>
+<text class="t3" x="660" y="152" text-anchor="middle">42 static rules</text>
+<text class="t3" x="660" y="170" text-anchor="middle">--fail-on-error stops CI</text>
+<text class="t3" x="660" y="196" text-anchor="middle">chapter 02</text>
+<rect class="bx-ok" x="810" y="96" width="240" height="120" rx="8"/>
+<text class="t1" x="930" y="128" text-anchor="middle">Runtime guard</text>
+<text class="t3" x="930" y="152" text-anchor="middle">guardInput before the model</text>
+<text class="t3" x="930" y="170" text-anchor="middle">guardOutput after it</text>
+<text class="t3" x="930" y="196" text-anchor="middle">chapter 03</text>
+<path class="ln-hot" d="M390,216 V262 H930 V216" fill="none"/>
+<text class="t3" x="660" y="282" text-anchor="middle">the hooks import the runtime guard's scan() and scanChange(), so one pattern set serves both</text>
+<text class="t3" x="660" y="304" text-anchor="middle">the CLI (chapter 05) installs the hooks, the rules and the security/ files into a project</text>
+</svg>
+</div>
+<figcaption><b>Defense in depth.</b> Each layer can be bypassed on its own; SECURITY.md says so in its threat model. The value is the combination, and that every detection is visible.</figcaption>
+</figure>
+
+<h3 id="wh-ids">Rule ids</h3>
+<p>Two id spaces exist and must not be confused. Audit rules (chapter 02) keep their family ids: <code>SEC-</code>, <code>CFG-</code>, <code>ERR-</code>, <code>INJ-</code>, <code>AUTHZ-</code>, <code>VAL-</code>, <code>WEB-</code>, <code>DEP-</code> and the others listed there. The runtime scanner's patterns (chapter 03) carry a <code>GUARD-</code> prefix since 1.5.0 (<code>GUARD-INJ-001</code> to <code>GUARD-INJ-028</code>, <code>GUARD-SEC-001</code> to <code>GUARD-SEC-015</code>, <code>GUARD-INJ-UNICODE</code>, <code>GUARD-INJ-OVERSIZE</code>). Before 1.5.0 both used bare <code>INJ-</code> and <code>SEC-</code>, so <code>INJ-001</code> named two different checks. For 1.5.0 only, each runtime violation also carries its old id as <code>legacyId</code> (Python: <code>legacy_id</code>); 1.6.0 removes it. The mapping table is in <code>CHANGELOG.md</code>, 1.5.0, "Changed".</p>
+
+<h3 id="wh-state">Version and release state</h3>
+<div class="tbl dense"><table>
+<thead><tr><th>Item</th><th>State on 2026-11-10</th></tr></thead>
+<tbody>
+<tr><td>Version in <code>package.json</code></td><td>1.5.0, unreleased. No tag.</td></tr>
+<tr><td>Last pushed</td><td><code>origin/main</code> at <code>80bfaff</code>. Local <code>main</code> is 22 commits ahead and held on purpose: push and tag wait on an independent re-probe of the 1.5.0 hook fixes.</td></tr>
+<tr><td>Installed in other projects</td><td>No other project under <code>C:\dev\Projects</code> has the hook files installed. Projects use Guardian through the skill and by running the audit from this repo.</td></tr>
+<tr><td>Tests</td><td><code>npm test</code> runs six suites: injection-guard 106, init 30, hook 165, agents-md 14, audit 140, sql-guard 40. Two audit tests are known-bug tests (BUG-039, BUG-040) that fail the suite once the bug is fixed.</td></tr>
+<tr><td>CI</td><td><code>.github/workflows/security-audit.yml</code> runs on pushes to <code>main</code>, <code>master</code> and <code>develop</code> on Node 22: <code>npm test</code>, then <code>node bin/guardian.js check</code>, then <code>node security/03-audit.js . --fail-on-error</code>, then an exemption visibility step. <code>.github/</code> also holds <code>CODEOWNERS</code>, issue and PR templates and <code>secret_scanning.yml</code>.</td></tr>
+<tr><td>Bug log</td><td><code>BUGS.md</code>, index at the top. Each chapter lists the open bugs for its part.</td></tr>
+</tbody></table></div>
+
+<h3 id="wh-layout">Repo layout</h3>
+<div class="tbl dense"><table>
+<thead><tr><th>Path</th><th>What it holds</th></tr></thead>
+<tbody>
+<tr><td><code>security/</code></td><td>The four JS modules and the Python port; <code>security/.audit-allowlist</code> (this repo's own audit exemptions, chapter 06)</td></tr>
+<tr><td><code>.claude/hooks/</code>, <code>.claude/settings.json</code></td><td>The two hooks and this repo's own registration of them; the hooks guard this repo too</td></tr>
+<tr><td><code>bin/guardian.js</code></td><td>The CLI</td></tr>
+<tr><td><code>skill/</code>, <code>guides/</code></td><td>The skill and the field guides</td></tr>
+<tr><td><code>tests/</code></td><td>Six test files, plain Node, no framework</td></tr>
+<tr><td><code>docs/manual/</code></td><td>This manual: <code>chapters/*.html</code>, <code>build.mjs</code>, <code>manual.css</code>; output <code>GUARDIAN-MANUAL.html</code> and <code>site/</code></td></tr>
+<tr><td><code>README.md</code>, <code>SETUP.md</code>, <code>SECURITY.md</code>, <code>FAQ.md</code>, <code>CHANGELOG.md</code>, <code>CONTRIBUTING.md</code></td><td>User documentation</td></tr>
+<tr><td><code>BUGS.md</code>, <code>TODO.md</code>, <code>handovers/</code></td><td>The bug log, the plan backlog (the Self-Growing Gate spec and the threat-feed spec), session handovers</td></tr>
+</tbody></table></div>
+
+</section>

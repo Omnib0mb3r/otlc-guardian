@@ -1,0 +1,418 @@
+<section class="chapter" id="ch-audit" data-num="02" data-title="The audit engine" data-blurb="security/03-audit.js: a static scan of a project's source against 42 rules, run by people, agents and CI before code is committed or shipped.">
+
+<h3 id="au-what">What the audit is and is not</h3>
+<p><code>security/03-audit.js</code> is a standalone Node script (ESM, no dependencies beyond <code>fs</code> and <code>path</code>). It walks a directory, reads source files as text and reports places where the code matches a known bad shape: a hardcoded key, a silent <code>catch</code>, SQL built by concatenation, a route handler that writes to the database without checking who is calling, and so on. It is a review and CI tool. It runs once, prints a report, and exits.</p>
+<p>It is not part of a running application. Nothing in it is imported by the runtime guard (<code>security/01-injection-guard.js</code>), the hooks or the SQL helper, and it never executes the code it scans. It does not parse JavaScript or Python into a syntax tree: pattern rules are regular expressions, and the analyzers find route handlers by matching signatures and then balancing braces (JavaScript) or reading indentation (Python). A clean result means none of the 42 shapes was found. It does not mean the code is secure, and the analyzers say so in their own comments (see <a href="#au-analyzers">Route-handler analyzers</a>).</p>
+<p>The file exports <code>runAudit</code> and <code>AUDIT_RULES</code>, and <code>package.json</code> exposes it as <code>otlc-guardian/audit</code> and as the <code>guardian-audit</code> bin. Note that the CLI entry at the bottom of the file runs unconditionally, so importing the module also runs an audit (see <a href="#au-found">Found while writing this chapter</a>). Every test in <code>tests/audit.test.js</code> spawns it as a subprocess instead of importing it.</p>
+
+<h3 id="au-pipeline">One run, start to finish</h3>
+<figure>
+<div class="frame">
+<svg class="dg" viewBox="0 0 1100 340" role="img" aria-label="Audit pipeline: CLI entry, find project root, load allowlist, collect files, exemption pass, then pattern pass, analyzer pass, project pass, report and exit code.">
+<defs><marker id="au-ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" class="ah"/></marker>
+<marker id="au-ah-hot" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" class="ah-hot"/></marker></defs>
+<text class="col-h" x="20" y="24">SET UP (ONCE PER RUN)</text>
+<rect class="bx-soft" x="20" y="40" width="196" height="78" rx="8"/>
+<text class="t1" x="118" y="68" text-anchor="middle">CLI entry</text>
+<text class="t3" x="118" y="88" text-anchor="middle">first non -- arg is the target</text>
+<text class="t3" x="118" y="104" text-anchor="middle">--json, --fail-on-error</text>
+<rect class="bx" x="236" y="40" width="196" height="78" rx="8"/>
+<text class="t1" x="334" y="68" text-anchor="middle">findProjectRoot()</text>
+<text class="t3" x="334" y="88" text-anchor="middle">walk up from the target</text>
+<text class="t3" x="334" y="104" text-anchor="middle">8 levels, stop at a marker</text>
+<rect class="bx" x="452" y="40" width="196" height="78" rx="8"/>
+<text class="t1" x="550" y="68" text-anchor="middle">loadAllowlist()</text>
+<text class="t3" x="550" y="88" text-anchor="middle">projectRoot/security/</text>
+<text class="t3" x="550" y="104" text-anchor="middle">.audit-allowlist</text>
+<rect class="bx" x="668" y="40" width="196" height="78" rx="8"/>
+<text class="t1" x="766" y="68" text-anchor="middle">collectFiles()</text>
+<text class="t3" x="766" y="88" text-anchor="middle">from scanRoot, by extension</text>
+<text class="t3" x="766" y="104" text-anchor="middle">SKIP_DIRS never entered</text>
+<rect class="bx" x="884" y="40" width="196" height="78" rx="8"/>
+<text class="t1" x="982" y="68" text-anchor="middle">Exemption pass</text>
+<text class="t3" x="982" y="88" text-anchor="middle">allowlist first, then the</text>
+<text class="t3" x="982" y="104" text-anchor="middle">marker in the first 4 KB</text>
+<path class="ln" d="M216,79 H234" marker-end="url(#au-ah)"/>
+<path class="ln" d="M432,79 H450" marker-end="url(#au-ah)"/>
+<path class="ln" d="M648,79 H666" marker-end="url(#au-ah)"/>
+<path class="ln" d="M864,79 H882" marker-end="url(#au-ah)"/>
+<path class="ln" d="M982,118 V150 H118 V184" marker-end="url(#au-ah)"/>
+<text class="col-h" x="20" y="176">RULE PASSES, THEN OUTPUT</text>
+<rect class="bx" x="20" y="186" width="196" height="78" rx="8"/>
+<text class="t1" x="118" y="214" text-anchor="middle">Pattern pass (34)</text>
+<text class="t3" x="118" y="234" text-anchor="middle">scanFile(): per line, or</text>
+<text class="t3" x="118" y="250" text-anchor="middle">whole file when wholeFile</text>
+<rect class="bx" x="236" y="186" width="196" height="78" rx="8"/>
+<text class="t1" x="334" y="214" text-anchor="middle">Analyzer pass (5)</text>
+<text class="t3" x="334" y="234" text-anchor="middle">fileCheckFn(content, file)</text>
+<text class="t3" x="334" y="250" text-anchor="middle">route handler bodies</text>
+<rect class="bx" x="452" y="186" width="196" height="78" rx="8"/>
+<text class="t1" x="550" y="214" text-anchor="middle">Project pass (3)</text>
+<text class="t3" x="550" y="234" text-anchor="middle">checkFn(evidence, root)</text>
+<text class="t3" x="550" y="250" text-anchor="middle">one finding, no line</text>
+<rect class="bx-ok" x="668" y="186" width="196" height="78" rx="8"/>
+<text class="t1" x="766" y="214" text-anchor="middle">Report</text>
+<text class="t3" x="766" y="234" text-anchor="middle">grouped text, or</text>
+<text class="t3" x="766" y="250" text-anchor="middle">one JSON object on stdout</text>
+<rect class="bx-hot" x="884" y="186" width="196" height="78" rx="8"/>
+<text class="t1" x="982" y="214" text-anchor="middle">Exit code</text>
+<text class="t3" x="982" y="234" text-anchor="middle">1 only with --fail-on-error</text>
+<text class="t3" x="982" y="250" text-anchor="middle">and a CRITICAL or HIGH</text>
+<path class="ln" d="M216,225 H234" marker-end="url(#au-ah)"/>
+<path class="ln" d="M432,225 H450" marker-end="url(#au-ah)"/>
+<path class="ln" d="M648,225 H666" marker-end="url(#au-ah)"/>
+<path class="ln-hot" d="M864,225 H882" marker-end="url(#au-ah-hot)"/>
+<text class="lbl" x="452" y="292">evidence: "project" checks read projectRoot's files on a partial scan</text>
+<text class="lbl" x="20" y="292">exempt files skipped by every pass</text>
+<text class="lbl" x="20" y="316">findings accumulate in pass order, then are grouped by severity and rule id</text>
+</svg>
+</div>
+<figcaption><b>The run is linear.</b> <code>runAudit()</code> in <code>security/03-audit.js</code> does everything in one call: set-up, three rule passes over the same file list, then one report and an exit decision. Nothing is cached between runs.</figcaption>
+</figure>
+<p>The order inside <code>runAudit()</code>:</p>
+<ol>
+<li><code>scanRoot = path.resolve(target)</code>; <code>projectRoot = findProjectRoot(scanRoot)</code>.</li>
+<li>Status header printed: target, project (only when it differs from the target) and the live rule count line.</li>
+<li><code>loadAllowlist(projectRoot)</code>.</li>
+<li><code>collectFiles(scanRoot, allExtensions)</code>, where <code>allExtensions</code> is the union of every rule's <code>fileTypes</code>.</li>
+<li>Each collected file is read once to decide exemption with <code>exemptionMechanism()</code>. File and exempt counts are printed, then every exempt path by mechanism.</li>
+<li>Pattern rules, in <code>AUDIT_RULES</code> order, over the files whose extension is in the rule's <code>fileTypes</code>.</li>
+<li>Analyzer rules, same file filter.</li>
+<li>Project rules.</li>
+<li>Report, then <code>process.exit(1)</code> if <code>--fail-on-error</code> was given and any finding is CRITICAL or HIGH. Otherwise <code>runAudit()</code> returns the findings array and the process ends with code 0.</li>
+</ol>
+
+<h3 id="au-cli">Command line</h3>
+<pre><code>node security/03-audit.js [target] [--json] [--fail-on-error]
+guardian audit [target] [--json] [--fail-on-error]</code></pre>
+<p>The parser is four lines at the bottom of the file. It is not a real option parser, and that has consequences:</p>
+<div class="tbl"><table><thead><tr><th>Input</th><th>What the code does</th></tr></thead><tbody>
+<tr><td><code>target</code></td><td>The first argument that does not start with <code>--</code>. Default <code>.</code>, resolved against the current directory. A directory is walked; a file is scanned alone (since BUG-041).</td></tr>
+<tr><td><code>--json</code></td><td>Status lines go to stderr; stdout carries one JSON object. See <a href="#au-json">JSON output</a>.</td></tr>
+<tr><td><code>--fail-on-error</code></td><td>Exit 1 when at least one CRITICAL or HIGH finding exists. MEDIUM and LOW never change the exit code.</td></tr>
+<tr><td><code>--help</code>, any other <code>--</code> flag</td><td>Silently ignored. There is no help text in the engine: <code>node security/03-audit.js --help</code> runs a normal audit of the current directory. The help lives in <code>bin/guardian.js</code> (<code>guardian help</code>).</td></tr>
+<tr><td><code>-h</code> or any single-dash word</td><td>Taken as the target path. <code>-h</code> resolves to a directory that does not exist, which scans 0 files and reports a clean pass.</td></tr>
+<tr><td>A second path</td><td>Ignored. Only the first non-flag argument is used.</td></tr>
+</tbody></table></div>
+
+<h4>Exit codes</h4>
+<div class="tbl dense"><table><thead><tr><th>Code</th><th>When</th></tr></thead><tbody>
+<tr><td><code>0</code></td><td>The run finished and either <code>--fail-on-error</code> was not given, or it was given and no CRITICAL or HIGH finding exists. A target that does not exist also exits 0 (0 files scanned, "No issues found").</td></tr>
+<tr><td><code>1</code></td><td><code>--fail-on-error</code> and at least one CRITICAL or HIGH finding. Also any uncaught exception (Node's default), for example DEP-001's <code>checkFn</code>, which reads every file with <code>readFileSync</code> and no <code>try</code>, so a file that becomes unreadable mid-run crashes the audit.</td></tr>
+</tbody></table></div>
+
+<h4>Which stream gets what</h4>
+<p>The engine writes to both streams, and the split is different in the two modes:</p>
+<div class="tbl dense"><table><thead><tr><th>Output</th><th>Human mode</th><th><code>--json</code> mode</th></tr></thead><tbody>
+<tr><td>Status header (target, rules, files, exempt list)</td><td>stdout</td><td>stderr</td></tr>
+<tr><td>"No issues found" line</td><td>stdout (<code>console.info</code>)</td><td>not printed</td></tr>
+<tr><td>Findings report and severity summary</td><td>stderr (<code>console.warn</code>)</td><td>not printed</td></tr>
+<tr><td>JSON object</td><td>not printed</td><td>stdout</td></tr>
+<tr><td>Allowlist line warnings, analyzer crash warnings</td><td>stderr</td><td>stderr</td></tr>
+</tbody></table></div>
+<p>So in human mode <code>guardian audit &gt; findings.txt</code> captures the header and nothing else; the findings stay on the terminal. Use <code>2&gt;&amp;1</code> or <code>--json</code> to capture them.</p>
+
+<h4>Real output</h4>
+<p>This is <code>node security/03-audit.js .</code> run from the Guardian repo root on 2026-11-10 (HEAD <code>0fa32ce</code>, with this manual's untracked <code>docs/manual/</code> present). The engine prints a long dash (U+2014) after "AUDIT COMPLETE" and inside many rule descriptions; the manual build rejects that character, so it is shown here as a hyphen. Nothing else is changed.</p>
+<pre><code>🔍 [OTLC GUARDIAN] SAFETY AUDIT STARTING
+    Target  : C:\dev\Projects\otlc-guardian
+    Rules   : 34 pattern · 5 analyzer · 3 project
+    Files   : 21 scanned
+    Exempt  : 7 (0 marker, 7 allowlist)
+    [allowlist] bin/guardian.js, security/02-code-security.js, security/03-audit.js, security/04-sql-guard.js, tests/audit.test.js, tests/injection-guard.test.js, tests/sql-guard.test.js
+
+⚠️  [OTLC GUARDIAN] AUDIT COMPLETE - 3 issue(s) found
+    0 CRITICAL · 2 HIGH · 1 MEDIUM · 0 LOW
+
+⚠️  HIGH (2)
+
+   [ERR-001] Silent catch block - swallows errors (empty or comments-only body) · 2 occurrences
+     docs/manual/build.mjs:89, 95
+       catch(e){}
+
+🔶 MEDIUM (1)
+
+   [ERR-003] console.log() in non-test code - use structured logger · 1 occurrence
+     docs/manual/build.mjs:197
+       console.log(`built ${chapters.length} chapters: GUARDIAN-MANUAL.html ${kb(Buffer.byteLength(single))}, site/ ${chapters.</code></pre>
+<p>Exit code 0 without the flag, 1 with <code>--fail-on-error</code> (two HIGH findings). A subdirectory scan adds a <code>Project :</code> line:</p>
+<pre><code>🔍 [OTLC GUARDIAN] SAFETY AUDIT STARTING
+    Target  : C:\dev\Projects\otlc-guardian\security
+    Project : C:\dev\Projects\otlc-guardian
+    Rules   : 34 pattern · 5 analyzer · 3 project
+    Files   : 5 scanned
+    Exempt  : 3 (0 marker, 3 allowlist)
+    [allowlist] 02-code-security.js, 03-audit.js, 04-sql-guard.js
+
+✅ [OTLC GUARDIAN] AUDIT COMPLETE - No issues found.</code></pre>
+<p>Report layout: one block per severity that has findings (CRITICAL, HIGH, MEDIUM, LOW, in that order, icons 🚨 ⚠️ 🔶 🔵). Inside it, one header per rule id in first-seen order with an occurrence count; under that one line per file, path relative to the scan root, with all its line numbers comma-joined and sorted; under that the snippet of the first finding in that file. Snippets are the trimmed line (line rules) or the match collapsed to one line (whole-file rules and analyzers), cut at 120 characters. A project finding has no line numbers and no snippet. The grouping replaced a one-line-per-finding layout in 1.2.3.</p>
+
+<h3 id="au-json">JSON output</h3>
+<p>With <code>--json</code>, stdout carries exactly one pretty-printed object (<code>JSON.stringify(..., null, 2)</code>) and nothing else. This is the BUG-012 fix (1.1.1): before it, the status header went to stdout too, so <code>--json &gt; out.json</code> wrote a file that would not parse. CI depends on this (the exemption-count step in <code>.github/workflows/security-audit.yml</code> parses the file), and so does every test in <code>tests/audit.test.js</code>: <code>runAuditOn()</code> parses stdout only and fails with both streams quoted if it is not valid JSON.</p>
+<pre><code>{
+  "findings": [
+    {
+      "file": "C:\\dev\\Projects\\otlc-guardian\\docs\\manual\\build.mjs",
+      "line": 89,
+      "content": "catch(e){}",
+      "rule": {
+        "id": "ERR-001",
+        "category": "Error Handling",
+        "severity": "HIGH",
+        "description": "Silent catch block ...",
+        "pattern": {},
+        "fileTypes": [".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs", ".mts", ".cts"],
+        "wholeFile": true
+      }
+    }
+  ],
+  "total": 3,
+  "exempt": { "total": 7, "marker": [], "allowlist": ["bin/guardian.js", "..."] }
+}</code></pre>
+<div class="tbl"><table><thead><tr><th>Field</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>findings[].file</code></td><td>Absolute path for file findings. For a project finding: the project root (absolute) when the rule has <code>evidence: "project"</code>, otherwise the target exactly as typed (for example <code>"."</code>).</td></tr>
+<tr><td><code>findings[].line</code></td><td>1-based line, or <code>null</code> for a project finding.</td></tr>
+<tr><td><code>findings[].content</code></td><td>Snippet, max 120 characters, or <code>null</code> for a project finding. AUTHZ-003 snippets start with <code>[destructive] </code> when the handler is DELETE, PATCH or PUT.</td></tr>
+<tr><td><code>findings[].rule</code></td><td>The whole rule object as <code>JSON.stringify</code> sees it. Regular expressions serialize as <code>{}</code> (so <code>pattern</code>, <code>excludePatterns</code> and <code>excludeLinePatterns</code> carry no information) and functions (<code>checkFn</code>, <code>fileCheckFn</code>) are dropped. Use <code>id</code>, <code>severity</code>, <code>category</code> and <code>description</code>.</td></tr>
+<tr><td><code>total</code></td><td><code>findings.length</code>.</td></tr>
+<tr><td><code>exempt</code></td><td><code>total</code> count, and the <code>marker</code> and <code>allowlist</code> path lists relative to the scan root.</td></tr>
+</tbody></table></div>
+<p>The JSON has no per-severity counts, no scan root, project root or rule count: a consumer computes severity totals from <code>findings[].rule.severity</code>. Findings appear in pass order (pattern, analyzer, project), not grouped.</p>
+
+<h3 id="au-files">Which files get scanned</h3>
+<p><code>collectFiles(rootDir, extensions)</code> builds the list. It is called once from the scan root with the union of all rules' <code>fileTypes</code>, which today is <code>.js .ts .jsx .tsx .mjs .cjs .mts .cts .py .env .json .yaml .yml .html .htm .vue .svelte</code>.</p>
+<ul>
+<li><b>Extension match.</b> A file is kept when <code>path.extname(name).toLowerCase()</code> is in the list. A name with no extension, such as <code>Dockerfile</code> or a bare <code>.env</code> (whose <code>extname</code> is the empty string), is never collected. That is why DEP-002 cannot fire (BUG-039) and why the secret rules never read <code>.env</code>, <code>.env.local</code> or <code>.env.production</code>. The <code>.env</code> entry in <code>SECRET_FILE_EXTS</code> only matches names like <code>prod.env</code>.</li>
+<li><b>Skipped directories.</b> <code>SKIP_DIRS</code> is matched against the entry name at any depth: <code>node_modules</code>, <code>bower_components</code>, <code>vendor</code>, <code>venv</code>, <code>.venv</code>, <code>site-packages</code>, <code>dist-packages</code>, <code>dist</code>, <code>build</code>, <code>.next</code>, <code>out</code>, <code>target</code>, <code>__pycache__</code>, <code>.pytest_cache</code>, <code>.mypy_cache</code>, <code>.ruff_cache</code>, <code>.turbo</code>, <code>.cache</code>, <code>coverage</code>, <code>.git</code>. Dependency code is left to <code>npm audit</code> and <code>pip-audit</code>. <code>env</code> is deliberately not on the list because real projects use it for source. Other dot-directories (<code>.github</code>, <code>.claude</code>) are walked.</li>
+<li><b>Symlinks.</b> The walker uses <code>readdirSync(..., { withFileTypes: true })</code> and only follows entries whose <code>isDirectory()</code> or <code>isFile()</code> is true. A symlink reports neither, so symlinked files and directories are skipped.</li>
+<li><b>Unreadable directories</b> are skipped silently (the <code>readdirSync</code> error is caught and the directory contributes nothing). Unreadable files are skipped by each pass the same way.</li>
+<li><b>Single-file target.</b> If the target is a file, <code>collectFiles()</code> returns <code>[target]</code> when its extension is wanted and <code>[]</code> otherwise. Before BUG-041 it called <code>readdirSync</code> on the file, failed, and scanned nothing. The source comment names the use case: a commit hook auditing changed files.</li>
+<li><b>Missing target.</b> <code>statSync(..., { throwIfNoEntry: false })</code> returns nothing, the walk's <code>readdirSync</code> fails, and the list is empty. The run reports 0 files and no issues.</li>
+</ul>
+<h4>Size limits</h4>
+<p>There is no general file-size limit: every collected file is read whole, and it is read more than once (once for the exemption check, once per applicable pattern rule, once per analyzer, and again by DEP-001). The bounds that do exist are local:</p>
+<div class="tbl dense"><table><thead><tr><th>Limit</th><th>Where</th><th>Effect</th></tr></thead><tbody>
+<tr><td>4,096 characters</td><td><code>exemptionMechanism()</code></td><td>The exempt marker only counts in the file's first 4 KB.</td></tr>
+<tr><td>40,000 characters</td><td><code>extractBlock()</code></td><td>A handler body longer than this is not balanced, returns <code>null</code> and is not analyzed.</td></tr>
+<tr><td>4,000 characters</td><td><code>skipParenGroup()</code></td><td>Parameter list scan window for function-style handler signatures.</td></tr>
+<tr><td>40 lines</td><td><code>PY_MAX_DECORATOR_SPAN</code></td><td>A Python route decorator more than 40 lines above its <code>def</code> is not paired with it.</td></tr>
+<tr><td>512 KB</td><td><code>readSmallText()</code> (WEB-002 only)</td><td>Larger files are read as empty for the nginx and CSP search.</td></tr>
+<tr><td>150 files</td><td><code>LISTEN_SCAN_FILE_CAP</code> (DEP-001 gate)</td><td>The source fallback of <code>looksLikeHttpServer()</code> reads at most the 150 shortest paths.</td></tr>
+<tr><td>8 levels</td><td><code>findProjectRoot()</code></td><td>Upward walk depth.</td></tr>
+<tr><td>300 characters</td><td>INJ-004 regex</td><td>Bounded spans around the SQL keyword, to stop catastrophic backtracking.</td></tr>
+<tr><td>120 characters</td><td><code>scanFile()</code>, analyzers</td><td>Snippet length in the report.</td></tr>
+</tbody></table></div>
+
+<h3 id="au-roots">Scan root and project root</h3>
+<p>Two directories matter, and since 1.3.1 (BUG-018) they are kept apart:</p>
+<ul>
+<li><b>scanRoot</b>: the target the user named. The walker collects files only from here, and report paths are relative to it.</li>
+<li><b>projectRoot</b>: found by <code>findProjectRoot()</code>, which walks upward from the scan root (at most 8 levels) and stops at the first directory holding any of <code>.git</code>, <code>security/.audit-allowlist</code>, <code>package.json</code>, <code>requirements.txt</code>, <code>pyproject.toml</code>, <code>Pipfile</code>. With no marker anywhere it falls back to the scan root.</li>
+</ul>
+<p>The project root is used for three things: the central allowlist (<code>loadAllowlist(projectRoot)</code>, and allowlist entries are matched as paths relative to it), the manifests that DEP-001's <code>looksLikeHttpServer()</code> reads, and the evidence for project checks that prove an absence. That last point is BUG-041 (fixed 2026-11-10): a project check declares <code>evidence: "project"</code> when its finding means "nowhere in the project". On a partial scan (<code>projectRoot !== scanRoot</code>) such a check receives <code>collectFiles(projectRoot, allExtensions)</code>, computed once and shared, and its finding names the project root. DEP-001 and WEB-002 carry the flag. DEP-002 is a presence check (a <code>.env</code> exists), so it keeps the scanned files: a hit there is true of the part the user asked about. Before the fix, auditing DevNeural's <code>07-daemon/src/capture/hooks</code> reported DEP-001 although DevNeural serves <code>GET /health</code> elsewhere in the repo.</p>
+<div class="note"><b>The scan does not widen to the project</b><p>Running the audit from a subdirectory scans that subdirectory only. Pattern and analyzer rules never look outside the scan root. Only the absence checks and the manifest lookup see the whole project.</p></div>
+
+<h3 id="au-tests">Test-file detection</h3>
+<p>Rules aimed at production code carry <code>excludePatterns: TEST_FILE_EXCLUDES</code>. The list, defined at the top of the file so the rules can reference it:</p>
+<div class="tbl dense"><table><thead><tr><th>Regex</th><th>Matches</th></tr></thead><tbody>
+<tr><td><code>/\.test\./i</code></td><td><code>*.test.*</code> (Jest, Vitest)</td></tr>
+<tr><td><code>/\.spec\./i</code></td><td><code>*.spec.*</code> (Mocha, Jasmine, Karma)</td></tr>
+<tr><td><code>/[\/\\]__tests__[\/\\]/i</code></td><td>a <code>__tests__</code> directory</td></tr>
+<tr><td><code>/[\/\\]tests?[\/\\]/i</code></td><td>a <code>test</code> or <code>tests</code> directory</td></tr>
+<tr><td><code>/[\/\\]spec[\/\\]/i</code></td><td>a <code>spec</code> directory (RSpec)</td></tr>
+<tr><td><code>/[\/\\]test[_-][^\/\\]+$/i</code></td><td><code>test_*.py</code>, <code>test-*.js</code></td></tr>
+<tr><td><code>/[_-]test\.[a-z]+$/i</code></td><td><code>*_test.py</code>, <code>*-test.js</code></td></tr>
+</tbody></table></div>
+<p>The patterns are tested against the absolute path, and the <code>[\/\\]</code> class makes the directory forms work with Windows backslashes. Rules that apply the exclusion: SEC-006, CFG-001, CFG-002, CFG-003, ERR-003, INJ-002, AUTHZ-001 to AUTHZ-005, AUTHZ-011, AUTHZ-013, VAL-001, VAL-002, WEB-001, TS-001. Every other rule, including all hardcoded-key rules, fires in tests too. Because the path is absolute, a project that lives under a directory called <code>test</code>, <code>tests</code> or <code>spec</code> loses these rules on every file (verified, see <a href="#au-found">Found while writing this chapter</a>).</p>
+
+<h3 id="au-kinds">The three rule kinds</h3>
+<p>Every entry in <code>AUDIT_RULES</code> has <code>id</code>, <code>category</code>, <code>severity</code>, <code>description</code> and <code>fileTypes</code>. Which of three further fields it sets decides its kind, and <code>runAudit()</code> runs the kinds as three separate loops. The status line counts them the same way: <code>filter((r) =&gt; r.pattern)</code>, <code>r.fileCheckFn</code>, <code>r.checkFn</code>.</p>
+<div class="tbl"><table><thead><tr><th>Kind</th><th>Field</th><th>Runs as</th><th>Output</th></tr></thead><tbody>
+<tr><td>pattern (34)</td><td><code>pattern: RegExp</code></td><td><code>scanFile(file, rule, exemptionState)</code> on every non-exempt file whose extension is in <code>fileTypes</code>. Default is line by line with <code>pattern.test(line)</code>; a line that also matches any <code>excludeLinePatterns</code> entry is dropped. With <code>wholeFile: true</code> the regex is cloned with the <code>g</code> flag and run over the whole content, and the line number comes from the match offset; <code>excludeLinePatterns</code> is not consulted in that mode.</td><td>One finding per matching line, or per match.</td></tr>
+<tr><td>analyzer (5)</td><td><code>fileCheckFn(content, filePath)</code></td><td>Called once per non-exempt, non-excluded file with matching extension. It returns <code>[{ line, content }]</code>. A throw is caught, reported with <code>console.warn("... &lt;id&gt; analyzer failed on &lt;file&gt;: &lt;message&gt;")</code>, and the audit continues with the next file.</td><td>One finding per flagged handler.</td></tr>
+<tr><td>project (3)</td><td><code>checkFn(files, projectRoot)</code></td><td>Called once per run. <code>files</code> is the scanned list, or the project root's list for <code>evidence: "project"</code> rules on a partial scan. Returns a boolean.</td><td>At most one finding, <code>line</code> and <code>content</code> null.</td></tr>
+</tbody></table></div>
+<p>The analyzer kind exists because missing authentication and IDOR are absences inside a block ("nowhere in this handler is there an auth check"), and a regular expression cannot express that across arbitrarily nested braces. The source comment above <code>findRouteHandlers()</code> records the reasoning: a regex approximation would fire on unrelated files, and a security tool that cries wolf gets switched off.</p>
+<p>Project checks do not consult exemptions: the file list they receive includes exempt files, so an exempt file can still provide the "health" evidence for DEP-001 or a CSP for WEB-002.</p>
+
+<h3 id="au-analyzers">Route-handler analyzers</h3>
+<h4>JavaScript and TypeScript (AUTHZ-001, AUTHZ-003, VAL-001)</h4>
+<p><code>findRouteHandlers(content)</code> finds handlers by four signatures in <code>HANDLER_SIGNATURES</code>:</p>
+<ul>
+<li><code>app|router|server|api .get|post|put|patch|delete|all(</code> (Express, Fastify, Hono style). The body is the first <code>{</code> after the signature, which is the callback.</li>
+<li><code>export [async] function GET|POST|PUT|PATCH|DELETE(</code> (Next.js App Router).</li>
+<li><code>export const GET|POST|... = [async] (</code> (App Router, arrow form).</li>
+<li><code>export default [async] function name(</code> (Pages Router, Vercel).</li>
+</ul>
+<p>For the last three (<code>skipParams: true</code>) the parameter list is skipped with <code>skipParenGroup()</code> first, so a destructured parameter such as <code>{ params }</code> is not taken as the body. <code>extractBlock()</code> then balances braces from the opening <code>{</code>, skipping <code>//</code> and <code>/* */</code> comments and single, double and backtick strings (template <code>${}</code> contents are treated as string text). Handlers fully inside an earlier handler are dropped as inner callbacks. Each check then works on the handler body text with lists of regexes:</p>
+<div class="tbl"><table><thead><tr><th>Rule</th><th>Fires when</th></tr></thead><tbody>
+<tr><td>AUTHZ-001</td><td>The body matches a <code>SIDE_EFFECT_PATTERNS</code> entry (ORM <code>.create/.update/.delete/.save/...(</code>, email senders, <code>stripe.*.create</code>, <code>fetch(</code>, <code>axios.post/put/patch/delete(</code>, <code>execute(</code>, <code>query(</code>, <code>writeFile(</code>) and no <code>AUTH_PATTERNS</code> entry (<code>requireAuth</code>, <code>getSession(</code>, <code>getServerSession(</code>, <code>jwt.verify(</code>, <code>req.user</code>, <code>passport.</code>, <code>auth()</code>, an <code>authorization</code> header read, <code>api_key</code>, and others).</td></tr>
+<tr><td>AUTHZ-003</td><td>The body authenticates, reads a caller-supplied id (<code>params.id</code>, <code>req.params.*Id</code>, <code>req.query.*Id</code>, <code>body.*Id</code>, <code>searchParams.get("...Id")</code>), has a side effect, and matches no <code>OWNERSHIP_PATTERNS</code> entry (<code>ownerId</code>, <code>userId:</code>/<code>userId =</code>, <code>tenantId</code>, <code>teamId</code>, <code>membership</code>, <code>canAccess</code>, <code>authorize*(</code>, <code>permission</code>, <code>role</code>, a 403 status, and others). The snippet is prefixed <code>[destructive]</code> when the signature or body names DELETE, PATCH or PUT. An unauthenticated handler is left to AUTHZ-001 so one handler is not reported twice.</td></tr>
+<tr><td>VAL-001</td><td>The body reads the request body (<code>req.body</code>, <code>request.body</code>, <code>await req.json()</code>, <code>ctx.request.body</code>, <code>c.req.json()</code>), reaches a side effect, and calls no schema parser (<code>.parse(</code>, <code>.safeParse(</code>, async forms, <code>*Schema.*parse</code>, <code>validateRequest</code>, <code>zodResolver</code>, <code>ajv</code>, <code>yup</code>, <code>joi.</code>, <code>valibot</code>, <code>model_validate</code>).</td></tr>
+</tbody></table></div>
+<p>The lists err toward silence on purpose: a broad "auth is present" reading suppresses a finding, which the source calls the safe direction for a noisy rule. A word anywhere in the body counts, so a comment such as <code>// TODO role check</code> inside a JS handler clears AUTHZ-003 (comments are skipped only by the brace matcher, not by the content checks).</p>
+<h4>Python (AUTHZ-011, AUTHZ-013), new in 1.5.0</h4>
+<p><code>findPythonHandlers(content)</code> treats a function under a route decorator (<code>@x.get|post|put|patch|delete|route|api_route(</code>) as a handler. It walks down at most 40 lines to the <code>def</code> at the same indent, balances brackets to find the end of a multi-line signature, takes every following line indented deeper as the body, and adds any decorators stacked above. <code>#</code> comments are stripped (<code>stripPyComments()</code>) so a "# TODO: add auth" note does not count. Auth and ownership are searched across decorators, signature and body (FastAPI auth usually lives in <code>Depends(...)</code>); side effects only in the body.</p>
+<ul>
+<li><b>AUTHZ-011</b> (<code>checkPyMissingAuth()</code>): a body side effect (<code>db.add/commit/execute/delete...</code>, Django <code>.objects.create/update/delete</code>, <code>.save(</code>, Mongo writes, <code>send_mail</code>, <code>requests|httpx.post/put/patch/delete</code>, file writes, <code>shutil</code>, <code>os.remove</code>, <code>subprocess.</code>) with no <code>PY_AUTH_PATTERNS</code> match. Routes whose decorator string contains login, logout, signin, signup, register, health, ping, metrics, token, magic, otp, verify, reset, callback or webhook are skipped as public. A router-level <code>dependencies=[Depends(...)]</code> anywhere in the file silences the whole file.</li>
+<li><b>AUTHZ-013</b> (<code>checkPyMissingObjectAuthz()</code>): authenticated (or router-level dependency present), an id from the caller (<code>{doc_id}</code>, <code>&lt;int:doc_id&gt;</code>, a <code>*_id</code> parameter, <code>request.args/json/... ["...id"]</code>), a side effect, and no <code>PY_OWNERSHIP_PATTERNS</code> match (the JS list plus customer, org, workspace, tenancy, scope, and 403/404 status forms).</li>
+</ul>
+<p>Both are HIGH, not CRITICAL, by design. The source states the limits: auth applied in another file (<code>include_router(..., dependencies=...)</code>, middleware) is invisible; Django class-based views and URLconf routing are not recognized; and the rule finds a handler that never mentions an owner or tenant, it does not prove that a tenant check that is present is correct. <code>guides/tenant-isolation-tests.md</code> covers what a scanner cannot.</p>
+
+<h3 id="au-rules">Rule reference</h3>
+<p>42 rules, in <code>AUDIT_RULES</code> order within each family. The live count line prints <code>Rules : 34 pattern · 5 analyzer · 3 project</code>, and counting the array by hand gives the same: 34 + 5 + 3 = 42. Extension sets: <b>JS</b> = <code>.js .ts .jsx .tsx .mjs .cjs .mts .cts</code>; <b>JS+PY</b> adds <code>.py</code>; <b>SECRET</b> adds <code>.env .json .yaml .yml</code> to JS+PY; <b>TS</b> = <code>.ts .tsx .mts .cts</code>. "Tests out" means the rule applies <code>TEST_FILE_EXCLUDES</code>; "whole" means <code>wholeFile: true</code>.</p>
+
+<h4>SEC: secrets (9)</h4>
+<div class="tbl dense"><table><thead><tr><th>Id</th><th>Kind</th><th>Severity</th><th>Files</th><th>Detects</th></tr></thead><tbody>
+<tr><td>SEC-001</td><td>pattern</td><td>CRITICAL</td><td>SECRET</td><td>OpenAI project key: <code>sk-proj-</code> plus 20 or more <code>[A-Za-z0-9_-]</code>.</td></tr>
+<tr><td>SEC-010</td><td>pattern</td><td>CRITICAL</td><td>SECRET</td><td>Anthropic key: <code>sk-ant-api</code>, two digits, <code>-</code>, 20 or more characters.</td></tr>
+<tr><td>SEC-001b</td><td>pattern</td><td>CRITICAL</td><td>SECRET</td><td>Legacy <code>sk-</code> plus 20 or more alphanumerics, excluding the two forms above.</td></tr>
+<tr><td>SEC-002</td><td>pattern</td><td>CRITICAL</td><td>SECRET</td><td>AWS access key id: <code>AKIA</code> plus 16 uppercase letters or digits.</td></tr>
+<tr><td>SEC-003</td><td>pattern</td><td>CRITICAL</td><td>SECRET</td><td>GitHub classic token: <code>ghp_</code> plus 36 alphanumerics.</td></tr>
+<tr><td>SEC-004</td><td>pattern</td><td>CRITICAL</td><td>SECRET</td><td><code>-----BEGIN PRIVATE KEY-----</code> or the RSA form. OpenSSH, EC and encrypted headers do not match.</td></tr>
+<tr><td>SEC-005</td><td>pattern</td><td>HIGH</td><td>SECRET</td><td><code>password</code> followed by <code>:</code> or <code>=</code> and a quoted literal of 6 or more characters (any case). Fires in tests.</td></tr>
+<tr><td>SEC-006</td><td>pattern</td><td>HIGH</td><td>SECRET, tests out</td><td><code>api_key</code>, <code>api-key</code> or <code>apikey</code> assigned a quoted literal of 8 or more characters.</td></tr>
+<tr><td>SEC-011</td><td>pattern</td><td>HIGH</td><td>SECRET</td><td>Connection string with credentials: <code>postgres(ql)</code>, <code>mysql</code>, <code>mongodb(+srv)</code>, <code>redis(s)</code>, <code>amqp(s)</code> URL with <code>user:pass@</code> (user may be empty).</td></tr>
+</tbody></table></div>
+
+<h4>CFG: hardcoded configuration (3)</h4>
+<div class="tbl dense"><table><thead><tr><th>Id</th><th>Kind</th><th>Severity</th><th>Files</th><th>Detects</th></tr></thead><tbody>
+<tr><td>CFG-001</td><td>pattern</td><td>HIGH</td><td>JS+PY, tests out</td><td>A quoted <code>http(s)://localhost:&lt;port&gt;</code>.</td></tr>
+<tr><td>CFG-002</td><td>pattern</td><td>HIGH</td><td>JS+PY, tests out</td><td>A quoted <code>http(s)://127.0.0.1</code>.</td></tr>
+<tr><td>CFG-003</td><td>pattern</td><td>MEDIUM</td><td>JS+PY, tests out</td><td>A quoted dotted-quad IP. Lines that bind (<code>host: "..."</code>, <code>.listen(port, "...")</code>, <code>bind("...")</code>) are cleared, since binding to loopback is the safe form (BUG-014).</td></tr>
+</tbody></table></div>
+
+<h4>ERR: error handling (3)</h4>
+<div class="tbl dense"><table><thead><tr><th>Id</th><th>Kind</th><th>Severity</th><th>Files</th><th>Detects</th></tr></thead><tbody>
+<tr><td>ERR-001</td><td>pattern, whole</td><td>HIGH</td><td>JS</td><td>A <code>catch (...) { }</code> whose body is only whitespace and comments (BUG-009 added comment-only bodies). A parameterless <code>catch { }</code> does not match, because the regex requires <code>catch (</code>.</td></tr>
+<tr><td>ERR-002</td><td>pattern</td><td>HIGH</td><td>JS</td><td>A catch whose body starts with <code>console.log</code> on the same line.</td></tr>
+<tr><td>ERR-003</td><td>pattern</td><td>MEDIUM</td><td>JS, tests out</td><td>Any <code>console.log(</code>.</td></tr>
+</tbody></table></div>
+
+<h4>API: API design (1)</h4>
+<div class="tbl dense"><table><thead><tr><th>Id</th><th>Kind</th><th>Severity</th><th>Files</th><th>Detects</th></tr></thead><tbody>
+<tr><td>API-001</td><td>pattern</td><td>MEDIUM</td><td>JS</td><td><code>app</code> or <code>router</code> <code>.get/post/put/patch/delete("/api/...")</code> where the next segment is not <code>v&lt;digit&gt;</code>.</td></tr>
+</tbody></table></div>
+
+<h4>INJ: injection (7)</h4>
+<div class="tbl dense"><table><thead><tr><th>Id</th><th>Kind</th><th>Severity</th><th>Files</th><th>Detects</th></tr></thead><tbody>
+<tr><td>INJ-001</td><td>pattern</td><td>CRITICAL</td><td>JS</td><td><code>eval(</code> anywhere, with no word boundary (BUG-040). The description says "Direct user input passed to eval()", but no input is checked.</td></tr>
+<tr><td>INJ-002</td><td>pattern</td><td>HIGH</td><td>JS, tests out</td><td><code>.innerHTML =</code>.</td></tr>
+<tr><td>INJ-003</td><td>pattern</td><td>HIGH</td><td>JS</td><td>Any <code>dangerouslySetInnerHTML</code> (BUG-003).</td></tr>
+<tr><td>INJ-004</td><td>pattern, whole</td><td>CRITICAL</td><td>JS+PY</td><td><code>query|execute|exec|raw|prepare(</code> with a string holding a SQL verb, then <code>+</code> concatenation, within 300-character bounded spans.</td></tr>
+<tr><td>INJ-005</td><td>pattern, whole</td><td>CRITICAL</td><td>JS</td><td>The same verbs called directly with a backtick template that holds a SQL verb and a <code>${}</code>.</td></tr>
+<tr><td>INJ-005b</td><td>pattern, whole</td><td>CRITICAL</td><td>JS</td><td>Any backtick template with a <code>${}</code> and a SQL clause pair (SELECT..FROM, INSERT INTO, UPDATE..SET, DELETE FROM, DROP/ALTER/TRUNCATE TABLE/DATABASE/INDEX/VIEW/SCHEMA), not tagged <code>sql</code>. Catches the assign-then-query form (BUG-017); the clause pair keeps English UI strings out (BUG-001).</td></tr>
+<tr><td>INJ-006</td><td>pattern, whole</td><td>CRITICAL</td><td><code>.py</code></td><td><code>execute(</code> with an f-string holding a SQL verb and <code>{</code>, or a string with <code>%s</code>/<code>%d</code> followed by the <code>%</code> operator. Either quote style, inner opposite quotes allowed (BUG-016).</td></tr>
+</tbody></table></div>
+
+<h4>DEP: deployment (2)</h4>
+<div class="tbl dense"><table><thead><tr><th>Id</th><th>Kind</th><th>Severity</th><th>Files</th><th>Detects</th></tr></thead><tbody>
+<tr><td>DEP-001</td><td>project, evidence project</td><td>MEDIUM</td><td>all collected</td><td>The project looks like an HTTP server and no collected file contains the substring <code>health</code> (any case). <code>looksLikeHttpServer()</code> checks <code>package.json</code> dependencies, dev and peer dependencies, <code>requirements.txt</code>, <code>pyproject.toml</code> and <code>Pipfile</code> for a known server framework, then falls back to <code>.listen(</code>, <code>createServer(</code>, <code>uvicorn.run(</code>, <code>app.run(</code> and similar in up to 150 source files (BUG-015).</td></tr>
+<tr><td>DEP-002</td><td>project</td><td>LOW</td><td>scanned</td><td>A file named <code>.env</code> is in the list. It never is, so this rule cannot fire (BUG-039).</td></tr>
+</tbody></table></div>
+
+<h4>AUTHZ: authorization (7)</h4>
+<div class="tbl dense"><table><thead><tr><th>Id</th><th>Kind</th><th>Severity</th><th>Files</th><th>Detects</th></tr></thead><tbody>
+<tr><td>AUTHZ-001</td><td>analyzer</td><td>CRITICAL</td><td>JS, tests out</td><td>Route handler with a side effect and no authentication signal.</td></tr>
+<tr><td>AUTHZ-002</td><td>pattern</td><td>CRITICAL</td><td>JS, tests out</td><td>Identity read from <code>req|request.body|query</code>: <code>userId</code>, <code>user_id</code>, <code>email</code>, <code>role</code>, <code>isAdmin</code>, <code>is_admin</code>, <code>accountId</code>, <code>tenantId</code>. Assignment to it is not flagged.</td></tr>
+<tr><td>AUTHZ-003</td><td>analyzer</td><td>CRITICAL</td><td>JS, tests out</td><td>IDOR: authenticated handler acts on a caller-supplied id with no ownership signal.</td></tr>
+<tr><td>AUTHZ-004</td><td>pattern</td><td>HIGH</td><td>JS, tests out</td><td>A secret-named value (<code>process.env.*SECRET|TOKEN|KEY|PASSWORD*</code>, a bracketed header name, an identifier with secret, token or apiKey) compared with <code>==</code>, <code>===</code>, <code>!=</code> or <code>!==</code> on either side, not against <code>undefined</code>, <code>null</code> or an empty string. Lines with <code>timingSafeEqual</code> or a <code>.length</code> compare are cleared.</td></tr>
+<tr><td>AUTHZ-005</td><td>pattern</td><td>HIGH</td><td>JS, tests out</td><td><code>redis|cache|kv|memcached .get|set|setex(</code> with a template key that has a <code>${}</code> and no user-scope token (<code>userId</code>, <code>user.id</code>, <code>session.user</code>, <code>currentUser</code>, <code>tenantId</code>, <code>orgId</code>) anywhere in it.</td></tr>
+<tr><td>AUTHZ-011</td><td>analyzer</td><td>HIGH</td><td><code>.py</code>, tests out</td><td>Python route handler with a side effect and no auth signal (1.5.0).</td></tr>
+<tr><td>AUTHZ-013</td><td>analyzer</td><td>HIGH</td><td><code>.py</code>, tests out</td><td>Python route handler acts on a caller-supplied id with no owner or tenant signal (1.5.0).</td></tr>
+</tbody></table></div>
+
+<h4>VAL: input validation (2)</h4>
+<div class="tbl dense"><table><thead><tr><th>Id</th><th>Kind</th><th>Severity</th><th>Files</th><th>Detects</th></tr></thead><tbody>
+<tr><td>VAL-001</td><td>analyzer</td><td>HIGH</td><td>JS, tests out</td><td>Handler reads the request body and reaches a side effect with no schema parse call.</td></tr>
+<tr><td>VAL-002</td><td>pattern, whole</td><td>CRITICAL</td><td>JS, tests out</td><td>A backtick template with an email header (<code>From:</code>, <code>To:</code>, <code>Cc:</code>, <code>Bcc:</code>, <code>Subject:</code>, <code>Reply-To:</code>, any case) followed by a <code>${}</code>: CRLF header injection.</td></tr>
+</tbody></table></div>
+
+<h4>WEB: web client (2), new in 1.5.0</h4>
+<div class="tbl dense"><table><thead><tr><th>Id</th><th>Kind</th><th>Severity</th><th>Files</th><th>Detects</th></tr></thead><tbody>
+<tr><td>WEB-001</td><td>pattern</td><td>HIGH</td><td>JS, <code>.html .vue .svelte</code>, tests out</td><td>A token in <code>localStorage</code> or <code>sessionStorage</code>: <code>setItem("...token|jwt|bearer|credential|api_key|session_id|access_key|refresh...")</code>, <code>storage.xToken = </code>, or <code>storage["...token..."] = </code>.</td></tr>
+<tr><td>WEB-002</td><td>project, evidence project</td><td>MEDIUM</td><td>all files under the project root</td><td><code>nginxWithoutCsp()</code>: some file whose path looks like nginx config (<code>nginx</code>, <code>sites-available</code>, <code>sites-enabled</code>, <code>conf.d</code> in the path, or a <code>.conf</code>/<code>.conf.template</code> name) holds a <code>server {</code> block with <code>listen</code> or <code>server_name</code>, and neither those configs nor any evidence file mentions a CSP (the header name, <code>helmet(</code>, Talisman, <code>django-csp</code>, and others). The nginx search always walks the project root with no extension filter.</td></tr>
+</tbody></table></div>
+
+<h4>TS: TypeScript (1)</h4>
+<div class="tbl dense"><table><thead><tr><th>Id</th><th>Kind</th><th>Severity</th><th>Files</th><th>Detects</th></tr></thead><tbody>
+<tr><td>TS-001</td><td>pattern</td><td>LOW</td><td>TS, tests out</td><td><code>: any</code> followed by a space, <code>;</code>, <code>,</code>, <code>)</code> or <code>[</code>.</td></tr>
+</tbody></table></div>
+
+<h4>REP: reputation (5)</h4>
+<p>Added 2026-07-29 after the Material Handling Academy incidents, where shipped pages that looked like malware got the domain blocklisted by a carrier filter and an antivirus vendor. None is a vulnerability by itself; each is a shape that antivirus and URL-filter engines score. None applies the test exclusion. The thresholds mirror <code>academy/tools/test_inline_js.py</code> in that project.</p>
+<div class="tbl dense"><table><thead><tr><th>Id</th><th>Kind</th><th>Severity</th><th>Files</th><th>Detects</th></tr></thead><tbody>
+<tr><td>REP-001</td><td>pattern, whole</td><td>HIGH</td><td><code>.html .htm</code></td><td>An inline <code>&lt;script&gt;</code> (no <code>src=</code>) with 20,000 or more characters inside.</td></tr>
+<tr><td>REP-002</td><td>pattern, whole</td><td>HIGH</td><td><code>.js .mjs .cjs</code></td><td>Any single line longer than 24,000 characters.</td></tr>
+<tr><td>REP-003</td><td>pattern</td><td>MEDIUM</td><td><code>.html .htm</code></td><td>An inline handler attribute: <code>onclick</code>, <code>onload</code>, <code>onerror</code>, <code>onmouseover</code>, <code>onsubmit</code>, <code>onfocus</code>, <code>oninput</code>, <code>onchange</code>.</td></tr>
+<tr><td>REP-004</td><td>pattern</td><td>MEDIUM</td><td><code>.html .htm .js</code></td><td><code>href</code> or <code>src</code> set to a <code>javascript:</code> URL.</td></tr>
+<tr><td>REP-005</td><td>pattern</td><td>MEDIUM</td><td>JS</td><td>A <code>data:...;base64,</code> URI with 4,000 or more base64 characters.</td></tr>
+</tbody></table></div>
+
+<h3 id="au-severity">Severity, summary and exit code</h3>
+<p>There are four levels, set per rule and never changed at run time: 15 rules are CRITICAL, 17 HIGH, 8 MEDIUM and 2 LOW. Severity does three things:</p>
+<ul>
+<li>It orders the human report (CRITICAL first) and sets the icon of each block.</li>
+<li>It builds the summary line under "AUDIT COMPLETE", for example <code>0 CRITICAL · 2 HIGH · 1 MEDIUM · 0 LOW</code>.</li>
+<li>It decides the exit code: with <code>--fail-on-error</code>, any CRITICAL or HIGH finding exits 1. MEDIUM and LOW are reported and never fail a build.</li>
+</ul>
+<p>A finding is not weighted by count or by file. One HIGH fails CI the same as fifty.</p>
+
+<h3 id="au-suppress">Suppression</h3>
+<p>A file can be left out of every rule kind by an <code>otlc-guardian:audit-exempt</code> marker in its first 4 KB, or by a line in <code>security/.audit-allowlist</code> at the project root with a mandatory <code># reason:</code>; every run prints both lists. The full rules, the allowlist format and its rejection warnings are in <a href="#ch-suppression">chapter 06</a>.</p>
+
+<h3 id="au-verified">What the tests verify</h3>
+<p><code>tests/audit.test.js</code> (run by <code>npm test</code> and <code>npm run test:audit</code>) builds a temporary directory per case, runs the engine on it as a subprocess with <code>--json</code>, and asserts on <code>findings[].rule.id</code>. Run on 2026-11-10: <code>Passed : 140</code>, <code>Failed : 0</code>, <code>Known : 2</code>, <code>Total : 142</code>. Every one of the 42 rule ids appears in at least one test. Since 2026-11-10 a table-driven block gives each rule that had no test one sample it must flag and one it must leave alone. Other blocks cover dependency-directory skipping, the test-file conventions, the CFG-003 bind distinction, the DEP-001 server gate, scan root versus project root, INJ-005b precision both ways, analyzer robustness on malformed files, and the BUG-041 partial-scan cases.</p>
+<p><code>knownBug(bugId, name, fn)</code> runs a test that reproduces an open bug. While the assertion fails it prints <code>(known: BUG-NNN)</code> and counts toward "Known"; the moment it passes, the suite fails with "passes now: BUG-NNN looks fixed. Move this to test() and update BUGS.md." The assertion is never loosened. The two known-bug tests today are DEP-002 on a bare <code>.env</code> (BUG-039) and INJ-001 on <code>retrieval(</code> (BUG-040).</p>
+
+<h3 id="au-bugs">Known open bugs</h3>
+<div class="limit"><b>Open on 2026-11-10</b><p>From the <code>BUGS.md</code> index, the open bugs that name an audit rule or the audit engine:</p>
+<ul>
+<li><b>BUG-002</b>: no rule covers what AI agents are allowed to write to (planned <code>AGT-001</code>), though the README claims AI-attack coverage.</li>
+<li><b>BUG-003</b>: <code>INJ-003</code> fires HIGH on stock shadcn <code>chart.jsx</code>, which every shadcn project inherits.</li>
+<li><b>BUG-030</b>: <code>AUTHZ-013</code> misses a textbook IDOR. A 404 status (<code>PY_OWNERSHIP_PATTERNS</code>) and a <code>user_id:</code> path parameter (the shared <code>userId</code>/<code>user_id</code> ownership regex) count as ownership checks, though neither says whose row it is.</li>
+<li><b>BUG-031</b>: <code>AUTHZ-011</code> blind spots. A router-level <code>Depends(get_db)</code> silences the file, the public-route list matches substrings (so <code>/api/tokens/{id}</code> is public), and any <code>api_key</code> mention counts as auth.</li>
+<li><b>BUG-032</b>: <code>AUTHZ-011</code> flags reads: a <code>GET</code> running <code>db.execute(select(...))</code> is reported HIGH.</li>
+<li><b>BUG-033</b>: <code>WEB-001</code> misses <code>setItem(TOKEN_KEY, ...)</code> and JSON-wrapped tokens, and flags <code>setItem("refreshCount", ...)</code>.</li>
+<li><b>BUG-038</b> (audit part): the <code>NGINX_SERVER_BLOCK</code> check's cost grows with file size, and a comment that mentions ContentSecurityPolicy suppresses <code>WEB-002</code>.</li>
+<li><b>BUG-039</b>: <code>DEP-002</code> can never fire; the walker never collects a bare <code>.env</code>. Same cause keeps the secret rules off <code>.env</code> files.</li>
+<li><b>BUG-040</b>: <code>INJ-001</code> fires on any call ending in <code>eval</code> (<code>retrieval(</code>), and its description claims a user-input check it does not make.</li>
+</ul>
+<p>Deferred, not open: BUG-005 (race-condition rule, planned <code>RACE-001</code>), BUG-006 (inconsistent <code>npm:</code> import versions, planned <code>DEP-003</code>), BUG-007 (file-size rule, planned <code>QUAL-001</code>).</p></div>
+
+<h3 id="au-found">Found while writing this chapter</h3>
+<div class="limit"><b>Found while writing, logged 2026-11-10</b><p>Read from the code and, where marked, reproduced. Each defect is now in BUGS.md under the id given.</p>
+<ul>
+<li><b>Missing target passes (BUG-051).</b> A target that does not exist (a CI typo, or <code>-h</code>) scans 0 files and exits 0 with "No issues found", even with <code>--fail-on-error</code>. Reproduced.</li>
+<li><b>Project under a test-named directory (BUG-052).</b> <code>TEST_FILE_EXCLUDES</code> is tested against the absolute path, so a project inside any directory named <code>test</code>, <code>tests</code> or <code>spec</code> silently loses the 17 test-excluded rules on every file. Reproduced: a <code>console.log</code> in <code>.../tests/app/src/x.js</code> gives 0 findings, the same file under <code>.../app/src/</code> gives ERR-003.</li>
+<li><b>Import runs an audit (BUG-053).</b> The CLI block at the bottom of <code>security/03-audit.js</code> runs <code>runAudit()</code> unconditionally, so <code>import "otlc-guardian/audit"</code> (a declared package export) audits the importer's argv target and prints a report. <code>bin/guardian.js</code> guards its own router with an <code>isMainModule</code> check; the engine does not.</li>
+<li><b>Audit secret rules lag the runtime guard (BUG-054).</b> The SEC comment says the rules are kept in lockstep with the runtime <code>SECRET_PATTERNS</code>. The 1.5.0 runtime fix (BUG-026) added OpenSSH, EC and encrypted keys, <code>github_pat_</code>, Slack and others to <code>security/01-injection-guard.js</code>; the audit's SEC-003 still matches only <code>ghp_</code> and SEC-004 only RSA and bare PEM headers.</li>
+<li><b>VAL-002 comment versus code.</b> The rule's comment says a <code>replace(/[\r\n]/g, "")</code> strip helper on the same line clears the finding. VAL-002 has no exclusion list, and whole-file rules never consult <code>excludeLinePatterns</code>, so a stripped value still fires. Needs check against a fixture.</li>
+<li><b>JSON plus exit 1.</b> With <code>--json --fail-on-error</code>, <code>process.exit(1)</code> follows the <code>console.log</code> of the JSON directly. On Windows, writes to a pipe are asynchronous in Node, so a large report could be cut short. Needs check.</li>
+<li><b>DEP-001 can crash the run (BUG-055).</b> Its <code>checkFn</code> reads every file with <code>readFileSync</code> and no <code>try</code>; every other read in the engine is guarded.</li>
+<li><b>Header comment is stale.</b> Until the 1.5.0 label sweep the file header said Version 1.4.1 and that <code>--fail-on-error</code> exits 1 "if issues found"; the package is 1.5.0 and the code exits 1 only on CRITICAL or HIGH.</li>
+</ul></div>
+
+<h3 id="au-deps">Who depends on it</h3>
+<div class="tbl"><table><thead><tr><th>Caller</th><th>How it uses the audit</th><th>What it relies on</th></tr></thead><tbody>
+<tr><td><code>bin/guardian.js</code>, <code>guardian audit</code></td><td><code>runAudit()</code> in the CLI (not the engine's function of the same name) resolves <code>security/03-audit.js</code> next to the installed CLI, exits 1 with "Audit script not found" if it is missing, then runs <code>spawnSync("node", [auditScript, ...args.slice(1)], { stdio: "inherit", shell: false })</code> and exits with the child's status. Arguments pass as an array, never a shell string (the 1.1.1 shell-injection fix). The audited directory is the user's current directory, because the child inherits it.</td><td>Argument handling and exit codes above; both streams pass through untouched.</td></tr>
+<tr><td><code>guardian init</code> / <code>update</code> / <code>check</code></td><td><code>init</code> copies <code>security/</code>, including the engine and the allowlist, into a project. <code>update</code> replaces <code>03-audit.js</code> when its content differs and leaves <code>.audit-allowlist</code> alone (<code>PROJECT_OWNED_SECURITY_FILES</code>). <code>check</code> lists <code>security/03-audit.js</code> as required.</td><td>The engine being a single self-contained file.</td></tr>
+<tr><td><code>.github/workflows/security-audit.yml</code></td><td>After <code>npm test</code> and <code>guardian check</code>: <code>node security/03-audit.js . --fail-on-error</code> (blocking), then <code>--json &gt; /tmp/audit.json</code> and <code>exempt.total</code> written to the job summary.</td><td>Exit 1 on CRITICAL or HIGH; clean JSON on stdout (BUG-012); the <code>exempt</code> field.</td></tr>
+<tr><td><code>package.json</code> scripts</td><td><code>npm run audit</code>, <code>audit:fail</code>, <code>audit:json</code>; the <code>guardian-audit</code> bin and the <code>./audit</code> export.</td><td>The CLI contract.</td></tr>
+<tr><td>OTLC-Guardian skill (<code>skill/SKILL.md</code>, linked at <code>~/.claude/skills/OTLC-Guardian</code>)</td><td>Step 1 tells agents to run <code>node C:\dev\Projects\otlc-guardian\security\03-audit.js &lt;project-path&gt;</code> before commit, merge or deploy, and not to eyeball the diff. Step 2 maps AUTHZ and VAL findings to the guides in <code>guides/</code>. Step 3 limits suppression to the marker and the allowlist.</td><td>The rule ids, the 42-rule count in its description, the three kinds.</td></tr>
+<tr><td><code>tests/audit.test.js</code></td><td>Subprocess with <code>--json</code> per fixture.</td><td>JSON shape, rule ids.</td></tr>
+<tr><td>Other projects (DevNeural and any project with Guardian installed)</td><td>Run the engine on their own trees; DevNeural reported BUG-041 from such a run.</td><td>Scan-root and project-root behavior.</td></tr>
+<tr><td><code>.github/CODEOWNERS</code></td><td>Requires the owner's review for <code>security/03-audit.js</code> and <code>security/.audit-allowlist</code>.</td><td>Not a runtime dependency.</td></tr>
+</tbody></table></div>
+
+<h3 id="au-docs">Where the docs and the code disagree</h3>
+<p>This chapter follows the code. Differences found on 2026-11-10:</p>
+<ul>
+<li><code>README.md</code> says to run <code>guardian audit</code> "from anywhere inside a project". The code scans the current directory (or the given target) only; from a subdirectory it audits that subdirectory, with only the allowlist, manifests and absence checks taken from the project root.</li>
+<li><code>README.md</code> lists the CI step as <code>guardian audit . --fail-on-error</code>; the workflow runs <code>node security/03-audit.js . --fail-on-error</code>. Same behavior, different entry point.</li>
+<li><code>skill/SKILL.md</code> describes project checks as "Missing <code>/health</code> endpoint, committed <code>.env</code>". The committed-<code>.env</code> check cannot fire (BUG-039), and WEB-002 is not mentioned.</li>
+<li><code>SETUP.md</code> lists the workflow steps as audit, Gitleaks, <code>npm audit</code>, <code>pip-audit</code>. The workflow runs <code>npm test</code> and <code>guardian check</code> before the audit, and the exemption summary step after it.</li>
+<li>The README and <code>SETUP.md</code> flag descriptions (<code>--fail-on-error</code> exits 1 on CRITICAL or HIGH) match the code. The engine's own header comment ("exit code 1 if issues found") does not.</li>
+</ul>
+
+</section>

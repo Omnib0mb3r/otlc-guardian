@@ -1,0 +1,171 @@
+<section class="chapter" id="ch-suppression" data-num="06" data-title="Exemptions and suppression" data-blurb="Every way to keep a file out of the audit or the PreToolUse hook, where each one is reported, and what stops it from being abused.">
+
+<p>The audit and the hooks have separate exemptions, and neither honors the other's. The audit (<a href="#ch-audit">chapter 02</a>) skips whole files listed in a central allowlist or carrying a per-file marker. The PreToolUse hook (<a href="#ch-hooks">chapter 04</a>) skips paths listed in <code>otlcGuardian.ignorePaths</code>. The web content hook and the runtime guard have no exemption at all. This chapter covers each mechanism from the code: <code>loadAllowlist()</code>, <code>exemptionMechanism()</code> and <code>runAudit()</code> in <code>security/03-audit.js</code>, and <code>loadSettings()</code>, <code>isIgnoredPath()</code> and <code>settingsWeakening()</code> in <code>.claude/hooks/injection-guard-hook.mjs</code>.</p>
+
+<h3 id="sp-summary">All mechanisms at a glance</h3>
+
+<div class="tbl dense"><table>
+<thead><tr><th>Mechanism</th><th>Applies to</th><th>Syntax</th><th>Visible where</th><th>Guarded how</th></tr></thead>
+<tbody>
+<tr><td>Central allowlist</td><td>Audit: every pattern and analyzer rule, whole file. Not the project checks.</td><td><code>&lt;path&gt;  # reason: &lt;text&gt;</code> in <code>security/.audit-allowlist</code>, path relative to the project root</td><td><code>Exempt :</code> line and <code>[allowlist]</code> list on every run; <code>exempt.allowlist</code> in <code>--json</code>; count in the CI step summary</td><td>A line without <code>reason:</code> is ignored with a warning. CODEOWNERS in the Guardian repo. <code>update</code> never overwrites it. The hook does not watch or protect it.</td></tr>
+<tr><td>Per-file marker</td><td>Same as the allowlist</td><td>The string <code>otlc-guardian:audit-exempt</code> anywhere in the file's first 4096 characters</td><td><code>[marker]</code> list on every run; <code>exempt.marker</code> in <code>--json</code>; CI count</td><td>Visibility only</td></tr>
+<tr><td>Built-in rule scope</td><td>The rules that declare it; the file walker</td><td>Code in <code>03-audit.js</code>: <code>excludePatterns</code>, <code>excludeLinePatterns</code>, <code>SKIP_DIRS</code></td><td>Not reported</td><td>Only by editing the audit; CODEOWNERS in the Guardian repo</td></tr>
+<tr><td>CSP text anywhere (a defect)</td><td><code>WEB-002</code> only</td><td>Any text matching <code>CSP_ANYWHERE</code>, comments included</td><td>Not reported</td><td>None. BUG-038, open.</td></tr>
+<tr><td><code>otlcGuardian.ignorePaths</code></td><td>PreToolUse hook: content scan of watched paths. Not its self-protection.</td><td>Array of path substrings in <code>.claude/settings.json</code></td><td><code>guardian list-watched</code> ("Ignored paths"); the settings file</td><td>The hook asks before a new entry is added (denied in bypass mode)</td></tr>
+<tr><td><code>extendDefaults: false</code>, fewer <code>watchPaths</code></td><td>PreToolUse watch list</td><td>Same <code>otlcGuardian</code> block</td><td><code>guardian list-watched</code></td><td>The hook asks (denied in bypass mode)</td></tr>
+<tr><td><code>otlc-guardian:doc</code> marker</td><td>Nothing, since 1.5.0</td><td>Was an HTML comment in the file</td><td><code>guardian list-watched</code> says it has no effect</td><td>Not applicable</td></tr>
+</tbody>
+</table></div>
+
+<h3 id="sp-allowlist">The central allowlist</h3>
+
+<p><code>loadAllowlist(rootDir)</code> reads <code>&lt;projectRoot&gt;/security/.audit-allowlist</code>. If the file is missing or unreadable it returns an empty list without a warning. Each line is trimmed. Blank lines and lines that start with <code>#</code> are skipped. Every other line is split at its <b>first</b> <code>#</code>:</p>
+
+<pre><code>bin/guardian.js                    # reason: CLI tool, console.* output is its purpose</code></pre>
+
+<ul>
+<li>No <code>#</code> at all: <code>.audit-allowlist:N missing reason, line ignored</code>.</li>
+<li>Text after the <code>#</code> does not start with <code>reason:</code> (case-insensitive): <code>reason must start with "reason:", line ignored</code>.</li>
+<li><code># reason:</code> with nothing after it is accepted. The code checks for the prefix, not for any text after it.</li>
+<li>A path that itself contains <code>#</code> cannot be listed, because the split happens at the first <code>#</code>.</li>
+</ul>
+
+<p>Both warnings go to stderr through <code>console.warn</code>. The path is stored with backslashes turned into forward slashes. Nothing else is normalized.</p>
+
+<p><code>exemptionMechanism()</code> takes each scanned file's path relative to the project root, with forward slashes, and looks it up in the map. The match is exact:</p>
+<ul>
+<li>no globs and no directory entries: <code>tests/</code> exempts nothing;</li>
+<li>no <code>./</code> prefix: <code>./bin/guardian.js</code> never matches;</li>
+<li>case-sensitive on every platform, Windows included, because it is a <code>Map</code> lookup.</li>
+</ul>
+
+<p>The project root comes from <code>findProjectRoot()</code>. It walks up from the scan target, at most 8 levels, and stops at the first directory that holds any of <code>.git</code>, <code>security/.audit-allowlist</code>, <code>package.json</code>, <code>requirements.txt</code>, <code>pyproject.toml</code> or <code>Pipfile</code>. Since 1.3.1 a subdirectory scan therefore still reads the root allowlist (BUG-018). It also means a scan of a subpackage with its own <code>package.json</code> stops there and does not read an allowlist further up.</p>
+
+<h3 id="sp-marker">The audit-exempt marker</h3>
+
+<p><code>AUDIT_EXEMPT_MARKER</code> is <code>otlc-guardian:audit-exempt</code>. <code>exemptionMechanism()</code> checks <code>content.slice(0, 4096).includes(...)</code>: the first 4096 characters, which the docs call "4 KB". Any occurrence counts, in any comment style, a string literal, or prose. A file that only <i>mentions</i> the marker name near its top is exempt.</p>
+
+<pre><code>// otlc-guardian:audit-exempt  legacy route, tracked in BUGS.md</code></pre>
+
+<p>Two files in this repo show this. <code>bin/guardian.js</code> (line 9) and <code>security/03-audit.js</code> (line 22) both name the marker in their header comments, so both would be exempt by marker even without their allowlist lines.</p>
+
+<p>The allowlist is checked first. A file that qualifies both ways is reported as <code>[allowlist]</code>, the mechanism with a written reason. Neither mechanism is per rule: an exempt file is skipped by every pattern rule (<code>scanFile()</code> checks <code>exemptPaths</code>) and every analyzer rule (the <code>fileCheckFn</code> loop does the same, verified by the test "audit-exempt marker suppresses analyzer rules too" in <code>tests/audit.test.js</code>).</p>
+
+<h3 id="sp-report">Where audit exemptions are reported</h3>
+
+<p><code>runAudit()</code> works out every exemption before any rule runs and prints the result in the header of every run, whether or not anything was found:</p>
+
+<pre><code>    Files   : 12 scanned
+    Exempt  : 3 (0 marker, 3 allowlist)
+    [allowlist] security/02-code-security.js, security/03-audit.js, security/04-sql-guard.js</code></pre>
+
+<p>That is the output of a fresh <code>guardian init</code> project on 2026-11-10. The listed paths are relative to the scan target. In human mode these lines go to stdout. With <code>--json</code> they go to stderr, and the JSON on stdout carries <code>exempt: { total, marker: [...], allowlist: [...] }</code>.</p>
+
+<p>The copied CI workflow (<code>.github/workflows/security-audit.yml</code>, step "Audit exemption visibility") runs the audit with <code>--json</code> and writes <code>Files exempted from scanning: N</code> to the GitHub step summary. It reports the count and does not fail the build when the count grows. The allowlist header says the same since the 1.5.0 fix; it used to claim CI failed.</p>
+
+<h3 id="sp-notcovered">What an audit exemption does not cover</h3>
+
+<p>The three project checks (<code>DEP-001</code>, <code>DEP-002</code>, <code>WEB-002</code>) are <code>checkFn</code> rules. <code>runAudit()</code> passes them the full file list, or the project root's files on a partial scan (BUG-041), without filtering out <code>exemptPaths</code>. An exempt file still counts as evidence for them: a health route in an exempt file still satisfies <code>DEP-001</code>, and a CSP header in an exempt file still clears <code>WEB-002</code>. No exemption removes a project check's finding.</p>
+
+<h3 id="sp-builtin">Built-in rule scope</h3>
+
+<p>Some rules leave out code by design. These are part of each rule's definition, not a setting, and the exempt summary does not report them.</p>
+
+<div class="tbl dense"><table>
+<thead><tr><th>Field</th><th>Effect</th><th>Rules</th></tr></thead>
+<tbody>
+<tr><td><code>excludePatterns: TEST_FILE_EXCLUDES</code></td><td>Skips files whose path matches <code>.test.</code>, <code>.spec.</code>, a <code>__tests__</code>, <code>test</code>, <code>tests</code> or <code>spec</code> directory, <code>test_*</code> / <code>test-*</code>, or <code>*_test.*</code> / <code>*-test.*</code></td><td><code>SEC-006</code>, <code>CFG-001</code>, <code>CFG-002</code>, <code>CFG-003</code>, <code>ERR-003</code>, <code>INJ-002</code>, <code>AUTHZ-001</code> to <code>AUTHZ-005</code>, <code>AUTHZ-011</code>, <code>AUTHZ-013</code>, <code>VAL-001</code>, <code>VAL-002</code>, <code>WEB-001</code>, <code>TS-001</code></td></tr>
+<tr><td><code>excludeLinePatterns</code></td><td>Drops a line-mode match when the same line matches a "safe form" regex</td><td><code>CFG-003</code> (a <code>host:</code>, <code>.listen(port, ip)</code> or <code>bind(ip)</code> call), <code>AUTHZ-004</code> (a line with <code>timingSafeEqual</code>, or a <code>.length</code> comparison)</td></tr>
+<tr><td><code>SKIP_DIRS</code></td><td>The walker never enters these directories</td><td>All: <code>node_modules</code>, <code>bower_components</code>, <code>vendor</code>, <code>venv</code>, <code>.venv</code>, <code>site-packages</code>, <code>dist-packages</code>, <code>dist</code>, <code>build</code>, <code>.next</code>, <code>out</code>, <code>target</code>, the Python and tool caches, <code>.turbo</code>, <code>.cache</code>, <code>coverage</code>, <code>.git</code></td></tr>
+</tbody>
+</table></div>
+
+<p>Some rules also carry a narrowing inside the regex, such as the <code>(?&lt;!\bsql)</code> lookbehind in <code>INJ-005b</code> that clears the <code>sql</code> tagged template from <code>04-sql-guard.js</code>. That is part of what the rule detects and cannot be switched off.</p>
+
+<h3 id="sp-inline">Text that silences a rule (a defect)</h3>
+
+<p><code>WEB-002</code> fires when the project ships an nginx server block and nothing sets a Content-Security-Policy. <code>nginxWithoutCsp()</code> decides "something sets one" with <code>CSP_ANYWHERE</code>, a regex that matches the text <code>content-security-policy</code> (or <code>helmet(</code>, <code>Talisman(</code>, <code>django-csp</code> and others) anywhere in any scanned file or nginx config. A comment that only names the header, a TODO or a doc string, clears the finding. This is not a designed suppression and it shows up nowhere. It is logged as part of BUG-038 (OPEN).</p>
+
+<p>SECURITY.md says: "If you find a way to add an exemption that does not show up in the summary or the allowlist, that is a Guardian security issue." By that standard this defect counts as one.</p>
+
+<p>No other rule has an inline suppression comment. The comment on <code>INJ-005b</code> says "the global doc-exempt marker <code>otlc-guardian:doc</code> plus the per-file <code>otlc-guardian:audit-exempt</code> marker both already short-circuit it at the scanner layer". The audit has no code for <code>otlc-guardian:doc</code>; that comment is stale. Only <code>audit-exempt</code> works in the audit.</p>
+
+<h3 id="sp-repo">This repo's allowlist</h3>
+
+<p><code>security/.audit-allowlist</code> in the Guardian repo has seven entries. <code>guardian init</code> copies this same file into every new project (<a href="#ch-install">chapter 05</a>), so a new project starts with these entries too. There, the three <code>security/</code> lines cover the copied Guardian files, and the other four cover whatever the project keeps at those paths.</p>
+
+<div class="tbl dense"><table>
+<thead><tr><th>Path</th><th>Reason given</th></tr></thead>
+<tbody>
+<tr><td><code>bin/guardian.js</code></td><td>CLI tool; <code>console.*</code> output is its purpose (ERR-003 false positive)</td></tr>
+<tr><td><code>security/02-code-security.js</code></td><td>The structured logger module; it must call <code>console.*</code> to be the logger</td></tr>
+<tr><td><code>security/03-audit.js</code></td><td>Its own pattern definitions match themselves</td></tr>
+<tr><td><code>security/04-sql-guard.js</code></td><td>JSDoc and example strings show the unsafe <code>SELECT ... ${id}</code> form that <code>INJ-005b</code> flags; the helper exists to replace it</td></tr>
+<tr><td><code>tests/injection-guard.test.js</code></td><td>Fixtures hold deliberate fake secrets to prove <code>guardOutput</code> catches them</td></tr>
+<tr><td><code>tests/audit.test.js</code></td><td>Regression fixtures deliberately contain key formats, SQL concatenation and silent catches</td></tr>
+<tr><td><code>tests/sql-guard.test.js</code></td><td>Every fixture shows an unsafe query the helper rewrites</td></tr>
+</tbody>
+</table></div>
+
+<p><code>guardian update</code> leaves a project's allowlist alone (<code>PROJECT_OWNED_SECURITY_FILES</code>). It copies the file only when it is missing, so a project's edits survive and Guardian's later changes to its own list do not arrive.</p>
+
+<h3 id="sp-ignorepaths">Hook exemption: otlcGuardian.ignorePaths</h3>
+
+<p>Since 1.5.0 this is the only exemption the PreToolUse hook honors. It is set in the project's <code>.claude/settings.json</code>:</p>
+
+<pre><code>{ "otlcGuardian": { "ignorePaths": [".planning/specs/injection-defense.md"] } }</code></pre>
+
+<h4>How it matches</h4>
+<p><code>isIgnoredPath()</code> canonicalizes the target with <code>canonicalPath()</code>: forward slashes, <code>.</code> and <code>..</code> collapsed, any NTFS stream suffix removed. It then checks whether the result <b>contains</b> each entry, with backslashes in the entry turned into slashes. It is a substring match, so <code>docs</code> exempts every path with <code>docs</code> anywhere in it, and <code>spec.md</code> also exempts <code>old-spec.md</code>. The match ignores case on Windows and macOS only (<code>CASE_INSENSITIVE_FS</code>), so an entry never covers a different file on a case-sensitive file system. Since 1.5.0, empty strings and non-strings are skipped; an empty entry used to match every path and switch the hook off.</p>
+
+<h4>Where it is read</h4>
+<p><code>loadSettings()</code> reads only <code>&lt;projectRoot&gt;/.claude/settings.json</code>. The root is <code>CLAUDE_PROJECT_DIR</code>, then the payload's <code>cwd</code>, then <code>process.cwd()</code>. An <code>otlcGuardian</code> block in <code>settings.local.json</code> has no effect. If <code>settings.json</code> does not parse, the hook warns on stderr and uses no exemptions and the default watch list, so a broken file never widens what is skipped.</p>
+
+<h4>What it covers</h4>
+<p>The hook applies it in one place, <code>isWatched = t &amp;&amp; !isIgnoredPath(t, settings) &amp;&amp; isWatchedPath(t, settings)</code>. An ignored path drops out of the content verdicts for that path: the deny for a CRITICAL pattern a file write adds, the deny for content a shell command copies in, the ask for a Bash command, and the advisories. It does <b>not</b> cover the two self-protection checks, which run earlier and never consult it. A change that weakens <code>.claude/settings*.json</code>, and any change to the hook scripts or <code>security/01-injection-guard.js</code>, still asks even when an <code>ignorePaths</code> entry names that file.</p>
+
+<h4>Who may add an entry</h4>
+<p>A person. <code>settingsWeakening()</code> compares the settings before and after a Write, Edit or MultiEdit, and lists <code>otlcGuardian.ignorePaths gains N entries</code> as a weakening whenever an entry appears that was not there before; swapping one entry for another counts. The decision is <code>ask</code>, or <code>deny</code> when the session runs in <code>bypassPermissions</code> mode. A Bash or PowerShell command that writes, moves or removes a settings file, or a folder that holds one, is asked about every time, because the hook cannot see the result. Removing an entry is not a weakening, so the settings check does not flag it.</p>
+
+<h3 id="sp-narrowing">Settings that narrow the hook</h3>
+
+<p>These are not exemptions, but they shrink what the hook watches, and the same check guards them:</p>
+<ul>
+<li><code>extendDefaults: false</code> replaces the default watch list with <code>watchPaths</code> alone. Turning it off asks: "default watch list dropped".</li>
+<li>Removing an entry from <code>watchPaths</code> asks: "watchPaths loses N entries".</li>
+<li><code>disableAllHooks: true</code> in either settings file, removing a Guardian hook, changing its matcher or command, or lowering its timeout asks. The hook reads <code>settings.json</code> and <code>settings.local.json</code> together for these, as Claude Code merges them.</li>
+</ul>
+
+<p><code>guardian list-watched</code> prints the effective list: defaults on or off, custom watch paths, ignored paths. It ends with the line "Exemptions: only otlcGuardian.ignorePaths in .claude/settings.json. The hook asks before an agent adds one."</p>
+
+<h3 id="sp-docmarker">History of the otlc-guardian:doc marker</h3>
+
+<div class="tbl dense"><table>
+<thead><tr><th>Version</th><th>Behavior</th></tr></thead>
+<tbody>
+<tr><td>1.1.0</td><td>Added as a "doc-exempt marker" for security spec files that discuss injection patterns. A write whose content carried <code>otlc-guardian:doc</code> skipped the hook's scan.</td></tr>
+<tr><td>to 1.4.1</td><td>Unchanged. Any payload could exempt itself by including the marker, and the hook's warning text told the model the marker existed. Logged as BUG-021.</td></tr>
+<tr><td>first 1.5.0 build</td><td>The marker in the content was ignored, but a marker already on disk was honored. Review finding 3 showed the two-step bypass: write a marker-only file, then the payload.</td></tr>
+<tr><td>1.5.0 (HEAD)</td><td>The hook does not read the marker at all, in the content or on disk. <code>ignorePaths</code> is the only exemption. BUG-021 is SMOKE-TESTING.</td></tr>
+</tbody>
+</table></div>
+
+<p>Three tests in <code>tests/hook.test.js</code> hold this in place: a marker inside the content is denied; the two-step bypass is denied (in bypass mode); and "a marker on disk exempts nothing, even when a person put it there". The audit never had code for this marker (see <a href="#sp-inline">above</a>). README.md's fork advice still tells forks to keep both marker names "intact", though <code>otlc-guardian:doc</code> no longer does anything.</p>
+
+<h3 id="sp-none">Where no exemption is needed, or none exists</h3>
+
+<ul>
+<li><b>Existing quotes in a file.</b> The hook judges a write by what it adds compared with the file on disk (<code>scanChange()</code>). Editing a spec that already quotes attack phrases, or Guardian's own section in a <code>CLAUDE.md</code>, is not blocked. Adding a new copy of a pattern is. SETUP.md "Hook exemptions" says most documentation needs no exemption for this reason.</li>
+<li><b>The web content hook</b> (<code>web-content-guard.mjs</code>) reads no settings and has no exemption; its header says its tool list is "intentionally NOT configurable via .claude/settings.json yet". It is advisory only and never blocks. SETUP.md "Customizing the watch list" says "Both hooks honor an <code>otlcGuardian</code> config block"; the code shows only the PreToolUse hook does.</li>
+<li><b>The runtime guard</b> (<code>security/01-injection-guard.js</code>, <code>injection_guard.py</code>) has no exemption parameter or marker.</li>
+</ul>
+
+<div class="limit"><b>Open on 2026-11-10</b><p><b>BUG-038</b>: a comment naming the CSP header clears WEB-002 and is not reported as an exemption. <b>BUG-056</b>: the allowlist accepts an empty reason. <b>BUG-057</b>: a mention of the audit-exempt marker in the first 4 KB exempts the file. <b>BUG-058</b>: hook <code>ignorePaths</code> is a substring match. <b>BUG-059</b>: audit exemptions do not reach the project checks.</p></div>
+
+<h3 id="sp-policy">When to use one</h3>
+
+<p>Use an exemption only when the finding is wrong, and only in a way a reviewer can see. That is Step 3 of the OTLC-Guardian skill: "Never suppress a finding because the fix is inconvenient." For the audit that means an allowlist line with a real reason; it is preferred over the marker because it is one reviewable line in one file, takes precedence, and carries a written justification. Anyone with write access can add either, an agent included, because the hook does not watch <code>security/.audit-allowlist</code> or source files. The safeguards are the reason field, the exempt summary on every run, and CODEOWNERS review where it is set up. For the hook, the person approving the prompt decides.</p>
+
+<p>Known-bug tests are not suppression. When a rule gets a case wrong, the case is logged in <code>BUGS.md</code> and kept as a <code>knownBug()</code> test in <code>tests/audit.test.js</code>, which fails the suite once the bug stops reproducing. The rule is never loosened to make the case pass.</p>
+
+</section>

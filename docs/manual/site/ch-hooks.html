@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Claude Code hooks | OTLC Guardian Manual</title>
+<meta name="description" content="Two Claude Code hooks: a PreToolUse hook that denies or confirms writes that would plant injection patterns in files agents load, and a PostToolUse hook that warns when a web result carries them.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Inter+Tight:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="manual.css">
+</head>
+<body>
+<nav class="rail" aria-label="Chapters">
+<a class="brand" href="index.html"><span class="mark"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 5 6v5c0 4.4 3 8.3 7 9.5 4-1.2 7-5.1 7-9.5V6z"/><path d="m9 12 2 2 4-4"/></svg></span><span><b>OTLC Guardian</b><small>The manual</small></span></a>
+<div class="tools"><button type="button" data-theme-toggle>Theme</button><a class="chip" href="../GUARDIAN-MANUAL.html" style="border:0">One page</a></div>
+<ol><li><a href="ch-what.html" data-ch="ch-what"><span class="n">01</span><span>What Guardian is</span></a><ul class="sub"><li><a href="ch-what.html#wh-parts">The parts</a></li><li><a href="ch-what.html#wh-ids">Rule ids</a></li><li><a href="ch-what.html#wh-state">Version and release state</a></li><li><a href="ch-what.html#wh-layout">Repo layout</a></li></ul></li><li><a href="ch-audit.html" data-ch="ch-audit"><span class="n">02</span><span>The audit engine</span></a><ul class="sub"><li><a href="ch-audit.html#au-what">What the audit is and is not</a></li><li><a href="ch-audit.html#au-pipeline">One run, start to finish</a></li><li><a href="ch-audit.html#au-cli">Command line</a></li><li><a href="ch-audit.html#au-json">JSON output</a></li><li><a href="ch-audit.html#au-files">Which files get scanned</a></li><li><a href="ch-audit.html#au-roots">Scan root and project root</a></li><li><a href="ch-audit.html#au-tests">Test-file detection</a></li><li><a href="ch-audit.html#au-kinds">The three rule kinds</a></li><li><a href="ch-audit.html#au-analyzers">Route-handler analyzers</a></li><li><a href="ch-audit.html#au-rules">Rule reference</a></li><li><a href="ch-audit.html#au-severity">Severity, summary and exit code</a></li><li><a href="ch-audit.html#au-suppress">Suppression</a></li><li><a href="ch-audit.html#au-verified">What the tests verify</a></li><li><a href="ch-audit.html#au-bugs">Known open bugs</a></li><li><a href="ch-audit.html#au-found">Found while writing this chapter</a></li><li><a href="ch-audit.html#au-deps">Who depends on it</a></li><li><a href="ch-audit.html#au-docs">Where the docs and the code disagree</a></li></ul></li><li><a href="ch-runtime.html" data-ch="ch-runtime"><span class="n">03</span><span>The runtime guard and helpers</span></a><ul class="sub"><li><a href="ch-runtime.html#rg-overview">Where it sits</a></li><li><a href="ch-runtime.html#rg-pipeline">How one scan runs</a></li><li><a href="ch-runtime.html#rg-api">01-injection-guard.js: the exports</a></li><li><a href="ch-runtime.html#rg-injection">Injection rules</a></li><li><a href="ch-runtime.html#rg-secrets">Secret rules</a></li><li><a href="ch-runtime.html#rg-normalize">Normalizer, decode views and caps</a></li><li><a href="ch-runtime.html#rg-scanchange">scanChange(): judging what a change adds</a></li><li><a href="ch-runtime.html#rg-ids">Rule ids and legacyId</a></li><li><a href="ch-runtime.html#rg-python">The Python port</a></li><li><a href="ch-runtime.html#rg-codesec">02-code-security.js: server helpers</a></li><li><a href="ch-runtime.html#rg-sql">04-sql-guard.js: the parameterized SQL helper</a></li><li><a href="ch-runtime.html#rg-deps">Who depends on it</a></li><li><a href="ch-runtime.html#rg-tests">What the tests verify</a></li><li><a href="ch-runtime.html#rg-docs">Code versus docs</a></li><li><a href="ch-runtime.html#rg-open">Open bugs</a></li></ul></li><li class="open"><a href="ch-hooks.html" class="on" data-ch="ch-hooks"><span class="n">04</span><span>The Claude Code hooks</span></a><ul class="sub"><li><a href="ch-hooks.html#hk-overview">The two hooks at a glance</a></li><li><a href="ch-hooks.html#hk-protocol">How Claude Code calls a hook</a></li><li><a href="ch-hooks.html#hk-flow">The PreToolUse decision flow</a></li><li><a href="ch-hooks.html#hk-bypass">The bypassPermissions rule</a></li><li><a href="ch-hooks.html#hk-watch">The watch list and its settings</a></li><li><a href="ch-hooks.html#hk-files">How a file write is judged</a></li><li><a href="ch-hooks.html#hk-shell">The shell readers</a></li><li><a href="ch-hooks.html#hk-copy">Copy sources are judged by content</a></li><li><a href="ch-hooks.html#hk-self">Self-protection</a></li><li><a href="ch-hooks.html#hk-failure">Failure behavior</a></li><li><a href="ch-hooks.html#hk-web">web-content-guard.mjs</a></li><li><a href="ch-hooks.html#hk-blind">What the PreToolUse hook cannot see</a></li><li><a href="ch-hooks.html#hk-tests">What the tests verify</a></li><li><a href="ch-hooks.html#hk-bugs">Known bugs</a></li><li><a href="ch-hooks.html#hk-deps">Who depends on it</a></li></ul></li><li><a href="ch-install.html" data-ch="ch-install"><span class="n">05</span><span>Install and update</span></a><ul class="sub"><li><a href="ch-install.html#in-package">The package and the source directory</a></li><li><a href="ch-install.html#in-commands">Commands and flags</a></li><li><a href="ch-install.html#in-init">What init writes</a></li><li><a href="ch-install.html#in-markers">The marker block in the behavior files</a></li><li><a href="ch-install.html#in-settings">The settings merge</a></li><li><a href="ch-install.html#in-never">What init never overwrites</a></li><li><a href="ch-install.html#in-update">How update decides</a></li><li><a href="ch-install.html#in-hookblind">Update and the PreToolUse hook</a></li><li><a href="ch-install.html#in-check">guardian check</a></li><li><a href="ch-install.html#in-exit">Exit codes and failures</a></li><li><a href="ch-install.html#in-agents">How agents are made to run Guardian</a></li><li><a href="ch-install.html#in-uninstall">Uninstall</a></li><li><a href="ch-install.html#in-tests">What the tests verify</a></li><li><a href="ch-install.html#in-open">Known open bugs</a></li></ul></li><li><a href="ch-suppression.html" data-ch="ch-suppression"><span class="n">06</span><span>Exemptions and suppression</span></a><ul class="sub"><li><a href="ch-suppression.html#sp-summary">All mechanisms at a glance</a></li><li><a href="ch-suppression.html#sp-allowlist">The central allowlist</a></li><li><a href="ch-suppression.html#sp-marker">The audit-exempt marker</a></li><li><a href="ch-suppression.html#sp-report">Where audit exemptions are reported</a></li><li><a href="ch-suppression.html#sp-notcovered">What an audit exemption does not cover</a></li><li><a href="ch-suppression.html#sp-builtin">Built-in rule scope</a></li><li><a href="ch-suppression.html#sp-inline">Text that silences a rule (a defect)</a></li><li><a href="ch-suppression.html#sp-repo">This repo's allowlist</a></li><li><a href="ch-suppression.html#sp-ignorepaths">Hook exemption: otlcGuardian.ignorePaths</a></li><li><a href="ch-suppression.html#sp-narrowing">Settings that narrow the hook</a></li><li><a href="ch-suppression.html#sp-docmarker">History of the otlc-guardian:doc marker</a></li><li><a href="ch-suppression.html#sp-none">Where no exemption is needed, or none exists</a></li><li><a href="ch-suppression.html#sp-policy">When to use one</a></li></ul></li><li><a href="ch-connections.html" data-ch="ch-connections"><span class="n">07</span><span>Systems that touch Guardian</span></a><ul class="sub"><li><a href="ch-connections.html#cn-table">Who depends on what</a></li><li><a href="ch-connections.html#cn-planned">Planned: the hard-no hook planned</a></li><li><a href="ch-connections.html#cn-change">When Guardian changes</a></li></ul></li></ol>
+<div class="foot">7 chapters<br>Built 2026-11-10<br>From the code, not the brochure.</div>
+</nav>
+<main class="page">
+<section class="chapter" id="ch-hooks" data-num="04" data-title="The Claude Code hooks" data-blurb="Two Claude Code hooks: a PreToolUse hook that denies or confirms writes that would plant injection patterns in files agents load, and a PostToolUse hook that warns when a web result carries them.">
+<header class="chapter-head"><div class="num">04</div><div><h2>The Claude Code hooks</h2><p>Two Claude Code hooks: a PreToolUse hook that denies or confirms writes that would plant injection patterns in files agents load, and a PostToolUse hook that warns when a web result carries them.</p></div></header>
+
+<p>Guardian ships two Claude Code hooks in <code>.claude/hooks/</code>. <code>injection-guard-hook.mjs</code> (1140 lines) runs before a file or shell tool call and can deny it, ask a person, or add a warning. <code>web-content-guard.mjs</code> (203 lines) runs after a web tool call and can only warn. Both import the scanner in <code>security/01-injection-guard.js</code> (<a href="ch-runtime.html#ch-runtime">chapter 03</a>), so they use the same patterns, normalization and decoding as the runtime guard. Everything below is read from the 1.5.0 working tree at <code>0fa32ce</code>.</p>
+
+<h3 id="hk-overview">The two hooks at a glance</h3>
+<div class="tbl dense"><table>
+<thead><tr><th>Hook</th><th>Event</th><th>Tools</th><th>Imports</th><th>Strongest outcome</th></tr></thead>
+<tbody>
+<tr><td><code>injection-guard-hook.mjs</code></td><td>PreToolUse</td><td>Write, Edit, MultiEdit, NotebookEdit, Bash, PowerShell</td><td><code>scan()</code>, <code>scanChange()</code></td><td><code>deny</code> (the tool call does not run)</td></tr>
+<tr><td><code>web-content-guard.mjs</code></td><td>PostToolUse</td><td>WebFetch, WebSearch, <code>mcp__firecrawl__crawl</code>, <code>mcp__exa__search</code></td><td><code>scan()</code></td><td><code>additionalContext</code> warning (the fetch already ran)</td></tr>
+</tbody></table></div>
+<p>The PreToolUse hook guards the files a later session loads as instructions, memory or plans: <code>CLAUDE.md</code>, <code>.planning/</code>, memory folders and the rest of the watch list in <a href="#hk-watch">the watch list section</a>. It also guards Guardian itself: the settings that register it and the code that makes its decisions. Before 1.5.0 it was advisory only (BUG-022).</p>
+
+<h3 id="hk-protocol">How Claude Code calls a hook</h3>
+<p>Claude Code starts the hook command as a child process for every tool call whose name matches the registered matcher, writes one JSON object to its stdin, and reads its stdout and exit code. Both hooks read stdin to the end, then parse it with <code>JSON.parse</code>.</p>
+<h4>Input the hooks read</h4>
+<div class="tbl dense"><table>
+<thead><tr><th>Field</th><th>Read by</th><th>Used for</th></tr></thead>
+<tbody>
+<tr><td><code>tool_name</code></td><td>both</td><td>Selects the extractor (<code>extractWrite()</code>) or the watched-tool check (<code>WATCHED_TOOLS</code>).</td></tr>
+<tr><td><code>tool_input</code></td><td>both</td><td>PreToolUse: <code>file_path</code>, <code>content</code>, <code>old_string</code>/<code>new_string</code>/<code>replace_all</code>, <code>edits</code>, <code>notebook_path</code>/<code>new_source</code>, <code>command</code>. PostToolUse: <code>url</code> or <code>query</code>, echoed as the source. A non-object is treated as <code>{}</code>.</td></tr>
+<tr><td><code>tool_response</code></td><td>web guard</td><td>The fetched content, flattened by <code>extractText()</code>.</td></tr>
+<tr><td><code>cwd</code></td><td>PreToolUse</td><td>The session's working directory. Shell paths resolve against it; it is also the second choice for the project root.</td></tr>
+<tr><td><code>permission_mode</code></td><td>PreToolUse</td><td><code>"bypassPermissions"</code> turns every ask into a deny (<a href="#hk-bypass">below</a>).</td></tr>
+<tr><td><code>CLAUDE_PROJECT_DIR</code> (env)</td><td>PreToolUse</td><td>First choice for the project root, which locates <code>.claude/settings.json</code> and the project's copies of the guard files. The order is <code>CLAUDE_PROJECT_DIR</code>, then <code>cwd</code>, then <code>process.cwd()</code>.</td></tr>
+</tbody></table></div>
+<h4>Output and exit codes</h4>
+<div class="tbl dense"><table>
+<thead><tr><th>Result</th><th>stdout</th><th>stderr</th><th>Exit</th></tr></thead>
+<tbody>
+<tr><td>Silent pass</td><td>nothing</td><td>nothing</td><td>0</td></tr>
+<tr><td>Deny or ask</td><td><code>{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"|"ask","permissionDecisionReason":"..."}}</code></td><td>a <code>blocked ...</code> line for content denies</td><td>0</td></tr>
+<tr><td>Advisory</td><td><code>{"hookSpecificOutput":{"hookEventName":"PreToolUse"|"PostToolUse","additionalContext":"..."}}</code></td><td>nothing</td><td>0</td></tr>
+<tr><td>Hook failure</td><td>nothing</td><td><code>[OTLC GUARDIAN] ... did not run: &lt;reason&gt;. This ... was NOT scanned.</code></td><td>1</td></tr>
+</tbody></table></div>
+<p>The PreToolUse hook writes its JSON through <code>emit()</code>, which exits 0 straight after, so the first decision emitted ends the run. Neither hook uses exit code 2, which Claude Code treats as a block; a failure exits 1, which Claude Code reports as a non-blocking hook error.</p>
+<h4>Registration</h4>
+<p>This repo's <code>.claude/settings.json</code> registers both hooks. <code>guardian init</code> writes the same entries into each project (<a href="ch-install.html#ch-install">chapter 05</a>).</p>
+<div class="tbl dense"><table>
+<thead><tr><th>Event</th><th>Matcher</th><th>Command</th><th>Timeout</th></tr></thead>
+<tbody>
+<tr><td>PreToolUse</td><td><code>Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell</code></td><td><code>node .claude/hooks/injection-guard-hook.mjs</code></td><td>not set; the hook's own code assumes Claude Code's default of 60 s (<code>DEFAULT_HOOK_TIMEOUT_S</code>)</td></tr>
+<tr><td>PostToolUse</td><td><code>WebFetch|WebSearch|mcp__firecrawl__crawl|mcp__exa__search</code></td><td><code>node .claude/hooks/web-content-guard.mjs</code></td><td>not set</td></tr>
+</tbody></table></div>
+<p>Both commands are relative paths, so they resolve against the shell's directory when Claude Code runs them (BUG-028, BUG-034). The same file carries the <code>otlcGuardian</code> block, with <code>extendDefaults: true</code> and empty <code>watchPaths</code> and <code>ignorePaths</code>.</p>
+
+<h3 id="hk-flow">The PreToolUse decision flow</h3>
+<p>The main handler runs its checks in a fixed order. Each check that decides calls <code>emit()</code> and the process ends, so an earlier check always wins over a later one.</p>
+<figure><div class="frame"><svg class="dg" viewBox="0 0 1100 480" role="img" aria-label="Decision flow of the PreToolUse hook: stdin JSON, extractWrite, settings protection, guard-file protection, watch-list check, copy sources, before and after text, scan, then deny, ask, advisory or silent.">
+<defs>
+<marker id="hk-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0 0 L10 5 L0 10 z"/></marker>
+<marker id="hk-ah-hot" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-hot" d="M0 0 L10 5 L0 10 z"/></marker>
+</defs>
+<text class="col-h" x="20" y="34">PRETOOLUSE: CHECKS IN ORDER, FIRST DECISION ENDS THE RUN</text>
+<rect class="bx-soft" x="20" y="50" width="180" height="84" rx="8"/>
+<text class="t1" x="34" y="74">stdin JSON</text>
+<text class="t2" x="34" y="93">tool_name, tool_input</text>
+<text class="t2" x="34" y="109">cwd, permission_mode</text>
+<text class="t3" x="34" y="125">bad JSON: exit 1</text>
+<rect class="bx" x="240" y="50" width="180" height="84" rx="8"/>
+<text class="t1" x="254" y="74">extractWrite()</text>
+<text class="t2" x="254" y="93">Write, Edit, MultiEdit,</text>
+<text class="t2" x="254" y="109">NotebookEdit, Bash, PS</text>
+<text class="t3" x="254" y="125">other tool: exit 0</text>
+<rect class="bx-hot" x="460" y="50" width="180" height="84" rx="8"/>
+<text class="t1" x="474" y="74">Settings guard</text>
+<text class="t2" x="474" y="93">settingsWeakening()</text>
+<text class="t2" x="474" y="109">.claude/settings*.json</text>
+<text class="lbl-hot" x="474" y="125">weakens: ask</text>
+<rect class="bx-hot" x="680" y="50" width="180" height="84" rx="8"/>
+<text class="t1" x="694" y="74">Guard-file guard</text>
+<text class="t2" x="694" y="93">hook scripts, scanner</text>
+<text class="t2" x="694" y="109">project and running copy</text>
+<text class="lbl-hot" x="694" y="125">any change: ask</text>
+<rect class="bx" x="900" y="50" width="180" height="84" rx="8"/>
+<text class="t1" x="914" y="74">Watched?</text>
+<text class="t2" x="914" y="93">isIgnoredPath()</text>
+<text class="t2" x="914" y="109">isWatchedPath()</text>
+<text class="t3" x="914" y="125">no: exit 0</text>
+<path class="ln" d="M200 92 H238" marker-end="url(#hk-ah)"/>
+<path class="ln" d="M420 92 H458" marker-end="url(#hk-ah)"/>
+<path class="ln" d="M640 92 H678" marker-end="url(#hk-ah)"/>
+<path class="ln" d="M860 92 H898" marker-end="url(#hk-ah)"/>
+<path class="ln" d="M990 134 V176 H110 V248" marker-end="url(#hk-ah)"/>
+<rect class="bx-hot" x="20" y="250" width="180" height="84" rx="8"/>
+<text class="t1" x="34" y="274">Copy sources</text>
+<text class="t2" x="34" y="293">shell writes only</text>
+<text class="t2" x="34" y="309">readSource(), patch lines</text>
+<text class="lbl-hot" x="34" y="325">CRITICAL: deny</text>
+<rect class="bx" x="240" y="250" width="180" height="84" rx="8"/>
+<text class="t1" x="254" y="274">Before and after</text>
+<text class="t2" x="254" y="293">readCurrent()</text>
+<text class="t2" x="254" y="309">applyEdits()</text>
+<text class="t3" x="254" y="325">empty after: exit 0</text>
+<rect class="bx" x="460" y="250" width="180" height="84" rx="8"/>
+<text class="t1" x="474" y="274">Scan</text>
+<text class="t2" x="474" y="293">file: scanChange()</text>
+<text class="t2" x="474" y="309">shell: scan(command)</text>
+<text class="t3" x="474" y="325">no finding: exit 0</text>
+<path class="ln" d="M200 292 H238" marker-end="url(#hk-ah)"/>
+<path class="ln" d="M420 292 H458" marker-end="url(#hk-ah)"/>
+<rect class="bx-hot" x="700" y="200" width="380" height="56" rx="8"/>
+<text class="t1" x="714" y="222">deny</text>
+<text class="t2" x="714" y="242">a file write adds a CRITICAL finding</text>
+<rect class="bx-hot" x="700" y="266" width="380" height="56" rx="8"/>
+<text class="t1" x="714" y="288">ask (deny in bypassPermissions)</text>
+<text class="t2" x="714" y="308">a shell command carries CRITICAL and writes a watched path</text>
+<rect class="bx-soft" x="700" y="332" width="380" height="56" rx="8"/>
+<text class="t1" x="714" y="354">advisory (additionalContext)</text>
+<text class="t2" x="714" y="374">HIGH or MEDIUM, or CRITICAL in a command that only names it</text>
+<rect class="bx-ok" x="700" y="398" width="380" height="56" rx="8"/>
+<text class="t1" x="714" y="420">silent, exit 0</text>
+<text class="t2" x="714" y="440">no finding, or nothing watched</text>
+<path class="ln-hot" d="M640 292 C670 292 670 228 698 228" marker-end="url(#hk-ah-hot)"/>
+<path class="ln-hot" d="M640 292 C670 292 670 294 698 294" marker-end="url(#hk-ah-hot)"/>
+<path class="ln" d="M640 292 C670 292 670 360 698 360" marker-end="url(#hk-ah)"/>
+<path class="ln" d="M640 292 C670 292 670 426 698 426" marker-end="url(#hk-ah)"/>
+</svg></div><figcaption><b>Order matters.</b> Self-protection runs before the watch-list check, so <code>ignorePaths</code> can never exempt the settings, the hook scripts or the scanner. Copy sources are judged before the command text.</figcaption></figure>
+
+<h4>Decision table</h4>
+<div class="tbl dense"><table>
+<thead><tr><th>Situation</th><th>Decision</th><th>Where in the code</th></tr></thead>
+<tbody>
+<tr><td>Tool is not one of the six</td><td>silent</td><td><code>extractWrite()</code> returns null</td></tr>
+<tr><td>File tool change to <code>.claude/settings.json</code> or <code>settings.local.json</code> that weakens Guardian</td><td>ask</td><td><code>settingsWeakening()</code>, <code>settingsAfter()</code></td></tr>
+<tr><td>Shell command writes, moves or removes a settings file, or a directory holding the project's settings</td><td>ask, always</td><td>the <code>bashWrites</code> loop with <code>covers()</code></td></tr>
+<tr><td>Any change to a hook script or the scanner, by file tool or shell, including a parent directory</td><td>ask, always</td><td><code>guardFiles</code>, <code>guardFileHit()</code></td></tr>
+<tr><td>No target is watched (after <code>ignorePaths</code>)</td><td>silent</td><td><code>isWatched()</code></td></tr>
+<tr><td>Shell command copies content with a CRITICAL finding into a watched file</td><td>deny, in every mode</td><td>copy-source loop over <code>written</code></td></tr>
+<tr><td>Write, Edit, MultiEdit or NotebookEdit adds a CRITICAL finding to a watched file</td><td>deny, in every mode</td><td><code>scanChange(before, after)</code></td></tr>
+<tr><td>Shell command text has a CRITICAL finding and the command writes a watched path</td><td>ask</td><td><code>scan(command)</code>, <code>written.length &gt; 0</code></td></tr>
+<tr><td>Shell command text has a CRITICAL finding but only names a watched path (grep, git commit, cat)</td><td>advisory</td><td>falls through to the advisory <code>emit()</code></td></tr>
+<tr><td>HIGH or MEDIUM findings only</td><td>advisory</td><td>same</td></tr>
+<tr><td>No findings, or the new content is blank</td><td>silent</td><td><code>violations.length === 0</code>, <code>!after.trim()</code></td></tr>
+</tbody></table></div>
+<p>The deny message for content tells the model not to retry through another route or with reworded or encoded content, and to tell the user. Matched text in every message passes through <code>safeEcho()</code>: printable ASCII only, the characters <code>&lt; &gt; [ ] { }</code> and backtick removed, cut to 40 characters (120 or 160 for paths).</p>
+
+<h3 id="hk-bypass">The bypassPermissions rule</h3>
+<p>An "ask" needs a person to answer. When <code>permission_mode</code> is <code>"bypassPermissions"</code> the hook sets <code>confirmOrDeny</code> to <code>"deny"</code> and appends a note saying the change was denied because prompts are bypassed and must be made by hand or outside bypass mode. This applies to all three ask cases: settings weakening, guard-file changes, and a shell command that carries a CRITICAL pattern and writes a watched path. Content denies are deny in every mode. Other modes (<code>default</code>, <code>acceptEdits</code>, <code>plan</code>) get a real "ask", which stalls an unattended worker (BUG-035).</p>
+
+<h3 id="hk-watch">The watch list and its settings</h3>
+<h4>Default list</h4>
+<div class="tbl dense"><table>
+<thead><tr><th>Kind</th><th>Entries</th><th>How it matches</th></tr></thead>
+<tbody>
+<tr><td>Directories (<code>DEFAULT_WATCH_DIR_PATTERNS</code>)</td><td><code>.planning/</code>, <code>.gsd/</code>, <code>.plans/</code>, <code>.claude/</code>, <code>.cursor/</code>, <code>.continue/</code>, <code>.aider/</code>, <code>.windsurf/</code>, <code>/memory/</code></td><td>substring of the canonical, lowercased path, anywhere in it (so <code>~/.claude/</code> counts too)</td></tr>
+<tr><td>Files (<code>DEFAULT_WATCH_FILE_PATTERNS</code>)</td><td><code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>GEMINI.md</code>, <code>.cursorrules</code>, <code>.windsurfrules</code>, <code>.aider.conf.yml</code>/<code>.yaml</code>, <code>copilot-instructions.md</code>, <code>.env</code> and <code>.env.*</code>, <code>MEMORY.md</code></td><td>end-anchored regex on the final path segment, case-insensitive</td></tr>
+</tbody></table></div>
+<h4>The <code>otlcGuardian</code> block</h4>
+<p><code>loadSettings()</code> reads <code>otlcGuardian</code> from <code>&lt;project root&gt;/.claude/settings.json</code> only; a block in <code>settings.local.json</code> is ignored. A settings file that does not parse is reported on stderr and the defaults apply, so a broken file never widens the ignore list.</p>
+<div class="tbl dense"><table>
+<thead><tr><th>Key</th><th>Default</th><th>Effect (<code>isWatchedPath()</code>, <code>isIgnoredPath()</code>)</th></tr></thead>
+<tbody>
+<tr><td><code>watchPaths</code></td><td><code>[]</code></td><td>Extra entries. An entry containing a slash is directory-style: it matches when the path contains <code>entry/</code> or ends with it. An entry with no slash matches when the path ends with it or contains <code>/entry/</code> or <code>/entry</code> (a prefix of a segment). Matching is case-insensitive.</td></tr>
+<tr><td><code>extendDefaults</code></td><td><code>true</code></td><td><code>false</code> drops the default list, leaving only <code>watchPaths</code>.</td></tr>
+<tr><td><code>ignorePaths</code></td><td><code>[]</code></td><td>Substring match on the canonical path. Empty and non-string entries are skipped, so an empty entry cannot match everything. This is the only exemption the hook has; the <code>otlc-guardian:doc</code> marker means nothing to it since 1.5.0 (BUG-021). See <a href="ch-suppression.html#ch-suppression">chapter 06</a>.</td></tr>
+</tbody></table></div>
+<h4>Path canonicalization</h4>
+<p><code>canonicalPath()</code> turns backslashes into forward slashes, removes an NTFS stream suffix from the last segment (<code>CLAUDE.md::$DATA</code> and <code>CLAUDE.md:x:$DATA</code> become <code>CLAUDE.md</code>; a single-letter drive such as <code>C:</code> is left alone), and collapses <code>.</code> and <code>..</code> with <code>path.posix.normalize</code>. Two keys are built from it:</p>
+<ul>
+<li><code>watchKey()</code> always lowercases, so <code>.PLANNING/STATE.md</code> is watched on every OS. Watching an extra differently cased folder on Linux costs nothing.</li>
+<li><code>exemptKey()</code> lowercases only on <code>win32</code> and <code>darwin</code> (<code>CASE_INSENSITIVE_FS</code>), where the file system agrees. On Linux an <code>ignorePaths</code> entry matches only its exact case, so an exemption never covers a different file.</li>
+</ul>
+<p>A relative file-tool path resolves against the project root (<code>resolve()</code>); shell paths resolve against the session <code>cwd</code>.</p>
+
+<h3 id="hk-files">How a file write is judged</h3>
+<p><code>extractWrite()</code> gives a target and the text the tool supplies. The main handler then builds the text on disk before and after the change and calls <code>scanChange(before, after, "injection")</code>, which counts a finding only when the change adds a matched string that was not there before (<a href="ch-runtime.html#ch-runtime">chapter 03</a>). A file that already quotes a pattern, such as Guardian's own section of a <code>CLAUDE.md</code>, can be rewritten; a new copy of a pattern is still new.</p>
+<div class="tbl dense"><table>
+<thead><tr><th>Tool</th><th>Before</th><th>After</th></tr></thead>
+<tbody>
+<tr><td>Write</td><td><code>readCurrent()</code> of the file ("" when it does not exist)</td><td><code>content</code></td></tr>
+<tr><td>Edit</td><td>the file, CRLF folded to LF</td><td><code>applyEdits()</code> of <code>old_string</code>/<code>new_string</code> (honoring <code>replace_all</code>) on the file</td></tr>
+<tr><td>MultiEdit</td><td>same</td><td>every edit applied in order</td></tr>
+<tr><td>NotebookEdit</td><td>""</td><td><code>new_source</code> alone; cells are JSON strings on disk, so a pattern cannot run across them</td></tr>
+</tbody></table></div>
+<p>Applying the edits means a payload split between the file and the edit, split across two edits, or joined by deleting the text between its halves is seen whole, and removing a bad line is never flagged. <code>applyEdits()</code> normalizes line endings first because the Edit tool matches an LF <code>old_string</code> against a CRLF file. An edit whose <code>old_string</code> is empty or not found is appended to the result as raw <code>new_string</code>, so it is still scanned. A file that exists but cannot be read is reported on stderr and judged as new, which scans the whole write.</p>
+
+<h3 id="hk-shell">The shell readers</h3>
+<p>For Bash and PowerShell the hook needs to know which paths a command writes. <code>shellWriteTargets(command, cwd, depth, dialect)</code> returns a map from each absolute target to the source files whose content it receives and whether the write appends. Its header calls it "a small lexer, not a shell": it does not expand variables or globs.</p>
+<h4>Lexing (<code>lexShell()</code>)</h4>
+<ul>
+<li>Single quotes are literal. Double quotes keep their text as one word, with escapes, <code>$( )</code> and (Bash only) backtick substitutions inside.</li>
+<li>The escape character is backslash in Bash and backtick in PowerShell, where a backslash stays literal because it is the path separator.</li>
+<li><code>#</code> at the start of a word begins a comment to end of line.</li>
+<li>Operators are split out (<code>&amp;&amp;</code>, <code>||</code>, <code>|</code>, <code>;</code>, <code>&amp;</code>, parentheses, newline, and the redirections <code>&gt;</code>, <code>&gt;&gt;</code>, <code>&gt;|</code>, <code>&amp;&gt;</code>, <code>&amp;&gt;&gt;</code>, <code>&lt;&gt;</code>, <code>&gt;&amp;</code>, <code>&lt;</code>, <code>&lt;&lt;</code>, <code>&lt;&lt;-</code>, <code>&lt;&lt;&lt;</code>, <code>&lt;&amp;</code>). A number before a redirect (<code>2&gt;</code>) is part of the redirect.</li>
+<li>Heredoc bodies are skipped from the line after the operator to the delimiter (tabs stripped for <code>&lt;&lt;-</code>). Quoted text and heredoc bodies are data, not commands.</li>
+<li>The text of each <code>$( )</code> and backtick substitution is collected and read again as a command, to a depth of <code>MAX_SHELL_DEPTH</code> (4).</li>
+</ul>
+<h4>Per-command rules (<code>commandWrites()</code>)</h4>
+<p>Leading <code>NAME=value</code> assignments and wrappers (<code>sudo</code>, <code>doas</code>, <code>env</code>, <code>command</code>, <code>builtin</code>, <code>exec</code>, <code>nohup</code>, <code>time</code>, <code>nice</code>, <code>timeout</code> and its duration, <code>stdbuf</code>, <code>xargs</code>) and their flags are dropped. <code>commandName()</code> takes the basename, drops <code>.exe</code> and lowercases. Redirect targets (<code>&gt;</code>, <code>&gt;&gt;</code> and the rest) are always writes, appending for <code>&gt;&gt;</code> and <code>&amp;&gt;&gt;</code>.</p>
+<div class="tbl dense"><table>
+<thead><tr><th>Command</th><th>What counts as written</th><th>Sources recorded</th></tr></thead>
+<tbody>
+<tr><td><code>cd</code>, <code>pushd</code>, <code>chdir</code>, <code>set-location</code>, <code>sl</code>, <code>push-location</code></td><td>nothing; later commands resolve against the new directory (<code>cd -</code> and a bare <code>cd</code> keep the current one)</td><td>none</td></tr>
+<tr><td><code>sh</code>, <code>bash</code>, <code>zsh</code>, <code>dash</code>, <code>ksh</code> with a flag containing <code>c</code></td><td>whatever the script argument writes (recursion)</td><td>from the inner script</td></tr>
+<tr><td><code>eval</code></td><td>whatever its joined arguments write</td><td>from the inner script</td></tr>
+<tr><td><code>find ... -exec | -execdir | -ok | -okdir ... ; | +</code></td><td>whatever the embedded command writes</td><td>from the embedded command</td></tr>
+<tr><td><code>powershell</code>, <code>pwsh</code></td><td>the script from <code>-Command</code>/<code>-c</code>/<code>-CommandWithArgs</code>, a decoded <code>-EncodedCommand</code> (base64 UTF-16LE), or the first bare argument, read with the PowerShell dialect; <code>-File</code> is not read (<code>powershellScript()</code>)</td><td>from the inner script</td></tr>
+<tr><td><code>tee</code></td><td>every operand (append with <code>-a</code>/<code>--append</code>)</td><td>its stdin</td></tr>
+<tr><td><code>rm</code>, <code>unlink</code>, <code>truncate</code>, <code>shred</code></td><td>every operand</td><td>none</td></tr>
+<tr><td><code>sed</code>, <code>perl</code>, <code>ruby</code> with <code>-i</code> or <code>--in-place</code></td><td>every operand (the script word too; it is not a file, so it is harmless)</td><td>none</td></tr>
+<tr><td><code>node</code>, <code>deno</code>, <code>bun</code>, <code>python</code>, <code>python3</code>, <code>py</code>, <code>ruby</code>, <code>perl</code>, <code>php</code> with <code>-c</code>, <code>-e</code>, <code>-p</code>, <code>-r</code>, <code>--eval</code>, <code>--print</code></td><td>every path-like word in the code (<code>pathLikeWords()</code>), since inline code cannot be parsed</td><td>none</td></tr>
+<tr><td><code>cp</code>, <code>mv</code>, <code>install</code>, <code>ln</code>, <code>rsync</code>, <code>scp</code></td><td>the destination (<code>-t</code>, <code>--target-directory=</code>, or the last operand); into a directory, each <code>dest/basename(src)</code>; <code>mv</code> sources too</td><td>the source files</td></tr>
+<tr><td><code>git</code></td><td><code>gitWrites()</code>: <code>checkout</code>/<code>restore</code> paths (after <code>--</code>, or operands; for <code>checkout X</code> the first operand counts only if it exists as a path), <code>rm</code> and <code>mv</code> operands, <code>apply</code>/<code>am</code> through the patch reader; <code>-C</code> changes the directory</td><td>patches only</td></tr>
+<tr><td><code>patch</code></td><td>the files named on the patch's <code>+++ </code> lines (<code>patchWrites()</code>, <code>a/</code> or <code>b/</code> prefix dropped, <code>/dev/null</code> skipped), from <code>-i</code>/<code>--input</code> or <code>&lt;</code></td><td><code>patch:</code> source, appended</td></tr>
+<tr><td><code>dd</code></td><td><code>of=</code></td><td><code>if=</code> and stdin</td></tr>
+<tr><td><code>curl</code> <code>-o</code>/<code>--output</code>, <code>wget</code> <code>-O</code>/<code>--output-document</code></td><td>the output file</td><td>none (the content is remote)</td></tr>
+</tbody></table></div>
+<p>Content passers (<code>cat</code>, <code>tac</code>, <code>head</code>, <code>tail</code>, <code>sort</code>, <code>uniq</code>, <code>nl</code>, <code>paste</code>, <code>cut</code>, <code>grep</code>, <code>egrep</code>, <code>fgrep</code>, <code>sed</code>, <code>awk</code>, <code>type</code>, <code>more</code>) carry their file operands and stdin to stdout. Any other command carries only its stdin. Through a pipe the next command's stdin is the previous command's stdout sources, so <code>cat x | tee CLAUDE.md</code> and <code>cat x &gt; CLAUDE.md</code> both record <code>x</code> as the source.</p>
+<h4>PowerShell</h4>
+<p>The PowerShell tool, and any <code>powershell</code>/<code>pwsh</code> script found inside Bash, is read with <code>dialect = "powershell"</code>. Parameters are bound by name (<code>-Path</code>, <code>-LiteralPath</code>, <code>-FilePath</code>, <code>-Destination</code>, <code>-NewName</code>, also <code>-Path:x</code>, comma lists split) or by position, as <code>psParse()</code> and <code>psPaths()</code> do it. Switch parameters such as <code>-Force</code> and <code>-Append</code> take no value.</p>
+<div class="tbl dense"><table>
+<thead><tr><th>Cmdlets and aliases</th><th>Written</th></tr></thead>
+<tbody>
+<tr><td><code>Set-Content</code> <code>sc</code>, <code>Add-Content</code> <code>ac</code>, <code>Out-File</code>, <code>Tee-Object</code> <code>tee</code>, <code>New-Item</code> <code>ni</code>, <code>Clear-Content</code> <code>clc</code></td><td>the path (position 0), with piped content as source; append for <code>Add-Content</code> or <code>-Append</code></td></tr>
+<tr><td><code>Copy-Item</code> <code>cp</code> <code>copy</code> <code>cpi</code>, <code>Move-Item</code> <code>mv</code> <code>move</code> <code>mi</code></td><td>the destination (position 1), with the sources; move sources too</td></tr>
+<tr><td><code>Remove-Item</code> <code>rm</code> <code>del</code> <code>erase</code> <code>ri</code> <code>rd</code> <code>rmdir</code></td><td>every path and positional argument</td></tr>
+<tr><td><code>Rename-Item</code> <code>ren</code> <code>rni</code></td><td>the old path and the new one</td></tr>
+<tr><td><code>[IO.File]::Write*</code>, <code>Append*</code>, <code>Create*</code>, <code>Delete*</code>, <code>Copy*</code>, <code>Move*</code>, <code>Replace*</code> (<code>DOTNET_FILE_WRITE</code>)</td><td>every path-like word in the call's arguments</td></tr>
+</tbody></table></div>
+<p><code>Get-Content</code> <code>gc</code>, <code>cat</code>, <code>type</code>, <code>Select-String</code> <code>sls</code> are the PowerShell content passers. In the PowerShell dialect <code>commandWrites()</code> returns right after <code>powershellWrites()</code>, so commands such as <code>git</code>, <code>bash -c</code>, <code>node -e</code> or <code>curl -o</code> typed into the PowerShell tool are not read for write targets; only redirections and the cmdlets above are. Reproduced against the live hook and logged as BUG-048: <code>git checkout</code> of the settings and <code>bash -c</code> writes ask through Bash and pass silently through the PowerShell tool.</p>
+
+<h3 id="hk-copy">Copy sources are judged by content</h3>
+<p>A payload can be written to an unwatched file first and copied in second, leaving nothing in the command text to scan. For each watched target a shell command writes, the hook reads the recorded sources with <code>readSource()</code> (regular files only, up to 1,000,000 bytes, a directory or glob reads as ""); for a <code>patch:</code> source only the lines the diff adds count (<code>addedLines()</code>). It then builds before and after the way a Write would: a replace gives the source text as the new file, an append gives the old file plus a newline plus the incoming text. <code>scanChange()</code> judges it, and any CRITICAL finding is a deny in every mode, with the target and source file names in the message. This check runs before the command-text scan.</p>
+
+<h3 id="hk-self">Self-protection</h3>
+<h4>Settings weakening</h4>
+<p>Claude Code merges <code>.claude/settings.json</code> and <code>.claude/settings.local.json</code>, so <code>guardianPosture()</code> judges the pair. A file-tool change to either file (any path ending in <code>.claude/settings.json</code> or <code>.claude/settings.local.json</code>, user level included, per <code>SETTINGS_FILE_PATTERN</code>) is compared before and after by <code>settingsWeakening()</code>. Guardian's coverage (<code>hookCoverage()</code>) is the set of keys (event, matcher token, exact command) for every command hook, with the highest timeout seen; a matcher of <code>*</code> or empty covers every token, and tokens are split on <code>|</code> and trimmed. Only keys whose command names one of the two hook files are guarded.</p>
+<div class="tbl dense"><table>
+<thead><tr><th>Counts as weakening</th><th>Not a weakening</th></tr></thead>
+<tbody>
+<tr><td><code>disableAllHooks</code> turned on in either file</td><td>widening a matcher, or switching it to <code>*</code></td></tr>
+<tr><td>a guarded (event, token, command) no longer present: hook removed, a matcher token dropped, the command altered in any way</td><td>moving the hook entry between the two files</td></tr>
+<tr><td>a guarded timeout lowered (missing timeout counts as 60 s)</td><td>adding <code>watchPaths</code>, removing <code>ignorePaths</code></td></tr>
+<tr><td><code>otlcGuardian.extendDefaults</code> turned off</td><td>changes to unrelated settings</td></tr>
+<tr><td><code>otlcGuardian.ignorePaths</code> gains an entry</td><td></td></tr>
+<tr><td><code>otlcGuardian.watchPaths</code> loses an entry</td><td></td></tr>
+<tr><td>the result is not valid JSON while the current file is (that unregisters every hook in it)</td><td></td></tr>
+<tr><td>the result cannot be computed (<code>settingsAfter()</code> returns null: a NotebookEdit, or an edit that does not apply), unless hooks are already off and there is no Guardian hook or config at stake</td><td></td></tr>
+</tbody></table></div>
+<p>A shell command whose write target is any settings file, or a directory that holds the project's settings files (<code>rm -rf .claude</code>, <code>mv .claude x</code>, <code>rm -rf .</code>), always asks: the hook cannot see the resulting file. Unlike the file-tool path there is no "nothing at stake" exception here.</p>
+<h4>Guardian's own files</h4>
+<p>Added in <code>cc9182f</code> (BUG-027, in-hook half). The hook scripts and the scanner decide every verdict, so editing them can switch Guardian off without touching settings. The protected set (<code>guardFiles</code>, de-duplicated by <code>watchKey()</code>):</p>
+<ul>
+<li><code>&lt;project&gt;/.claude/hooks/injection-guard-hook.mjs</code> and <code>web-content-guard.mjs</code>;</li>
+<li><code>&lt;project&gt;/security/01-injection-guard.js</code>;</li>
+<li>the hook file actually running (<code>hookPath</code>), the two hook files beside it, and the scanner it loaded (<code>guardModulePath</code>), which matter when a settings command points at a hook outside the project.</li>
+</ul>
+<p>A Write, Edit, MultiEdit or NotebookEdit of one of these, or a shell target that is one or a directory holding one (<code>rm -rf security</code>, <code>mv .claude/hooks x</code>), asks, and is denied in bypass mode. Any change asks, because the content is code the scanner cannot judge. <code>guardian update</code> writes these files from its own process, which the hook does not see.</p>
+
+<h3 id="hk-failure">Failure behavior</h3>
+<p>The design choice in the header: a broken hook must not block every edit in every project, so internal failures do not block, and they are never silent. <code>failOpenLoudly(reason)</code> writes <code>[OTLC GUARDIAN] injection-guard-hook did not run: &lt;reason&gt;. This tool call was NOT scanned.</code> to stderr and exits 1.</p>
+<div class="tbl dense"><table>
+<thead><tr><th>Failure</th><th>Behavior</th></tr></thead>
+<tbody>
+<tr><td>Scanner file missing at <code>../../security/01-injection-guard.js</code> relative to the hook</td><td><code>failOpenLoudly</code>, reason suggests <code>guardian update</code></td></tr>
+<tr><td>Scanner import throws, or lacks <code>scan()</code>/<code>scanChange()</code> (web guard needs only <code>scan()</code>)</td><td><code>failOpenLoudly</code></td></tr>
+<tr><td>No stdin within 5 s</td><td><code>failOpenLoudly("no input on stdin after 5 s")</code></td></tr>
+<tr><td>Bad JSON or any thrown error in the handler</td><td><code>failOpenLoudly("unexpected error (...)")</code></td></tr>
+<tr><td><code>.claude/settings.json</code> unreadable</td><td>stderr note, default watch list used, scan continues</td></tr>
+<tr><td>Target or copy source unreadable</td><td>stderr note; target judged as new, source judged as empty</td></tr>
+</tbody></table></div>
+<p>Because the hook command is a relative path, a Bash session that has changed directory makes <code>node</code> fail to find the script, which shows as a hook error on every call (BUG-034). No scan happens then.</p>
+
+<h3 id="hk-web">web-content-guard.mjs</h3>
+<p>PostToolUse runs after the tool, so this hook cannot stop a fetch; it puts a warning into Claude's context before Claude reasons about the result.</p>
+<ul>
+<li><b>Tools.</b> Hardcoded in <code>WATCHED_TOOLS</code>: <code>WebFetch</code>, <code>WebSearch</code>, <code>mcp__firecrawl__crawl</code>, <code>mcp__exa__search</code>. Any other <code>tool_name</code> exits 0. The set is not configurable; the hook does not read <code>otlcGuardian</code>. The two MCP names are probably wrong (BUG-036).</li>
+<li><b>Flattening.</b> <code>extractText()</code> returns a string as is; joins arrays with newlines; for an object, collects every string value and recurses into nested arrays and objects, in key order. Numbers and booleans inside objects are skipped. So a WebSearch array of <code>title</code>/<code>url</code>/<code>snippet</code> objects is scanned as one text.</li>
+<li><b>Scan.</b> <code>scanContent()</code> calls <code>scan(text, "injection")</code> on the whole text. Since 1.5.0 there is no local 64 KB window; the scanner's own cap applies and content past it is reported as an oversize finding instead of passing.</li>
+<li><b>Output.</b> Any finding of any severity emits <code>hookSpecificOutput</code> with <code>hookEventName: "PostToolUse"</code> and an <code>additionalContext</code> warning: tool name, source (<code>tool_input.url</code>, else <code>query</code>, else <code>(unknown)</code>, through <code>safeEcho</code> at 200 characters), counts of all, CRITICAL and HIGH findings, details, and an instruction to treat the content as untrusted data. No finding, or an empty response, exits 0 silently.</li>
+<li><b>Failure.</b> Same <code>failOpenLoudly</code> pattern: missing scanner, failed import, 5 s stdin timeout, or a thrown error writes <code>This web result was NOT scanned</code> to stderr and exits 1.</li>
+</ul>
+<div class="note"><b>Header comment is stale</b><p>The file header still lists only WebFetch and WebSearch under "Triggered on", while the code and the registered matcher cover four tools. SETUP.md says "Both hooks honor an <code>otlcGuardian</code> config block"; the code shows only the PreToolUse hook reads it. Follow the code.</p></div>
+
+<h3 id="hk-blind">What the PreToolUse hook cannot see</h3>
+<p>The hook judges what a command spells out and the text it carries. From SECURITY.md ("What the PreToolUse hook cannot see") and the code:</p>
+<ul>
+<li>targets not spelled out: a variable (<code>f=CLAUDE.md; echo x &gt; $f</code>), a path computed inside <code>node -e</code>, a glob such as <code>.claude/settings.loc*.json</code>;</li>
+<li>a script file that writes the target, and PowerShell <code>-File</code> scripts (<code>powershellScript()</code> returns null);</li>
+<li>content encoded or assembled in the shell: <code>printf</code> octal escapes, <code>rev</code>, <code>tr</code> rot13, <code>base64 -d</code>, variable concatenation, words split by quotes (BUG-047);</li>
+<li>git operations that replace files without naming them: branch switches, <code>reset</code>, <code>stash</code>, <code>merge</code> (the <code>gitWrites()</code> comment says so);</li>
+<li>from the code, not in SECURITY.md: non-PowerShell commands typed into the PowerShell tool (<a href="#hk-shell">above</a>), and <code>cmd /c</code>, which no reader handles (both BUG-048, reproduced);</li>
+<li>a reworded instruction that matches no known pattern, since detection is pattern-based.</li>
+</ul>
+<p>Two smaller approximations from the code: the directory set by <code>cd</code> inside <code>( ... )</code> carries past the closing parenthesis, and a CRITICAL match anywhere in a command that writes a watched path triggers the ask, even if the match sits in a part of the command that writes elsewhere. An agent that is already compromised can use any of these routes. They are left to the planned hard-no hook, hosted by DevNeural, which judges a command by its effect instead of its text (<code>TODO.md</code>, "Self-Growing Gate spec").</p>
+
+<h3 id="hk-tests">What the tests verify</h3>
+<p><code>tests/hook.test.js</code> drives both hooks as child processes. Its groups:</p>
+<div class="tbl dense"><table>
+<thead><tr><th>Group</th><th>Covers</th></tr></thead>
+<tbody>
+<tr><td>watch list coverage; silent on out-of-scope and exempt files; uses full pattern set</td><td>default list, <code>ignorePaths</code>, parity with the scanner</td></tr>
+<tr><td>blocks CRITICAL, warns on the rest (1.5.0)</td><td>deny, ask, advisory, bypass mode</td></tr>
+<tr><td>judges what a write adds; an Edit is judged as the file it leaves</td><td><code>scanChange()</code>, <code>applyEdits()</code></td></tr>
+<tr><td>a copy into a watched path is judged by what it copies (P1)</td><td>copy sources, pipes, patches</td></tr>
+<tr><td>PowerShell is judged like Bash (P6)</td><td>cmdlets, aliases, <code>-EncodedCommand</code></td></tr>
+<tr><td>path spelling does not dodge the watch list (P4/P5)</td><td>case, stream suffix</td></tr>
+<tr><td>scanner bypasses closed</td><td>encoded payloads through the hook</td></tr>
+<tr><td>self-protection of <code>.claude/settings.json</code>; of the hook files and scanner (P3)</td><td><code>settingsWeakening()</code>, <code>guardFiles</code></td></tr>
+<tr><td>web content guard: fires on hostile responses; silent when appropriate; reports source URL; 1.5.0 hardening</td><td>web hook</td></tr>
+</tbody></table></div>
+<p><code>guardian check</code> pipes a known-bad payload through the PreToolUse hook as an install smoke test (SETUP.md).</p>
+
+<h3 id="hk-bugs">Known bugs</h3>
+<div class="limit"><b>Open on 2026-11-10</b><p><b>BUG-048</b> (OPEN, HIGH on Windows): a PowerShell tool command is read only for redirections and the listed cmdlets, so <code>git</code>, <code>bash -c</code>, <code>node -e</code> and <code>curl -o</code> writes through it are not seen; <code>cmd /c</code> is read by neither dialect. The P2 and P3 protections hold for the Bash tool only until it is fixed.</p><p><b>BUG-027</b> (IN-PROGRESS): the in-hook half landed in <code>cc9182f</code>; the bug stays open in the index. <b>BUG-028</b>: the hook command is cwd-relative; the <code>$CLAUDE_PROJECT_DIR</code> form is untested on Windows. <b>BUG-034</b>: with Bash in the matcher, every Bash call after a <code>cd</code> raises a hook error. <b>BUG-035</b>: "ask" stalls unattended workers in default and acceptEdits modes. <b>BUG-036</b>: the two MCP web tool names are probably wrong. <b>BUG-037</b>: the <code>guardian update</code> hook migration overrides a wider custom matcher and duplicates the <code>$CLAUDE_PROJECT_DIR</code> form. <b>BUG-038</b>: small defects, including a deny message that loses the file name. <b>BUG-042</b>: count-based judgement lets an existing quoted pattern be moved into a live directive. <b>BUG-043</b>: false denies on ordinary headings and lines that resemble template delimiters, and on a <code>CLAUDE.md</code> line that quotes a pattern as data. <b>BUG-044</b>: false denies in bypass mode on shell cleanup (<code>sed -i</code> deleting a payload line, <code>grep -v</code> then <code>mv</code> back) and read-only <code>node -e</code>/<code>python -c</code>. <b>BUG-045</b>: a matcher written with spaces around <code>|</code> is accepted as unchanged because tokens are trimmed, and the <code>$CLAUDE_PROJECT_DIR</code> command form is denied as a weakening because the command string changes. <b>BUG-047</b>: encoded shell content passes. <b>BUG-021</b> and <b>BUG-022</b> are SMOKE-TESTING.</p></div>
+
+<h3 id="hk-deps">Who depends on it</h3>
+<ul>
+<li><b>Every Guardian project.</b> <code>guardian init</code> copies both scripts into <code>.claude/hooks/</code> and registers them in that project's <code>.claude/settings.json</code>; <code>guardian update</code> refreshes and migrates them (<a href="ch-install.html#ch-install">chapter 05</a>). 1.5.0 is unreleased and reaches a project only when <code>guardian update</code> runs there.</li>
+<li><b>The scanner.</b> Both hooks import <code>security/01-injection-guard.js</code> by a path relative to themselves (<code>../../security/</code>), so the hook folder and the scanner must ship together. A change to <code>scan()</code> or <code>scanChange()</code> changes every verdict here (<a href="ch-runtime.html#ch-runtime">chapter 03</a>).</li>
+<li><b>Claude Code.</b> The hooks rely on its PreToolUse and PostToolUse stdin fields, <code>CLAUDE_PROJECT_DIR</code>, the <code>hookSpecificOutput</code> shape, and its treatment of exit 1 as a non-blocking error.</li>
+<li><b>Exemptions.</b> The <code>ignorePaths</code> rules and how they relate to the audit's markers are in <a href="ch-suppression.html#ch-suppression">chapter 06</a>.</li>
+<li><b>DevNeural.</b> The planned hard-no hook DevNeural hosts is meant to cover the routes in <a href="#hk-blind">the blind-spot list</a>.</li>
+</ul>
+
+</section>
+
+<nav class="pager"><a href="ch-runtime.html">&larr; 03 The runtime guard and helpers</a><a href="ch-install.html">05 Install and update &rarr;</a></nav>
+</main>
+<script>
+(function(){
+  var KEY='guardian-manual-theme';
+  var persistOff=function(){document.documentElement.setAttribute('data-theme-persist','off');};
+  try{var t=localStorage.getItem(KEY);if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){persistOff();}
+  document.addEventListener('click',function(e){
+    var b=e.target.closest('[data-theme-toggle]');if(!b)return;
+    var root=document.documentElement;
+    var dark=root.getAttribute('data-theme')?root.getAttribute('data-theme')==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var next=dark?'light':'dark';root.setAttribute('data-theme',next);
+    try{localStorage.setItem(KEY,next);}catch(e2){persistOff();}
+  });
+  if(!('IntersectionObserver' in window))return;
+  var links={};document.querySelectorAll('.rail a[data-ch]').forEach(function(a){links[a.getAttribute('data-ch')]=a;});
+  var secs=document.querySelectorAll('section.chapter');
+  if(secs.length<2)return;
+  var io=new IntersectionObserver(function(es){es.forEach(function(en){
+    if(!en.isIntersecting)return;var id=en.target.id;
+    Object.keys(links).forEach(function(k){links[k].classList.toggle('on',k===id);links[k].parentNode.classList.toggle('open',k===id);});
+  });},{rootMargin:'-20% 0px -70% 0px'});
+  secs.forEach(function(s){io.observe(s);});
+})();
+</script>
+</body>
+</html>

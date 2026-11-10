@@ -1,0 +1,25 @@
+<header class="cover" id="cover">
+  <div class="eyebrow">OTLC Guardian &middot; the manual &middot; state of 2026-11-10 (1.5.0, unreleased)</div>
+  <h1>Rules an agent reads. <span class="soft">Checks it cannot talk its way past.</span></h1>
+  <p class="lede">OTLC Guardian is a security floor for AI-assisted code. It ships the rules a coding agent reads at the start of a session, a static audit that checks a project before it is committed or deployed, a runtime scanner a project calls before and after every AI API call, and two Claude Code hooks that scan what an agent writes into files a later session will load as instructions. This manual explains each part as the code builds it today.</p>
+  <div class="meta">
+    <span class="chip ok"><i></i>written from the code at 1.5.0</span>
+    <span class="chip warn"><i></i>known gaps named, with bug ids</span>
+  </div>
+
+  <div class="facts">
+    <div class="fact"><div class="k">Audit rules</div><div class="v">42</div><div class="d">34 pattern, 5 analyzer, 3 project</div></div>
+    <div class="fact"><div class="k">Runtime patterns</div><div class="v">28 + 16</div><div class="d">injection, secret</div></div>
+    <div class="fact"><div class="k">Claude Code hooks</div><div class="v">2</div><div class="d">PreToolUse can block, PostToolUse warns</div></div>
+    <div class="fact"><div class="k">Runtime dependencies</div><div class="v">0</div><div class="d">Node 22 or later, nothing from npm</div></div>
+    <div class="fact"><div class="k">Tests</div><div class="v">495</div><div class="d">plus 2 known-bug tests, 6 suites</div></div>
+    <div class="fact"><div class="k">Field guides</div><div class="v">4</div><div class="d">the bug classes AI tools write most</div></div>
+  </div>
+
+  <h3 id="how-to-read">How to read this manual</h3>
+  <p>Every claim here was checked against the source in <code>C:\dev\Projects\otlc-guardian</code> at commit <code>0fa32ce</code> on 2026-11-10. Paths are relative to that repo unless they start with a drive letter. Where the code and a document (README, SETUP, SECURITY) disagree, the manual follows the code and says so. Where a part is planned and not built, it carries a <span class="tag plan">planned</span> tag. Where a writer could not confirm a detail from the code, the text says "needs check".</p>
+  <p>The manual moves with the code. Any change to how a part works edits the chapter that describes it, rebuilds the manual (<code>node docs/manual/build.mjs</code>) and republishes it in the same piece of work. The build fails on an em or en dash and on a link to an id that does not exist.</p>
+
+  <h3 id="contents">Contents</h3>
+  <!--CONTENTS-->
+</header>

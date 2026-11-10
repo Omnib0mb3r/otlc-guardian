@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What Guardian is | OTLC Guardian Manual</title>
+<meta name="description" content="The parts of Guardian, which layer each one defends, where each runs, and the version and release state of 1.5.0.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Inter+Tight:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="manual.css">
+</head>
+<body>
+<nav class="rail" aria-label="Chapters">
+<a class="brand" href="index.html"><span class="mark"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 5 6v5c0 4.4 3 8.3 7 9.5 4-1.2 7-5.1 7-9.5V6z"/><path d="m9 12 2 2 4-4"/></svg></span><span><b>OTLC Guardian</b><small>The manual</small></span></a>
+<div class="tools"><button type="button" data-theme-toggle>Theme</button><a class="chip" href="../GUARDIAN-MANUAL.html" style="border:0">One page</a></div>
+<ol><li class="open"><a href="ch-what.html" class="on" data-ch="ch-what"><span class="n">01</span><span>What Guardian is</span></a><ul class="sub"><li><a href="ch-what.html#wh-parts">The parts</a></li><li><a href="ch-what.html#wh-ids">Rule ids</a></li><li><a href="ch-what.html#wh-state">Version and release state</a></li><li><a href="ch-what.html#wh-layout">Repo layout</a></li></ul></li><li><a href="ch-audit.html" data-ch="ch-audit"><span class="n">02</span><span>The audit engine</span></a><ul class="sub"><li><a href="ch-audit.html#au-what">What the audit is and is not</a></li><li><a href="ch-audit.html#au-pipeline">One run, start to finish</a></li><li><a href="ch-audit.html#au-cli">Command line</a></li><li><a href="ch-audit.html#au-json">JSON output</a></li><li><a href="ch-audit.html#au-files">Which files get scanned</a></li><li><a href="ch-audit.html#au-roots">Scan root and project root</a></li><li><a href="ch-audit.html#au-tests">Test-file detection</a></li><li><a href="ch-audit.html#au-kinds">The three rule kinds</a></li><li><a href="ch-audit.html#au-analyzers">Route-handler analyzers</a></li><li><a href="ch-audit.html#au-rules">Rule reference</a></li><li><a href="ch-audit.html#au-severity">Severity, summary and exit code</a></li><li><a href="ch-audit.html#au-suppress">Suppression</a></li><li><a href="ch-audit.html#au-verified">What the tests verify</a></li><li><a href="ch-audit.html#au-bugs">Known open bugs</a></li><li><a href="ch-audit.html#au-found">Found while writing this chapter</a></li><li><a href="ch-audit.html#au-deps">Who depends on it</a></li><li><a href="ch-audit.html#au-docs">Where the docs and the code disagree</a></li></ul></li><li><a href="ch-runtime.html" data-ch="ch-runtime"><span class="n">03</span><span>The runtime guard and helpers</span></a><ul class="sub"><li><a href="ch-runtime.html#rg-overview">Where it sits</a></li><li><a href="ch-runtime.html#rg-pipeline">How one scan runs</a></li><li><a href="ch-runtime.html#rg-api">01-injection-guard.js: the exports</a></li><li><a href="ch-runtime.html#rg-injection">Injection rules</a></li><li><a href="ch-runtime.html#rg-secrets">Secret rules</a></li><li><a href="ch-runtime.html#rg-normalize">Normalizer, decode views and caps</a></li><li><a href="ch-runtime.html#rg-scanchange">scanChange(): judging what a change adds</a></li><li><a href="ch-runtime.html#rg-ids">Rule ids and legacyId</a></li><li><a href="ch-runtime.html#rg-python">The Python port</a></li><li><a href="ch-runtime.html#rg-codesec">02-code-security.js: server helpers</a></li><li><a href="ch-runtime.html#rg-sql">04-sql-guard.js: the parameterized SQL helper</a></li><li><a href="ch-runtime.html#rg-deps">Who depends on it</a></li><li><a href="ch-runtime.html#rg-tests">What the tests verify</a></li><li><a href="ch-runtime.html#rg-docs">Code versus docs</a></li><li><a href="ch-runtime.html#rg-open">Open bugs</a></li></ul></li><li><a href="ch-hooks.html" data-ch="ch-hooks"><span class="n">04</span><span>The Claude Code hooks</span></a><ul class="sub"><li><a href="ch-hooks.html#hk-overview">The two hooks at a glance</a></li><li><a href="ch-hooks.html#hk-protocol">How Claude Code calls a hook</a></li><li><a href="ch-hooks.html#hk-flow">The PreToolUse decision flow</a></li><li><a href="ch-hooks.html#hk-bypass">The bypassPermissions rule</a></li><li><a href="ch-hooks.html#hk-watch">The watch list and its settings</a></li><li><a href="ch-hooks.html#hk-files">How a file write is judged</a></li><li><a href="ch-hooks.html#hk-shell">The shell readers</a></li><li><a href="ch-hooks.html#hk-copy">Copy sources are judged by content</a></li><li><a href="ch-hooks.html#hk-self">Self-protection</a></li><li><a href="ch-hooks.html#hk-failure">Failure behavior</a></li><li><a href="ch-hooks.html#hk-web">web-content-guard.mjs</a></li><li><a href="ch-hooks.html#hk-blind">What the PreToolUse hook cannot see</a></li><li><a href="ch-hooks.html#hk-tests">What the tests verify</a></li><li><a href="ch-hooks.html#hk-bugs">Known bugs</a></li><li><a href="ch-hooks.html#hk-deps">Who depends on it</a></li></ul></li><li><a href="ch-install.html" data-ch="ch-install"><span class="n">05</span><span>Install and update</span></a><ul class="sub"><li><a href="ch-install.html#in-package">The package and the source directory</a></li><li><a href="ch-install.html#in-commands">Commands and flags</a></li><li><a href="ch-install.html#in-init">What init writes</a></li><li><a href="ch-install.html#in-markers">The marker block in the behavior files</a></li><li><a href="ch-install.html#in-settings">The settings merge</a></li><li><a href="ch-install.html#in-never">What init never overwrites</a></li><li><a href="ch-install.html#in-update">How update decides</a></li><li><a href="ch-install.html#in-hookblind">Update and the PreToolUse hook</a></li><li><a href="ch-install.html#in-check">guardian check</a></li><li><a href="ch-install.html#in-exit">Exit codes and failures</a></li><li><a href="ch-install.html#in-agents">How agents are made to run Guardian</a></li><li><a href="ch-install.html#in-uninstall">Uninstall</a></li><li><a href="ch-install.html#in-tests">What the tests verify</a></li><li><a href="ch-install.html#in-open">Known open bugs</a></li></ul></li><li><a href="ch-suppression.html" data-ch="ch-suppression"><span class="n">06</span><span>Exemptions and suppression</span></a><ul class="sub"><li><a href="ch-suppression.html#sp-summary">All mechanisms at a glance</a></li><li><a href="ch-suppression.html#sp-allowlist">The central allowlist</a></li><li><a href="ch-suppression.html#sp-marker">The audit-exempt marker</a></li><li><a href="ch-suppression.html#sp-report">Where audit exemptions are reported</a></li><li><a href="ch-suppression.html#sp-notcovered">What an audit exemption does not cover</a></li><li><a href="ch-suppression.html#sp-builtin">Built-in rule scope</a></li><li><a href="ch-suppression.html#sp-inline">Text that silences a rule (a defect)</a></li><li><a href="ch-suppression.html#sp-repo">This repo's allowlist</a></li><li><a href="ch-suppression.html#sp-ignorepaths">Hook exemption: otlcGuardian.ignorePaths</a></li><li><a href="ch-suppression.html#sp-narrowing">Settings that narrow the hook</a></li><li><a href="ch-suppression.html#sp-docmarker">History of the otlc-guardian:doc marker</a></li><li><a href="ch-suppression.html#sp-none">Where no exemption is needed, or none exists</a></li><li><a href="ch-suppression.html#sp-policy">When to use one</a></li></ul></li><li><a href="ch-connections.html" data-ch="ch-connections"><span class="n">07</span><span>Systems that touch Guardian</span></a><ul class="sub"><li><a href="ch-connections.html#cn-table">Who depends on what</a></li><li><a href="ch-connections.html#cn-planned">Planned: the hard-no hook planned</a></li><li><a href="ch-connections.html#cn-change">When Guardian changes</a></li></ul></li></ol>
+<div class="foot">7 chapters<br>Built 2026-11-10<br>From the code, not the brochure.</div>
+</nav>
+<main class="page">
+<section class="chapter" id="ch-what" data-num="01" data-title="What Guardian is" data-blurb="The parts of Guardian, which layer each one defends, where each runs, and the version and release state of 1.5.0.">
+<header class="chapter-head"><div class="num">01</div><div><h2>What Guardian is</h2><p>The parts of Guardian, which layer each one defends, where each runs, and the version and release state of 1.5.0.</p></div></header>
+
+<p>Guardian is one Node package with no runtime dependencies (<code>package.json</code>: <code>"dependencies": {}</code>, <code>"engines": { "node": "&gt;=22.0.0" }</code>, <code>"type": "module"</code>). It has four kinds of part: documents an agent reads, code that runs inside the project being protected, code that runs inside Claude Code, and a command-line tool that installs and checks the rest.</p>
+
+<h3 id="wh-parts">The parts</h3>
+<div class="tbl"><table>
+<thead><tr><th>Part</th><th>Files</th><th>Runs where, and when</th><th>Can it stop something?</th></tr></thead>
+<tbody>
+<tr><td>Rules for agents</td><td><code>CLAUDE.md</code> (how to build), <code>STANDARDS.md</code> (what to build with, 905 lines), <code>AGENTS.md</code> and <code>GEMINI.md</code> (the same rules for other agents)</td><td>Loaded by the coding agent at session start. <code>guardian init</code> merges them into a project's own files.</td><td>No. They shape behavior; nothing enforces them.</td></tr>
+<tr><td>Audit engine</td><td><code>security/03-audit.js</code></td><td>Run by a person, an agent or CI before commit and deploy (<code>guardian audit</code>, <code>npm run audit</code>, or <code>node security/03-audit.js &lt;dir&gt;</code>). Chapter 02.</td><td>Yes, through its exit code with <code>--fail-on-error</code>. It reads code; it never runs it.</td></tr>
+<tr><td>Runtime guard</td><td><code>security/01-injection-guard.js</code>, <code>security/injection_guard.py</code></td><td>Imported by the protected application and called on every input to and output from an AI model. Chapter 03.</td><td>Yes. A blocked input never reaches the model.</td></tr>
+<tr><td>Helpers</td><td><code>security/02-code-security.js</code> (headers and middleware), <code>security/04-sql-guard.js</code> (parameterized SQL)</td><td>Imported by the protected application. Chapter 03.</td><td>They make the safe path the easy one.</td></tr>
+<tr><td>Claude Code hooks</td><td><code>.claude/hooks/injection-guard-hook.mjs</code> (PreToolUse), <code>.claude/hooks/web-content-guard.mjs</code> (PostToolUse)</td><td>Run by Claude Code on every matching tool call in a project that registers them. Chapter 04.</td><td>The PreToolUse hook denies or asks. The PostToolUse hook only warns.</td></tr>
+<tr><td>CLI</td><td><code>bin/guardian.js</code> (<code>guardian</code>), <code>security/03-audit.js</code> (<code>guardian-audit</code>)</td><td>Run by a person to install, update and smoke-test Guardian in a project. Chapter 05.</td><td>No.</td></tr>
+<tr><td>Skill</td><td><code>skill/SKILL.md</code>, linked at <code>~/.claude/skills/OTLC-Guardian</code></td><td>Loaded by a Claude Code session when the work touches auth, endpoints, input, secrets, SQL or deployment. Chapter 07.</td><td>No. It tells the agent to run the audit and how to read it.</td></tr>
+<tr><td>Field guides</td><td><code>guides/*.md</code>, index at <code>guides/INDEX.md</code></td><td>Read by an agent or a person when an audit rule fires. Each audit rule in the AUTHZ and VAL families points at a section.</td><td>No.</td></tr>
+</tbody></table></div>
+
+<figure>
+<div class="frame">
+<svg class="dg" viewBox="0 0 1100 330" role="img" aria-label="Guardian's layers along the life of a change: rules at session start, hooks while the agent writes, the audit before commit and deploy, the runtime guard in production.">
+<defs><marker id="wh-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+<text class="col-h" x="20" y="24">THE LIFE OF A CHANGE</text>
+<path class="ln" d="M40,70 H1060" marker-end="url(#wh-ah)"/>
+<g class="t2">
+<text x="130" y="56" text-anchor="middle">session starts</text>
+<text x="390" y="56" text-anchor="middle">agent writes files</text>
+<text x="660" y="56" text-anchor="middle">commit and deploy</text>
+<text x="930" y="56" text-anchor="middle">app in production</text>
+</g>
+<rect class="bx-soft" x="40" y="96" width="180" height="120" rx="8"/>
+<text class="t1" x="130" y="128" text-anchor="middle">Rules</text>
+<text class="t3" x="130" y="152" text-anchor="middle">CLAUDE.md, STANDARDS.md</text>
+<text class="t3" x="130" y="170" text-anchor="middle">AGENTS.md, GEMINI.md</text>
+<text class="t3" x="130" y="196" text-anchor="middle">shapes behavior only</text>
+<rect class="bx-hot" x="270" y="96" width="240" height="120" rx="8"/>
+<text class="t1" x="390" y="128" text-anchor="middle">Claude Code hooks</text>
+<text class="t3" x="390" y="152" text-anchor="middle">PreToolUse: deny or ask</text>
+<text class="t3" x="390" y="170" text-anchor="middle">PostToolUse: warn on web content</text>
+<text class="t3" x="390" y="196" text-anchor="middle">chapter 04</text>
+<rect class="bx-hot" x="560" y="96" width="200" height="120" rx="8"/>
+<text class="t1" x="660" y="128" text-anchor="middle">Audit</text>
+<text class="t3" x="660" y="152" text-anchor="middle">42 static rules</text>
+<text class="t3" x="660" y="170" text-anchor="middle">--fail-on-error stops CI</text>
+<text class="t3" x="660" y="196" text-anchor="middle">chapter 02</text>
+<rect class="bx-ok" x="810" y="96" width="240" height="120" rx="8"/>
+<text class="t1" x="930" y="128" text-anchor="middle">Runtime guard</text>
+<text class="t3" x="930" y="152" text-anchor="middle">guardInput before the model</text>
+<text class="t3" x="930" y="170" text-anchor="middle">guardOutput after it</text>
+<text class="t3" x="930" y="196" text-anchor="middle">chapter 03</text>
+<path class="ln-hot" d="M390,216 V262 H930 V216" fill="none"/>
+<text class="t3" x="660" y="282" text-anchor="middle">the hooks import the runtime guard's scan() and scanChange(), so one pattern set serves both</text>
+<text class="t3" x="660" y="304" text-anchor="middle">the CLI (chapter 05) installs the hooks, the rules and the security/ files into a project</text>
+</svg>
+</div>
+<figcaption><b>Defense in depth.</b> Each layer can be bypassed on its own; SECURITY.md says so in its threat model. The value is the combination, and that every detection is visible.</figcaption>
+</figure>
+
+<h3 id="wh-ids">Rule ids</h3>
+<p>Two id spaces exist and must not be confused. Audit rules (chapter 02) keep their family ids: <code>SEC-</code>, <code>CFG-</code>, <code>ERR-</code>, <code>INJ-</code>, <code>AUTHZ-</code>, <code>VAL-</code>, <code>WEB-</code>, <code>DEP-</code> and the others listed there. The runtime scanner's patterns (chapter 03) carry a <code>GUARD-</code> prefix since 1.5.0 (<code>GUARD-INJ-001</code> to <code>GUARD-INJ-028</code>, <code>GUARD-SEC-001</code> to <code>GUARD-SEC-015</code>, <code>GUARD-INJ-UNICODE</code>, <code>GUARD-INJ-OVERSIZE</code>). Before 1.5.0 both used bare <code>INJ-</code> and <code>SEC-</code>, so <code>INJ-001</code> named two different checks. For 1.5.0 only, each runtime violation also carries its old id as <code>legacyId</code> (Python: <code>legacy_id</code>); 1.6.0 removes it. The mapping table is in <code>CHANGELOG.md</code>, 1.5.0, "Changed".</p>
+
+<h3 id="wh-state">Version and release state</h3>
+<div class="tbl dense"><table>
+<thead><tr><th>Item</th><th>State on 2026-11-10</th></tr></thead>
+<tbody>
+<tr><td>Version in <code>package.json</code></td><td>1.5.0, unreleased. No tag.</td></tr>
+<tr><td>Last pushed</td><td><code>origin/main</code> at <code>80bfaff</code>. Local <code>main</code> is 22 commits ahead and held on purpose: push and tag wait on an independent re-probe of the 1.5.0 hook fixes.</td></tr>
+<tr><td>Installed in other projects</td><td>No other project under <code>C:\dev\Projects</code> has the hook files installed. Projects use Guardian through the skill and by running the audit from this repo.</td></tr>
+<tr><td>Tests</td><td><code>npm test</code> runs six suites: injection-guard 106, init 30, hook 165, agents-md 14, audit 140, sql-guard 40. Two audit tests are known-bug tests (BUG-039, BUG-040) that fail the suite once the bug is fixed.</td></tr>
+<tr><td>CI</td><td><code>.github/workflows/security-audit.yml</code> runs on pushes to <code>main</code>, <code>master</code> and <code>develop</code> on Node 22: <code>npm test</code>, then <code>node bin/guardian.js check</code>, then <code>node security/03-audit.js . --fail-on-error</code>, then an exemption visibility step. <code>.github/</code> also holds <code>CODEOWNERS</code>, issue and PR templates and <code>secret_scanning.yml</code>.</td></tr>
+<tr><td>Bug log</td><td><code>BUGS.md</code>, index at the top. Each chapter lists the open bugs for its part.</td></tr>
+</tbody></table></div>
+
+<h3 id="wh-layout">Repo layout</h3>
+<div class="tbl dense"><table>
+<thead><tr><th>Path</th><th>What it holds</th></tr></thead>
+<tbody>
+<tr><td><code>security/</code></td><td>The four JS modules and the Python port; <code>security/.audit-allowlist</code> (this repo's own audit exemptions, chapter 06)</td></tr>
+<tr><td><code>.claude/hooks/</code>, <code>.claude/settings.json</code></td><td>The two hooks and this repo's own registration of them; the hooks guard this repo too</td></tr>
+<tr><td><code>bin/guardian.js</code></td><td>The CLI</td></tr>
+<tr><td><code>skill/</code>, <code>guides/</code></td><td>The skill and the field guides</td></tr>
+<tr><td><code>tests/</code></td><td>Six test files, plain Node, no framework</td></tr>
+<tr><td><code>docs/manual/</code></td><td>This manual: <code>chapters/*.html</code>, <code>build.mjs</code>, <code>manual.css</code>; output <code>GUARDIAN-MANUAL.html</code> and <code>site/</code></td></tr>
+<tr><td><code>README.md</code>, <code>SETUP.md</code>, <code>SECURITY.md</code>, <code>FAQ.md</code>, <code>CHANGELOG.md</code>, <code>CONTRIBUTING.md</code></td><td>User documentation</td></tr>
+<tr><td><code>BUGS.md</code>, <code>TODO.md</code>, <code>handovers/</code></td><td>The bug log, the plan backlog (the Self-Growing Gate spec and the threat-feed spec), session handovers</td></tr>
+</tbody></table></div>
+
+</section>
+
+<nav class="pager"><a href="index.html">&larr; Contents</a><a href="ch-audit.html">02 The audit engine &rarr;</a></nav>
+</main>
+<script>
+(function(){
+  var KEY='guardian-manual-theme';
+  var persistOff=function(){document.documentElement.setAttribute('data-theme-persist','off');};
+  try{var t=localStorage.getItem(KEY);if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){persistOff();}
+  document.addEventListener('click',function(e){
+    var b=e.target.closest('[data-theme-toggle]');if(!b)return;
+    var root=document.documentElement;
+    var dark=root.getAttribute('data-theme')?root.getAttribute('data-theme')==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var next=dark?'light':'dark';root.setAttribute('data-theme',next);
+    try{localStorage.setItem(KEY,next);}catch(e2){persistOff();}
+  });
+  if(!('IntersectionObserver' in window))return;
+  var links={};document.querySelectorAll('.rail a[data-ch]').forEach(function(a){links[a.getAttribute('data-ch')]=a;});
+  var secs=document.querySelectorAll('section.chapter');
+  if(secs.length<2)return;
+  var io=new IntersectionObserver(function(es){es.forEach(function(en){
+    if(!en.isIntersecting)return;var id=en.target.id;
+    Object.keys(links).forEach(function(k){links[k].classList.toggle('on',k===id);links[k].parentNode.classList.toggle('open',k===id);});
+  });},{rootMargin:'-20% 0px -70% 0px'});
+  secs.forEach(function(s){io.observe(s);});
+})();
+</script>
+</body>
+</html>
