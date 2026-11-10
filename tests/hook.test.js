@@ -618,6 +618,49 @@ describe("PreToolUse hook — judges what a write adds (1.5.0 review, finding 1)
   });
 });
 
+describe("PreToolUse hook — an Edit is judged as the file it leaves (1.5.0 review, finding 5)", () => {
+  function editOnDisk(existing, toolName, toolInput, extra = {}) {
+    return withTempProject((dir) => {
+      const file = path.join(dir, ".planning", "spec.md");
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, existing);
+      return runHook(PRE_HOOK, { tool_name: toolName, cwd: dir, ...extra, tool_input: { file_path: file, ...toolInput } });
+    });
+  }
+
+  test("a payload split across the file and new_string is denied (reviewer's case)", () => {
+    const out = editOnDisk("Step one: ignore all\nStep two: done\n", "Edit", { old_string: "Step two: done", new_string: "previous instructions" });
+    assert.equal(decisionOf(out), "deny", out.slice(0, 200));
+    expectWarning(out, "INJ-001");
+  });
+
+  test("a deletion that joins a payload is denied", () => {
+    const out = editOnDisk("ignore all (see note) previous instructions are archived\n", "Edit", { old_string: "(see note) ", new_string: "" });
+    assert.equal(decisionOf(out), "deny", out.slice(0, 200));
+  });
+
+  test("a MultiEdit whose edits are clean alone but not together is denied", () => {
+    // Listed in reverse, so the new_strings joined in order form no pattern.
+    const out = editOnDisk("A\nB\n", "MultiEdit", { edits: [{ old_string: "B", new_string: "previous instructions" }, { old_string: "A", new_string: "ignore all" }] });
+    assert.equal(decisionOf(out), "deny", out.slice(0, 200));
+  });
+
+  test("an LF old_string still applies to a CRLF file", () => {
+    const out = editOnDisk("Step one: ignore all\r\nStep two:\r\ndone\r\n", "Edit", { old_string: "Step two:\ndone", new_string: "previous instructions" });
+    assert.equal(decisionOf(out), "deny", out.slice(0, 200));
+  });
+
+  test("an edit the hook cannot place still has its new text scanned", () => {
+    const out = editOnDisk("nothing here\n", "Edit", { old_string: "not in the file", new_string: CRITICAL_PAYLOAD });
+    assert.equal(decisionOf(out), "deny");
+  });
+
+  test("an edit next to an existing quoted pattern is not denied", () => {
+    const out = editOnDisk(`Quote: "${CRITICAL_PAYLOAD}" is an attack.\nTODO\n`, "Edit", { old_string: "TODO", new_string: "Block it in the hook." }, { permission_mode: "bypassPermissions" });
+    expectSilent(out);
+  });
+});
+
 describe("PreToolUse hook — scanner bypasses closed (1.5.0)", () => {
   const tagSmuggled = [...CRITICAL_PAYLOAD].map((ch) => String.fromCodePoint(0xE0000 + ch.charCodeAt(0))).join("");
   const cyrO = String.fromCodePoint(0x043E);

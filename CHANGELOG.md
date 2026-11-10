@@ -35,6 +35,12 @@ project (each project picks it up when `guardian update` is run there).
   counts only when the change adds a matched string that was not there
   before, view by view (plain, decoded, folded). A second copy of an
   already-quoted pattern is still new.
+- **An Edit is judged as the file it leaves (review finding 5).** Only
+  `new_string` was scanned, so a payload split between the file and the
+  edit, or between two edits, or joined by deleting the text between its
+  halves, passed. Edit and MultiEdit are now applied to the file on disk
+  (line endings normalized) and the result goes through `scanChange()`.
+  An edit the hook cannot place is judged as appended text.
 - **INJ-019 / INJ-020 match template delimiters, not headings (review
   finding 1).** `### System Overview`, `### Instructions` and
   `### Prompt Injection Defense` scanned CRITICAL, and so did YAML front

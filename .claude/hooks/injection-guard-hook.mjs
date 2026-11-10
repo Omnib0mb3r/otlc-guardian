@@ -453,8 +453,10 @@ function commandName(word) {
 // TOOL INPUT EXTRACTION
 // ---------------------------------------------------------------------------
 //
-// Only content being ADDED is scanned. Before 1.5.0 the Edit branch also
-// scanned old_string, which flagged an edit for removing a bad line.
+// `content` is the text the tool supplies. For Edit and MultiEdit the
+// main handler applies it to the file on disk and judges the result, so
+// removing a bad line is never flagged and splitting a payload between
+// the file and the edit does not hide it.
 
 /**
  * @returns {{ kind: "file"|"bash", targets: string[], content: string } | null}
@@ -735,14 +737,31 @@ process.stdin.on("end", () => {
     const written = bashWrites.filter(isWatched);
     const watched = [...written, ...write.targets.filter(isWatched)];
     if (watched.length === 0) process.exit(0);
-    if (!write.content.trim()) process.exit(0);
 
-    // A Write replaces the file, so only what it adds to the text on disk
-    // is new. Bash is judged on its command text.
-    const before = toolName === "Write" ? readCurrent(resolve(watched[0])) : "";
+    // A file write is judged by what it adds to the text on disk:
+    //   Write             the new content replaces the file.
+    //   Edit, MultiEdit   the edits are applied to the file, so a payload
+    //                     split between old and new text, or joined by a
+    //                     deletion, is seen whole. An edit the hook cannot
+    //                     place is judged as appended text.
+    //   NotebookEdit      the new cell source alone (cells are JSON strings
+    //                     on disk, so a pattern cannot run across them).
+    // Bash is judged on its command text.
+    let before = "";
+    let after = write.content;
+    if (toolName === "Write") {
+      before = readCurrent(resolve(watched[0]));
+    } else if (toolName === "Edit" || toolName === "MultiEdit") {
+      before = readCurrent(resolve(watched[0])).replace(/\r\n/g, "\n");
+      const edits = toolName === "Edit" ? [toolInput] : Array.isArray(toolInput.edits) ? toolInput.edits : [];
+      const applied = applyEdits(before, edits);
+      after = [applied.text, ...applied.unmatched.map((e) => (typeof e?.new_string === "string" ? e.new_string : ""))].join("\n");
+    }
+    if (!after.trim()) process.exit(0);
+
     const { violations } = write.kind === "file"
-      ? scanChange(before, write.content, "injection")
-      : scan(write.content, "injection");
+      ? scanChange(before, after, "injection")
+      : scan(after, "injection");
     if (violations.length === 0) process.exit(0);
 
     const criticalCount = violations.filter((v) => v.severity === "CRITICAL").length;
