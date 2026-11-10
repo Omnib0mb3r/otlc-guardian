@@ -356,9 +356,8 @@ lifecycle, which no other agent exposes today. They're installed automatically b
   reasons about the content — catches indirect prompt injection at the entry point, the
   highest-leverage place to defend.
 - Configurable per project via `otlcGuardian.watchPaths` / `ignorePaths` in
-  `.claude/settings.json`. A file that already carries the `otlc-guardian:doc` marker
-  on disk is warn-only (for security specs). The marker inside content being written
-  has no effect.
+  `.claude/settings.json`. `ignorePaths` is the only exemption; the `otlc-guardian:doc`
+  marker has no effect on the hook.
 
 **Hook smoke test in `guardian check`:**
 - Pipes a known-injection payload through the `PreToolUse` hook and confirms it fires

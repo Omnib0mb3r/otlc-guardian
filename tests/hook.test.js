@@ -15,7 +15,7 @@
  *     - fires on watched paths (.planning/, .cursorrules, AGENTS.md, MEMORY.md, .env)
  *     - silent on out-of-scope paths (src/random.js)
  *     - denies CRITICAL findings, warns on HIGH/MEDIUM (1.5.0)
- *     - doc marker counts only when already on disk, and only downgrades to a warning
+ *     - only ignorePaths exempts a path; the doc marker does nothing
  *     - Bash, MultiEdit, NotebookEdit coverage; settings.json self-protection
  *     - uses the full pattern set imported from the main module
  *     - handles both Write and Edit tool calls
@@ -406,7 +406,24 @@ describe("PreToolUse hook — blocks CRITICAL, warns on the rest (1.5.0)", () =>
     assert.equal(decisionOf(out), "deny");
   });
 
-  test("marker already on disk downgrades to an advisory, never silent", () => {
+  test("two-step marker bypass: a marker-only file, then the payload, is denied (reviewer's case)", () => {
+    withTempProject((dir) => {
+      const file = path.join(dir, ".planning", "spec.md");
+      const step1 = runHook(PRE_HOOK, { tool_name: "Write", cwd: dir, tool_input: { file_path: file, content: "<!-- otlc-guardian:doc -->\n" } });
+      expectSilent(step1);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, "<!-- otlc-guardian:doc -->\n");
+      const step2 = runHook(PRE_HOOK, {
+        tool_name: "Write",
+        cwd: dir,
+        permission_mode: "bypassPermissions",
+        tool_input: { file_path: file, content: `<!-- otlc-guardian:doc -->\n${CRITICAL_PAYLOAD}\n` },
+      });
+      assert.equal(decisionOf(step2), "deny", step2.slice(0, 200));
+    });
+  });
+
+  test("a marker on disk exempts nothing, even when a person put it there", () => {
     withTempProject((dir) => {
       const file = path.join(dir, ".planning", "spec.md");
       mkdirSync(path.dirname(file), { recursive: true });
@@ -416,8 +433,20 @@ describe("PreToolUse hook — blocks CRITICAL, warns on the rest (1.5.0)", () =>
         cwd: dir,
         tool_input: { file_path: file, old_string: "# Injection notes", new_string: CRITICAL_PAYLOAD },
       });
-      assert.equal(decisionOf(out), null);
-      expectWarning(out, "INJ-001", "documentation marker");
+      assert.equal(decisionOf(out), "deny");
+    });
+  });
+
+  test("ignorePaths is the exemption: a listed path is not scanned", () => {
+    withTempProject((dir) => {
+      mkdirSync(path.join(dir, ".claude"), { recursive: true });
+      writeFileSync(path.join(dir, ".claude", "settings.json"), JSON.stringify({ otlcGuardian: { ignorePaths: [".planning/specs/injection-defense.md"] } }));
+      const out = runHook(PRE_HOOK, {
+        tool_name: "Write",
+        cwd: dir,
+        tool_input: { file_path: path.join(dir, ".planning", "specs", "injection-defense.md"), content: CRITICAL_PAYLOAD },
+      });
+      expectSilent(out);
     });
   });
 

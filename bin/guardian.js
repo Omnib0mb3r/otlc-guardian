@@ -351,8 +351,8 @@ function runListWatched() {
   }
 
   log("");
-  log(`${c.bold}Documentation marker${c.reset}: files that already contain ${c.cyan}otlc-guardian:doc${c.reset} on disk are warn-only, never blocked`);
-  log(`${c.dim}The marker inside content being written has no effect. Create the file with the marker first, or use ignorePaths.${c.reset}`);
+  log(`${c.bold}Exemptions${c.reset}: only ${c.cyan}otlcGuardian.ignorePaths${c.reset} in .claude/settings.json. The hook asks before an agent adds one.`);
+  log(`${c.dim}The otlc-guardian:doc marker has no effect on the hook, in the content or on disk.${c.reset}`);
   log("");
 }
 

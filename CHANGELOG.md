@@ -44,8 +44,12 @@ project (each project picks it up when `guardian update` is run there).
 - **A payload can no longer exempt itself (BUG-021).** The
   `otlc-guardian:doc` marker inside the content being written used to skip
   the scan, and the warning text told the model about the marker. The
-  marker now counts only when it is already in the file on disk, and it
-  only downgrades a block to a warning. It never silences a finding.
+  hook no longer reads the marker at all. The first 1.5.0 build still
+  honored a marker already on disk, which the review (finding 3) showed
+  could be bypassed in two steps: write a marker-only file, then the
+  payload. The only exemption is now `otlcGuardian.ignorePaths`, which
+  the settings self-protection guards. The audit's own markers are
+  unchanged.
 - **INJ-027 / INJ-028 were cubic (BUG-023).** 44 KB of `<!--ignore `
   took 16 s and 99 KB ran past a minute, which stalled both hooks. Both
   rules now use a linear comment walker. SEC-011 had a quadratic case and

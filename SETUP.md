@@ -335,29 +335,26 @@ Both hooks honor an `otlcGuardian` config block in `.claude/settings.json`:
 
 ### Hook exemptions
 
+Most documentation needs no exemption. The hook judges a write by what
+it adds compared with the file on disk, so editing a security spec that
+already quotes attack phrases is not blocked. Adding a new quoted
+CRITICAL phrase is.
+
 If you keep prompt-injection documentation in a watched directory (e.g.
-a security spec in `.planning/specs/injection-defense.md`), there are
-two ways to stop the hook from blocking it. Both are steps a person
-takes; neither can be triggered by the content of a write.
+a security spec in `.planning/specs/injection-defense.md`) and need to
+add examples to it, list the path under `otlcGuardian.ignorePaths` in
+`.claude/settings.json`:
 
-1. **Marker on disk.** Put `otlc-guardian:doc` in the first 4 KB of the
-   file yourself (create the file with only the marker, then let the
-   agent edit it). Findings in that file are then reported as warnings
-   and are not blocked. They are never silenced.
-2. **`ignorePaths`.** List the path under `otlcGuardian.ignorePaths` in
-   `.claude/settings.json`. The hook asks for confirmation when an agent
-   tries to add an entry there.
-
-The marker inside the content being written does nothing. Before 1.5.0
-it exempted the write, which meant any payload could exempt itself.
-
-```markdown
-<!-- otlc-guardian:doc -->
-# Injection Defense Spec
-
-This document discusses "ignore all previous instructions" as a
-known attack vector...
+```json
+{ "otlcGuardian": { "ignorePaths": [".planning/specs/injection-defense.md"] } }
 ```
+
+That is the only exemption, and it is a step a person takes: the hook
+asks for confirmation when an agent tries to add an entry. The
+`otlc-guardian:doc` marker no longer affects the hook. Before 1.5.0 the
+marker inside a write exempted it, so any payload could exempt itself;
+the first 1.5.0 build honored a marker already on disk, which an agent
+could plant with one write and use with the next.
 
 ### Verifying the hooks work
 
