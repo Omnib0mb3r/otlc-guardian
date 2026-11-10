@@ -31,6 +31,8 @@ import { fileURLToPath } from "url";
 // AGT-002 judges instruction files with the runtime scanner itself, so
 // the audit and the hooks never disagree on what a pattern is.
 import { scan as scanForInjection } from "./01-injection-guard.js";
+// AGT-003 reads Claude Code settings with the same code as `guardian check`.
+import { REQUIRED_HOOK_REGISTRATIONS, missingRegistrations, loadSettingsText } from "./claude-settings.js";
 
 // ---------------------------------------------------------------------------
 // TEST FILE RECOGNITION
@@ -804,11 +806,77 @@ function ignoredByGuardian(file, projectRoot) {
   });
 }
 
+// AGT-003: the Claude Code settings a project commits, judged as Claude
+// Code loads them (security/claude-settings.js, shared with guardian
+// check). settings.local.json is per person and Claude Code's own setup
+// gitignores it, so it is judged only when git does not keep it out
+// (keptOutOfGit()); a registration that lives only there is not the
+// project's. Every .claude folder among the scanned files is judged on
+// its own, as Claude Code started in that folder would load it.
+const CLAUDE_SETTINGS_NAMES = ["settings.json", "settings.local.json"];
+const CLAUDE_DIR_FILE = /^(.*[\\/]\.claude)[\\/](?:settings(?:\.local)?\.json|hooks[\\/](?:injection-guard-hook|web-content-guard)\.mjs)$/i;
+
+/** The line a settings problem points at: the line of the first key it quotes, else 1. */
+function settingsLine(text, problem) {
+  const key = /"([^".[\]]+)/.exec(problem)?.[1];
+  const at = key ? text.split("\n").findIndex((line) => line.includes(`"${key}"`)) : -1;
+  return at + 1 || 1;
+}
+
+function committedSettingsProblems(files, projectRoot) {
+  const scanned = new Set(files);
+  const dirs = new Set();
+  for (const f of files) {
+    const m = CLAUDE_DIR_FILE.exec(f);
+    if (m) dirs.add(m[1]);
+  }
+  const findings = [];
+  for (const dir of dirs) {
+    const layers = [];
+    const read = [];
+    for (const name of CLAUDE_SETTINGS_NAMES) {
+      const file = path.join(dir, name);
+      if (!scanned.has(file)) continue;
+      if (name === "settings.local.json" && keptOutOfGit(file)) continue;
+      let text;
+      try {
+        text = fs.readFileSync(file, "utf8");
+      } catch (err) {
+        console.warn(`⚠️  [OTLC GUARDIAN] AGT-003 could not read ${path.relative(projectRoot, file).replace(/\\/g, "/")}: ${err.message}`);
+        continue;
+      }
+      read.push({ file, text });
+      const label = path.relative(projectRoot, file).replace(/\\/g, "/");
+      const { settings, problems } = loadSettingsText(text, label);
+      for (const p of problems) findings.push({ file, line: settingsLine(text, p), content: p });
+      if (!settings) continue;
+      if (settings.disableAllHooks === true) {
+        findings.push({ file, line: settingsLine(text, '"disableAllHooks"'), content: `${label}: disableAllHooks is true, so no hook runs, Guardian's included` });
+      }
+      layers.push(settings);
+    }
+    // Guardian is installed where its hook files are; each one needs its
+    // registration in the settings that load.
+    const installed = REQUIRED_HOOK_REGISTRATIONS.filter((req) => fs.existsSync(path.join(dir, "hooks", req.file)));
+    if (installed.length === 0) continue;
+    const where = read.find((r) => r.file.endsWith("settings.json") && !r.file.endsWith("local.json")) ?? read[0];
+    for (const p of missingRegistrations(layers, installed)) {
+      findings.push({
+        file: where?.file ?? path.join(dir, "hooks", installed[0].file),
+        line: where ? settingsLine(where.text, '"hooks"') : null,
+        content: `Guardian is installed but ${p} in the committed settings`,
+      });
+    }
+  }
+  return findings;
+}
+
 // ---------------------------------------------------------------------------
 // AUDIT RULES
 // Each rule is one of three kinds:
 //   { id, category, severity, description, pattern, fileTypes }      regex
 //   { id, ..., checkFn(files, projectRoot) -> boolean }              project
+//       or -> [{ file, line, content }]: one finding per entry (AGT-003).
 //       evidence: "project" when the check proves an absence across the
 //       project; it then sees the project root's files on a partial scan.
 //   { id, ..., fileCheckFn(content, filePath) -> [{line, content}] } per-file
@@ -1922,6 +1990,13 @@ const AUDIT_RULES = [
     honorsIgnorePaths: true,
     fileCheckFn: checkInstructionInjection,
   },
+  {
+    id: "AGT-003", category: "AI Agent", severity: "HIGH",
+    description: "Committed Claude Code settings switch hooks off: disableAllHooks, a file Claude Code will not load, or Guardian installed without its registration",
+    pattern: null,
+    fileTypes: [],
+    checkFn: committedSettingsProblems,
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -2577,7 +2652,11 @@ function runAudit(targetDir, options = {}) {
       : projectRoot !== scanRoot
         ? (projectFiles ??= collectFiles(projectRoot, allExtensions))
         : files.filter((f) => !collectedByPath(f));
-    if (rule.checkFn(evidence, projectRoot)) {
+    const result = rule.checkFn(evidence, projectRoot);
+    if (Array.isArray(result)) {
+      // A check that can name the file and line reports each finding.
+      for (const hit of result) allFindings.push({ file: hit.file, line: hit.line ?? null, content: hit.content ?? null, rule });
+    } else if (result) {
       allFindings.push({ file: wholeProject ? projectRoot : targetDir, line: null, content: null, rule });
     }
   }

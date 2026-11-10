@@ -159,6 +159,15 @@ project (each project picks it up when `guardian update` is run there).
   `otlcGuardian.ignorePaths` (listed on every run). A rule can now name its
   files by path (`includePatterns`); such files are never evidence for a
   project check. 46 rules: 37 pattern, 6 analyzer, 3 project.
+- **Audit rule AGT-003: committed Claude Code settings switch hooks off
+  (BUG-002).** HIGH. Reports, in each `.claude/` folder, a settings file
+  Claude Code will not load (not JSON, or a known key of the wrong type),
+  `disableAllHooks: true`, and Guardian's hook files installed with no
+  registration in the committed settings. `settings.local.json` counts only
+  when git does not keep it out. It reads settings with `guardian check`'s
+  code, now in `security/claude-settings.js` (installed with `security/`,
+  required by `check`). A project check may now report findings with a file
+  and line. 47 rules: 37 pattern, 6 analyzer, 4 project.
 - **staging/ for the protected files (Guardian's own repo).** The candidate
   next versions of the two hooks and the scanner live in `staging/hooks/`
   and `staging/security/`, outside every path the live hook watches or

@@ -3244,6 +3244,85 @@ describe("BUG-002: AGT-002, an instruction file carries a prompt-injection patte
 });
 
 // ---------------------------------------------------------------------------
+// BUG-002, AGT-003: committed Claude Code settings switch Guardian's hooks off
+// ---------------------------------------------------------------------------
+
+const GUARDIAN_SETTINGS = {
+  hooks: {
+    PreToolUse: [{ matcher: "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell",
+      hooks: [{ type: "command", command: 'node "${CLAUDE_PROJECT_DIR}/.claude/hooks/injection-guard-hook.mjs"' }] }],
+    PostToolUse: [{ matcher: "^(?:WebFetch|WebSearch|mcp__(?:firecrawl|exa)__.*)$",
+      hooks: [{ type: "command", command: 'node "${CLAUDE_PROJECT_DIR}/.claude/hooks/web-content-guard.mjs"' }] }],
+  },
+};
+const GUARDIAN_HOOK_FILES = {
+  ".claude/hooks/injection-guard-hook.mjs": "export {};\n",
+  ".claude/hooks/web-content-guard.mjs": "export {};\n",
+};
+const json = (value) => JSON.stringify(value, null, 2);
+
+describe("BUG-002: AGT-003, committed settings switch Guardian's hooks off", () => {
+  const firing = [
+    ["disableAllHooks: true in settings.json, Guardian or not", { ".claude/settings.json": json({ model: "opus", disableAllHooks: true }) }, ".claude/settings.json", 3, /disableAllHooks/],
+    ["a value Claude Code rejects (disableAllHooks as a string)", { ".claude/settings.json": json({ disableAllHooks: "true" }) }, ".claude/settings.json", 2, /"disableAllHooks" is a string/],
+    ["settings.json that is not valid JSON", { ".claude/settings.json": "{ \"hooks\": " }, ".claude/settings.json", 1, /not valid JSON/],
+    ["disableAllHooks in a settings.local.json git does not keep out", { ".claude/settings.json": json(GUARDIAN_SETTINGS), ...GUARDIAN_HOOK_FILES, ".claude/settings.local.json": json({ disableAllHooks: true }) }, ".claude/settings.local.json", 2, /disableAllHooks/],
+    ["Guardian installed, its PreToolUse entry missing", { ".claude/settings.json": json({ hooks: { PostToolUse: GUARDIAN_SETTINGS.hooks.PostToolUse } }), ...GUARDIAN_HOOK_FILES }, ".claude/settings.json", null, /injection-guard-hook\.mjs is not registered under PreToolUse/],
+    ["Guardian installed, its matcher no longer covering Write", { ".claude/settings.json": json({ hooks: { ...GUARDIAN_SETTINGS.hooks, PreToolUse: [{ ...GUARDIAN_SETTINGS.hooks.PreToolUse[0], matcher: "Bash" }] } }), ...GUARDIAN_HOOK_FILES }, ".claude/settings.json", null, /injection-guard-hook\.mjs is not registered/],
+    ["Guardian installed with no settings file at all", { ...GUARDIAN_HOOK_FILES }, ".claude/hooks/injection-guard-hook.mjs", null, /not registered under PreToolUse/],
+    ["Guardian's timeout as a string (the file does not load)", { ".claude/settings.json": json({ hooks: { ...GUARDIAN_SETTINGS.hooks, PreToolUse: [{ ...GUARDIAN_SETTINGS.hooks.PreToolUse[0], hooks: [{ ...GUARDIAN_SETTINGS.hooks.PreToolUse[0].hooks[0], timeout: "1" }] }] } }), ...GUARDIAN_HOOK_FILES }, ".claude/settings.json", null, /"hooks\.PreToolUse\[0\]\.hooks\[0\]\.timeout" is a string/],
+  ];
+  for (const [name, files, where, line, message] of firing) {
+    test(`fires: ${name}`, () => {
+      const hits = agtFindings(files, "AGT-003");
+      const hit = hits.find((h) => message.test(h.content ?? ""));
+      assert.ok(hit, JSON.stringify(hits));
+      assert.ok(hit.file.replace(/\\/g, "/").endsWith(where), `${hit.file} must be ${where}`);
+      if (line !== null) assert.equal(hit.line, line);
+    });
+  }
+
+  for (const [name, files] of [
+    ["Guardian installed and registered", { ".claude/settings.json": json(GUARDIAN_SETTINGS), ...GUARDIAN_HOOK_FILES }],
+    ["settings of a project without Guardian", { ".claude/settings.json": json({ model: "opus", permissions: { allow: ["Bash(npm test)"] } }) }],
+    ["disableAllHooks: false", { ".claude/settings.json": json({ ...GUARDIAN_SETTINGS, disableAllHooks: false }), ...GUARDIAN_HOOK_FILES }],
+    ["a per-rule allowlist entry", { ".claude/settings.json": json({ disableAllHooks: true }), "security/.audit-allowlist": ".claude/settings.json  [AGT-003]  # reason: hooks are off on purpose in this sandbox\n" }],
+  ]) {
+    test(`silent: ${name}`, () => {
+      assert.deepEqual(agtFindings(files, "AGT-003"), []);
+    });
+  }
+
+  // settings.local.json is per person; Claude Code's own setup gitignores
+  // it. What git keeps out is not the project's committed state.
+  const inGitRepo = (files) => {
+    const dir = makeProject(files);
+    spawnSync("git", ["init", "-q"], { cwd: dir });
+    spawnSync("git", ["add", "-A"], { cwd: dir });
+    return dir;
+  };
+  test("silent on disableAllHooks in a settings.local.json git ignores and does not track", () => {
+    const dir = inGitRepo({ ".gitignore": ".claude/settings.local.json\n", ".claude/settings.json": json(GUARDIAN_SETTINGS), ...GUARDIAN_HOOK_FILES });
+    try {
+      writeFileSync(path.join(dir, ".claude", "settings.local.json"), json({ disableAllHooks: true }));
+      assert.deepEqual(runAuditOn(dir).findings.filter((f) => f.rule?.id === "AGT-003"), []);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  test("fires when Guardian's only registration is in a settings.local.json git keeps out", () => {
+    const dir = inGitRepo({ ".gitignore": ".claude/settings.local.json\n", ".claude/settings.json": json({ model: "opus" }), ...GUARDIAN_HOOK_FILES });
+    try {
+      writeFileSync(path.join(dir, ".claude", "settings.local.json"), json(GUARDIAN_SETTINGS));
+      const hits = runAuditOn(dir).findings.filter((f) => f.rule?.id === "AGT-003");
+      assert.ok(hits.some((h) => /injection-guard-hook\.mjs is not registered/.test(h.content)), JSON.stringify(hits));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

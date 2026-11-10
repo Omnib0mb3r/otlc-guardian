@@ -1137,18 +1137,20 @@ describe("BUG-073: guardian check reads settings value types the way Claude Code
   // The hook asks before a change leaves a wrong type (re-probe 3, D2) and
   // check reports one already there; both must read the same tables. The
   // tables are compared as source text, from SETTINGS_KEY_TYPES up to
-  // TYPE_WORDS. The staged hook is the source: after the apply it equals
-  // the live one.
+  // TYPE_WORDS, "export " aside. check (and audit rule AGT-003) read them
+  // from security/claude-settings.js. The staged hook is the source: after
+  // the apply it equals the live one.
   test("check's settings type tables are the hook's", () => {
     const tables = (file) => {
       const source = readFileSync(file, "utf8").replace(/\r\n/g, "\n");
       const from = source.indexOf("const SETTINGS_KEY_TYPES");
       const to = source.indexOf("const TYPE_WORDS");
       assert.ok(from !== -1 && to > from, `no type tables in ${file}`);
-      return source.slice(from, to);
+      return source.slice(from, to).replace(/^export /gm, "");
     };
-    const hook = tables(path.join(path.dirname(GUARDIAN_CLI), "..", "staging", "hooks", "injection-guard-hook.mjs"));
-    assert.equal(tables(GUARDIAN_CLI), hook);
+    const repo = path.join(path.dirname(GUARDIAN_CLI), "..");
+    const hook = tables(path.join(repo, "staging", "hooks", "injection-guard-hook.mjs"));
+    assert.equal(tables(path.join(repo, "security", "claude-settings.js")), hook);
     assert.ok(hook.includes("disableAllHooks") && hook.includes("HOOK_FIELD_TYPES"));
   });
 
@@ -1161,6 +1163,35 @@ describe("BUG-073: guardian check reads settings value types the way Claude Code
       });
       const r = runCheck(dir);
       assert.equal(r.status, 0, (r.stdout + r.stderr).slice(-400));
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-002: the installed audit runs, and a fresh install passes its own rules
+// ---------------------------------------------------------------------------
+//
+// The audit imports security/01-injection-guard.js (AGT-002) and
+// security/claude-settings.js (AGT-003). init installs security/ whole;
+// check names both modules, so a project missing one is told.
+
+describe("BUG-002: a fresh init's audit runs and reports no AGT finding", () => {
+  test("node security/03-audit.js in the project emits a report with no AGT-002 or AGT-003 finding", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      const r = spawnSync("node", [path.join(dir, "security", "03-audit.js"), dir, "--json"], { encoding: "utf8", timeout: 60_000 });
+      const report = JSON.parse(r.stdout);
+      assert.deepEqual(report.findings.filter((f) => /^AGT-/.test(f.rule?.id)).map((f) => `${f.rule.id} ${f.content}`), []);
+    });
+  });
+
+  test("check fails when security/claude-settings.js is missing", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      rmSync(path.join(dir, "security", "claude-settings.js"));
+      const r = runCheck(dir);
+      assert.equal(r.status, 1);
+      assert.match(r.stdout + r.stderr, /security\/claude-settings\.js/);
     });
   });
 });

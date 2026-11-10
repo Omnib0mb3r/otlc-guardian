@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The audit engine | OTLC Guardian Manual</title>
-<meta name="description" content="security/03-audit.js: a static scan of a project's source against 46 rules, run by people, agents and CI before code is committed or shipped.">
+<meta name="description" content="security/03-audit.js: a static scan of a project's source against 47 rules, run by people, agents and CI before code is committed or shipped.">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Inter+Tight:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="manual.css">
 </head>
@@ -16,8 +16,8 @@
 <div class="foot">7 chapters<br>Built 2026-11-10<br>From the code, not the brochure.</div>
 </nav>
 <main class="page">
-<section class="chapter" id="ch-audit" data-num="02" data-title="The audit engine" data-blurb="security/03-audit.js: a static scan of a project's source against 46 rules, run by people, agents and CI before code is committed or shipped.">
-<header class="chapter-head"><div class="num">02</div><div><h2>The audit engine</h2><p>security/03-audit.js: a static scan of a project's source against 46 rules, run by people, agents and CI before code is committed or shipped.</p></div></header>
+<section class="chapter" id="ch-audit" data-num="02" data-title="The audit engine" data-blurb="security/03-audit.js: a static scan of a project's source against 47 rules, run by people, agents and CI before code is committed or shipped.">
+<header class="chapter-head"><div class="num">02</div><div><h2>The audit engine</h2><p>security/03-audit.js: a static scan of a project's source against 47 rules, run by people, agents and CI before code is committed or shipped.</p></div></header>
 
 <h3 id="au-what">What the audit is and is not</h3>
 <p><code>security/03-audit.js</code> is a standalone Node script (ESM, no dependencies beyond <code>fs</code> and <code>path</code>). It walks a directory, reads source files as text and reports places where the code matches a known bad shape: a hardcoded key, a silent <code>catch</code>, SQL built by concatenation, a route handler that writes to the database without checking who is calling, and so on. It is a review and CI tool. It runs once, prints a report, and exits.</p>
@@ -136,7 +136,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <p>This is <code>node security/03-audit.js .</code> run from the Guardian repo root on 2026-11-10 (HEAD <code>0fa32ce</code>, with this manual's untracked <code>docs/manual/</code> present). The engine prints a long dash (U+2014) after "AUDIT COMPLETE" and inside many rule descriptions; the manual build rejects that character, so it is shown here as a hyphen. Nothing else is changed.</p>
 <pre><code>🔍 [OTLC GUARDIAN] SAFETY AUDIT STARTING
     Target  : C:\dev\Projects\otlc-guardian
-    Rules   : 37 pattern · 6 analyzer · 3 project
+    Rules   : 37 pattern · 6 analyzer · 4 project
     Files   : 21 scanned
     Exempt  : 7 (0 marker, 7 allowlist)
     [allowlist] bin/guardian.js, security/02-code-security.js, security/03-audit.js, security/04-sql-guard.js, tests/audit.test.js, tests/injection-guard.test.js, tests/sql-guard.test.js
@@ -159,7 +159,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <pre><code>🔍 [OTLC GUARDIAN] SAFETY AUDIT STARTING
     Target  : C:\dev\Projects\otlc-guardian\security
     Project : C:\dev\Projects\otlc-guardian
-    Rules   : 37 pattern · 6 analyzer · 3 project
+    Rules   : 37 pattern · 6 analyzer · 4 project
     Files   : 5 scanned
     Exempt  : 3 (0 marker, 3 allowlist)
     [allowlist] 02-code-security.js, 03-audit.js, 04-sql-guard.js
@@ -251,7 +251,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <div class="tbl"><table><thead><tr><th>Kind</th><th>Field</th><th>Runs as</th><th>Output</th></tr></thead><tbody>
 <tr><td>pattern (37)</td><td><code>pattern: RegExp</code></td><td><code>scanFile(file, rule, scanContext)</code> on every non-exempt file whose extension is in <code>fileTypes</code>. Default is line by line with <code>pattern.test(line)</code>; a line that also matches any <code>excludeLinePatterns</code> entry is dropped. With <code>wholeFile: true</code> the regex is cloned with the <code>g</code> flag and run over the whole content, and the line number comes from the match offset; <code>excludeLinePatterns</code> is not consulted in that mode.</td><td>One finding per matching line, or per match.</td></tr>
 <tr><td>analyzer (6)</td><td><code>fileCheckFn(content, filePath)</code></td><td>Called once per non-exempt, non-excluded file the rule applies to (<code>appliesTo()</code>: matching extension, or a path its <code>includePatterns</code> names). It returns <code>[{ line, content }]</code>. A throw is caught, reported with <code>console.warn("... &lt;id&gt; analyzer failed on &lt;file&gt;: &lt;message&gt;")</code>, and the audit continues with the next file.</td><td>One finding per flagged handler or pattern.</td></tr>
-<tr><td>project (3)</td><td><code>checkFn(files, projectRoot)</code></td><td>Called once per run. <code>files</code> is the scanned list, or the project root's list for <code>evidence: "project"</code> rules on a partial scan. Returns a boolean.</td><td>At most one finding, <code>line</code> and <code>content</code> null.</td></tr>
+<tr><td>project (4)</td><td><code>checkFn(files, projectRoot)</code></td><td>Called once per run. <code>files</code> is the scanned list, or the project root's list for <code>evidence: "project"</code> rules on a partial scan. Returns a boolean, or an array of <code>{ file, line, content }</code> when the check can name what it found (AGT-003).</td><td>For a boolean, at most one finding, <code>line</code> and <code>content</code> null; for an array, one finding per entry.</td></tr>
 </tbody></table></div>
 <p>The analyzer kind exists because missing authentication and IDOR are absences inside a block ("nowhere in this handler is there an auth check"), and a regular expression cannot express that across arbitrarily nested braces. The source comment above <code>findRouteHandlers()</code> records the reasoning: a regex approximation would fire on unrelated files, and a security tool that cries wolf gets switched off.</p>
 <p>Exemptions and project checks (BUG-059): an absence check (<code>evidence: "project"</code>, DEP-001 and WEB-002) reads exempt files too, so an exempt file can still provide the "health" evidence for DEP-001 or a CSP for WEB-002; a presence check (DEP-002) leaves exempt files out. Neither reads a file collected by path (an instruction file).</p>
@@ -281,7 +281,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <p>Both are HIGH, not CRITICAL, by design. The source states the limits: auth applied in another file (<code>include_router(..., dependencies=...)</code>, middleware) is invisible; Django class-based views and URLconf routing are not recognized; and the rule finds a handler that never mentions an owner or tenant, it does not prove that a tenant check that is present is correct. <code>guides/tenant-isolation-tests.md</code> covers what a scanner cannot.</p>
 
 <h3 id="au-rules">Rule reference</h3>
-<p>46 rules, in <code>AUDIT_RULES</code> order within each family. The live count line prints <code>Rules : 37 pattern · 6 analyzer · 3 project</code>, and counting the array by hand gives the same: 37 + 6 + 3 = 46. Extension sets: <b>JS</b> = <code>.js .ts .jsx .tsx .mjs .cjs .mts .cts</code>; <b>JS+PY</b> adds <code>.py</code>; <b>SECRET</b> adds <code>.env .json .yaml .yml</code> to JS+PY; <b>TS</b> = <code>.ts .tsx .mts .cts</code>. "Tests out" means the rule applies <code>TEST_FILE_EXCLUDES</code>; "whole" means <code>wholeFile: true</code>.</p>
+<p>47 rules, in <code>AUDIT_RULES</code> order within each family. The live count line prints <code>Rules : 37 pattern · 6 analyzer · 4 project</code>, and counting the array by hand gives the same: 37 + 6 + 4 = 47. Extension sets: <b>JS</b> = <code>.js .ts .jsx .tsx .mjs .cjs .mts .cts</code>; <b>JS+PY</b> adds <code>.py</code>; <b>SECRET</b> adds <code>.env .json .yaml .yml</code> to JS+PY; <b>TS</b> = <code>.ts .tsx .mts .cts</code>. "Tests out" means the rule applies <code>TEST_FILE_EXCLUDES</code>; "whole" means <code>wholeFile: true</code>.</p>
 
 <h4>SEC: secrets (9)</h4>
 <div class="tbl dense"><table><thead><tr><th>Id</th><th>Kind</th><th>Severity</th><th>Files</th><th>Detects</th></tr></thead><tbody>
@@ -373,14 +373,15 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <tr><td>REP-005</td><td>pattern</td><td>MEDIUM</td><td>JS</td><td>A <code>data:...;base64,</code> URI with 4,000 or more base64 characters.</td></tr>
 </tbody></table></div>
 
-<h4>AGT: AI agents (1), new in 1.5.0</h4>
+<h4>AGT: AI agents (2), new in 1.5.0</h4>
 <p>Added for BUG-002: the runtime guard and the hooks defend what an agent reads while it runs; these rules read what a project commits for its agents. The audit imports the runtime scanner (<code>scan()</code> from <code>security/01-injection-guard.js</code>) rather than copying its patterns, so the audit and the hooks agree on what a pattern is.</p>
 <div class="tbl dense"><table><thead><tr><th>Id</th><th>Kind</th><th>Severity</th><th>Files</th><th>Detects</th></tr></thead><tbody>
 <tr><td>AGT-002</td><td>analyzer</td><td>CRITICAL</td><td>By path (<code>INSTRUCTION_FILES</code>, any case): <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>GEMINI.md</code> in any folder, <code>.md</code> files under <code>.claude/agents/</code> and <code>.claude/commands/</code>, any <code>SKILL.md</code></td><td>A CRITICAL injection finding of <code>scan(content, "injection")</code> (<code>checkInstructionInjection()</code>): the patterns the PreToolUse hook denies, in every view the scanner reads (decoded, folded, invisible characters removed). One finding per scanner id, on the first line that carries it alone, else the line holding the matched text, else line 1; the content names the scanner id and the matched text. HIGH and MEDIUM scanner findings are not reported: "you are now a" and "act as a" are what a subagent definition is made of. A quoted pattern counts (Lex decision, BUG-043): an instruction file is read as instructions. Honors <code>otlcGuardian.ignorePaths</code> as well as the allowlist and the marker (<a href="ch-suppression.html#ch-suppression">chapter 06</a>).</td></tr>
+<tr><td>AGT-003</td><td>project</td><td>HIGH</td><td>Every <code>.claude/</code> folder among the scanned files: <code>settings.json</code>, and <code>settings.local.json</code> unless git keeps it out (<code>keptOutOfGit()</code>)</td><td>Committed Claude Code settings that switch hooks off (<code>committedSettingsProblems()</code>), read with <code>guardian check</code>'s code in <code>security/claude-settings.js</code>: a file that is not JSON or not an object, a known key with a value of the wrong type (Claude Code then loads nothing from the file, hooks included), <code>disableAllHooks: true</code> (Guardian installed or not), and, where Guardian's hook files sit in <code>.claude/hooks/</code>, each installed hook with no registration in the settings that load (<code>missingRegistrations()</code>, matchers read as Claude Code reads them). A registration only in a gitignored <code>settings.local.json</code> is one person's, not the project's, so it does not count. One finding per problem, on the line of the key it names; a missing registration points at <code>settings.json</code>, or at the hook file when there is none. A presence check: exemptions apply, and a partial scan that holds no <code>.claude/</code> folder judges none.</td></tr>
 </tbody></table></div>
 
 <h3 id="au-severity">Severity, summary and exit code</h3>
-<p>There are four levels, set per rule and never changed at run time: 19 rules are CRITICAL, 17 HIGH, 8 MEDIUM and 2 LOW. Severity does three things:</p>
+<p>There are four levels, set per rule and never changed at run time: 19 rules are CRITICAL, 18 HIGH, 8 MEDIUM and 2 LOW. Severity does three things:</p>
 <ul>
 <li>It orders the human report (CRITICAL first) and sets the icon of each block.</li>
 <li>It builds the summary line under "AUDIT COMPLETE", for example <code>0 CRITICAL · 2 HIGH · 1 MEDIUM · 0 LOW</code>.</li>
@@ -392,13 +393,13 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <p>A file can be left out of every rule kind by an <code>otlc-guardian:audit-exempt</code> marker comment line in its first 4 KB, or by a line in <code>security/.audit-allowlist</code> at the project root with a mandatory <code># reason:</code>; every run prints both lists. The full rules, the allowlist format and its rejection warnings are in <a href="ch-suppression.html#ch-suppression">chapter 06</a>.</p>
 
 <h3 id="au-verified">What the tests verify</h3>
-<p><code>tests/audit.test.js</code> (run by <code>npm test</code> and <code>npm run test:audit</code>) builds a temporary directory per case, runs the engine on it as a subprocess with <code>--json</code>, and asserts on <code>findings[].rule.id</code>. Run on 2026-11-10 after AGT-002: <code>Passed : 326</code>, <code>Failed : 0</code>, <code>Known : 0</code>. Every rule id appears in at least one test. Since 2026-11-10 a table-driven block gives each rule that had no test one sample it must flag and one it must leave alone. Other blocks cover dependency-directory skipping, the test-file conventions, the CFG-003 bind distinction, the DEP-001 server gate, scan root versus project root, INJ-005b precision both ways, analyzer robustness on malformed files, and the BUG-041 partial-scan cases.</p>
+<p><code>tests/audit.test.js</code> (run by <code>npm test</code> and <code>npm run test:audit</code>) builds a temporary directory per case, runs the engine on it as a subprocess with <code>--json</code>, and asserts on <code>findings[].rule.id</code>. Run on 2026-11-10 after AGT-003: <code>Passed : 340</code>, <code>Failed : 0</code>, <code>Known : 0</code>. Every rule id appears in at least one test. Since 2026-11-10 a table-driven block gives each rule that had no test one sample it must flag and one it must leave alone. Other blocks cover dependency-directory skipping, the test-file conventions, the CFG-003 bind distinction, the DEP-001 server gate, scan root versus project root, INJ-005b precision both ways, analyzer robustness on malformed files, and the BUG-041 partial-scan cases.</p>
 <p><code>knownBug(bugId, name, fn)</code> runs a test that reproduces an open bug. While the assertion fails it prints <code>(known: BUG-NNN)</code> and counts toward "Known"; the moment it passes, the suite fails with "passes now: BUG-NNN looks fixed. Move this to test() and update BUGS.md." The assertion is never loosened. The two known-bug tests today are DEP-002 on a bare <code>.env</code> (BUG-039) and INJ-001 on <code>retrieval(</code> (BUG-040).</p>
 
 <h3 id="au-bugs">Known open bugs</h3>
 <div class="limit"><b>Open on 2026-11-10</b><p>From the <code>BUGS.md</code> index, the open bugs that name an audit rule or the audit engine:</p>
 <ul>
-<li><b>BUG-002</b> (IN-PROGRESS): AGT-002 (instruction files) is in; the committed-settings rule and the agent configuration rule (planned <code>AGT-001</code>) are next.</li>
+<li><b>BUG-002</b> (IN-PROGRESS): AGT-002 (instruction files) and AGT-003 (committed settings) are in; the agent configuration rule (planned <code>AGT-001</code>) is next.</li>
 <li><b>BUG-003</b>: <code>INJ-003</code> fires HIGH on stock shadcn <code>chart.jsx</code>, which every shadcn project inherits.</li>
 </ul>
 <p>Deferred, not open: BUG-005 (race-condition rule, planned <code>RACE-001</code>), BUG-006 (inconsistent <code>npm:</code> import versions, planned <code>DEP-003</code>), BUG-007 (file-size rule, planned <code>QUAL-001</code>).</p></div>
