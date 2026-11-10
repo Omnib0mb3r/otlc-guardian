@@ -561,6 +561,13 @@ function runCheck() {
       required: true,
     },
     {
+      // Pins security/*.js to ES modules. Without it, a "type": "commonjs"
+      // project cannot load the scanner and the hook fails open (BUG-063).
+      label: "security/package.json (ES module pin for the scanner)",
+      path: path.join(CWD, "security", "package.json"),
+      required: true,
+    },
+    {
       label: "security/02-code-security.js",
       path: path.join(CWD, "security", "02-code-security.js"),
       required: true,
@@ -1149,6 +1156,26 @@ function refreshOwnedDir(srcDir, destDir, label, skip = new Set()) {
   return totals;
 }
 
+/**
+ * security/package.json pins the folder's .js files to ES modules (BUG-063).
+ * init never overwrites, so a project that already had a security/package.json
+ * keeps it; when that file does not say "type": "module" the hook cannot load
+ * the scanner in a CommonJS project. Say so loudly instead of failing open later.
+ */
+function warnIfScannerNotEsm(pkgPath) {
+  let type;
+  try {
+    type = JSON.parse(readFileSync(pkgPath, "utf8")).type;
+  } catch (err) {
+    warn(`security/package.json could not be read (${err?.message ?? "unknown"}). The hook may fail to load the scanner. Run: guardian update`);
+    return;
+  }
+  if (type !== "module") {
+    warn(`security/package.json says "type": ${JSON.stringify(type ?? null)}, not "module". ` +
+      `In a CommonJS project the hook cannot load the scanner and scans nothing. Run: guardian update`);
+  }
+}
+
 /** Files under security/ that belong to the project, not to Guardian. */
 const PROJECT_OWNED_SECURITY_FILES = new Set([".audit-allowlist"]);
 
@@ -1262,6 +1289,7 @@ function runInit({ refresh = false } = {}) {
       "security"
     );
   }
+  warnIfScannerNotEsm(path.join(CWD, "security", "package.json"));
 
   // NOTE (1.1.1): `tests/` is deliberately NOT copied into user projects.
   // Prior releases shipped Guardian's own test suite into every project,

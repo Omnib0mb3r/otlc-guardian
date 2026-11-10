@@ -168,6 +168,14 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **The hook no longer fails open in CommonJS projects (BUG-063, first half).**
+  The scanner is an ES module with a `.js` extension, so in a project whose
+  `package.json` says `"type": "commonjs"` (npm 11's `npm init -y` default)
+  the hook could not load it and let every write through unscanned. A new
+  `security/package.json` with `"type": "module"` pins the folder; `init`
+  installs it, `update` restores it, `check` requires it, and `init` warns
+  when an existing one says otherwise. The hook does not protect that file
+  yet.
 - **Partial scans gave wrong project-level answers (BUG-041).** Reported by
   DevNeural: auditing `07-daemon/src/capture/hooks` reported DEP-001 though
   the project serves a health route in another folder. Project checks

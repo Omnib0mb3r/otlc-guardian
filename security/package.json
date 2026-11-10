@@ -1,0 +1,4 @@
+{
+  "description": "OTLC Guardian: pins this folder's .js files to ES modules, whatever the host project's package.json says (BUG-063). guardian init installs it and guardian update restores it. Do not delete or change it: without it the Claude Code hook cannot load the scanner in a CommonJS project and every write goes through unscanned.",
+  "type": "module"
+}

@@ -720,6 +720,7 @@ rm -f security/01-injection-guard.js
 rm -f security/02-code-security.js
 rm -f security/03-audit.js
 rm -f security/04-sql-guard.js
+rm -f security/package.json
 rm -f security/injection_guard.py
 rm -f security/.audit-allowlist   # only if you never added entries of your own
 rm -f .claude/hooks/injection-guard-hook.mjs

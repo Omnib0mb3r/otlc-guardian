@@ -1706,6 +1706,8 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <rect class="bx-soft" x="700" y="520" width="14" height="14" rx="3"/><text class="t2" x="722" y="532">copied once: never overwritten</text>
 </svg></div><figcaption><b>Four write modes.</b> <code>init</code> takes the left half of each mode label, <code>update</code> the right half. Nothing is ever deleted, and <code>tests/</code> and build caches are never copied.</figcaption></figure>
 
+<div class="note"><b>security/package.json pins the scanner to ES modules (BUG-063)</b><p>The scanner and the other <code>security/*.js</code> files are ES modules with a <code>.js</code> extension, so Node takes their module type from the nearest <code>package.json</code>. In a project whose own <code>package.json</code> says <code>"type": "commonjs"</code> (npm 11's <code>npm init -y</code> default) the hook could not import the scanner, failed open, and scanned nothing. Since 2026-11-10 <code>security/package.json</code> (<code>"type": "module"</code>) ships with the rest of <code>security/</code>: <code>init</code> copies it, <code>update</code> restores it like any Guardian-owned file, <code>check</code> lists it as required, and <code>init</code> warns (<code>warnIfScannerNotEsm()</code>) when a project already has one that does not say <code>"module"</code>. The hook does not yet protect this file, so an agent can still rewrite it; that is a hook edit still to do (BUG-063).</p></div>
+
 <div class="tbl dense"><table>
 <thead><tr><th>Step</th><th>Target</th><th>When missing</th><th>When present (init)</th><th>Helper</th></tr></thead>
 <tbody>

@@ -791,6 +791,10 @@ Re-probe R1. `guardian init` copies the ESM scanner to `<project>/security/01-in
 
 Fix: the scanner's module type must not depend on the host project's `package.json`, and the file that decides it must be protected.
 
+**First half: done (2026-11-10), without editing the protected hook or scanner.** `security/package.json` (`"type": "module"`) now ships in the package. Node takes a `.js` file's module type from the nearest `package.json`, so this file wins over the host's `"type": "commonjs"`. `guardian init` copies it with the rest of `security/`, `guardian update` restores it when missing or changed (it is Guardian-owned), `guardian check` lists it as required, and `init` warns loudly when a project already has a `security/package.json` that does not say `"module"` (init never overwrites). Tests: `tests/init.test.js`, "BUG-063" block, which reproduced the fail-open first (hook exit 1, "Failed to load the ES module").
+
+**Still open, so the bug stays OPEN:** the hook does not protect `security/package.json`. An agent can still write `{"type":"commonjs"}` there and switch the scanner off. Adding it to the protected set in `.claude/hooks/injection-guard-hook.mjs` (`guardFiles`, beside `GUARDIAN_SCANNER_FILE`) is a hook edit, which waits with the other hook fixes for a session that prompts.
+
 ### BUG-064: Windows path aliases dodge the watch list and protected files
 
 **Status:** OPEN · **Found:** 2026-11-10
