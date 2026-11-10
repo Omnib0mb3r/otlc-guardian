@@ -227,6 +227,18 @@ class SecretPattern:
 # schemes (postgres, mysql, mongodb, redis, amqp) whose URLs pin a
 # user:pass@host authority into source. See tests/audit.test.js for the
 # full matrix of examples the rule must and must not fire on.
+# GUARD-SEC-008 and -009: an unquoted value after "password:" or
+# "api_key:" that is code is not a literal (BUG-072): a call or a generic
+# (z.string(), constr(...), Array<string>) or a TypeScript primitive type
+# (string|undefined). A quoted value always counts, and so does any other
+# unquoted one (.env, YAML). Same expression as the Node scanner.
+_CODE_VALUE = r"(?:[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*[(<]|(?:string|number|boolean|bigint|symbol|object|unknown|any|never|null|undefined|void)(?![A-Za-z0-9_$]))"
+
+
+def _inline_value(key: str) -> re.Pattern[str]:
+    return re.compile(key + r"\s*[:=]\s*(?:[\"'][^\s\"']{8,}|(?!" + _CODE_VALUE + r")[^\s\"']{8,})", re.I)
+
+
 SECRET_PATTERNS: list[SecretPattern] = [
     SecretPattern("GUARD-SEC-001",  re.compile(r"sk-proj-[a-zA-Z0-9_-]{20,}"),          "OpenAI Project API Key"),
     SecretPattern("GUARD-SEC-010",  re.compile(r"sk-ant-(?:api|oat|admin)\d{2}-[a-zA-Z0-9_-]{20,}"),  "Anthropic API Key"),
@@ -237,8 +249,8 @@ SECRET_PATTERNS: list[SecretPattern] = [
     SecretPattern("GUARD-SEC-005",  re.compile(r"AKIA[0-9A-Z]{16}"),                    "AWS Access Key"),
     SecretPattern("GUARD-SEC-006",  re.compile(r"(?:secret|token|key|password|auth)\s*[:=]\s*[\"']?[A-Za-z0-9+/]{40,}[\"']?", re.I), "Context-Adjacent Base64 Secret"),
     SecretPattern("GUARD-SEC-007",  re.compile(r"-----BEGIN\s+(?:[A-Z0-9]+\s+){0,3}PRIVATE\s+KEY-----"), "Private Key"),
-    SecretPattern("GUARD-SEC-008",  re.compile(r"password\s*[:=]\s*[\"']?[^\s\"']{8,}",  re.I), "Inline Password"),
-    SecretPattern("GUARD-SEC-009",  re.compile(r"api[_-]?key\s*[:=]\s*[\"']?[^\s\"']{8,}", re.I), "Inline API Key"),
+    SecretPattern("GUARD-SEC-008",  _inline_value("password"),                      "Inline Password"),
+    SecretPattern("GUARD-SEC-009",  _inline_value(r"api[_-]?key"),                  "Inline API Key"),
     SecretPattern("GUARD-SEC-011",  re.compile(r"(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqps?)://[^:@/\s\"'`]{0,256}:[^@\s\"'`]{1,512}@", re.I), "Connection String with Embedded Credentials"),
     SecretPattern("GUARD-SEC-012",  re.compile(r"github_pat_[A-Za-z0-9_]{40,}"),        "GitHub Fine-Grained Token"),
     SecretPattern("GUARD-SEC-013",  re.compile(r"gh[sur]_[A-Za-z0-9]{36,}"),            "GitHub App/Server Token"),

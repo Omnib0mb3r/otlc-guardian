@@ -371,6 +371,14 @@ function normalizeForScan(text) {
 // the label in the violation report tells the operator which provider
 // they just leaked (operational clarity matters when you're triaging).
 // Test coverage in tests/injection-guard.test.js.
+// GUARD-SEC-008 and -009: an unquoted value after "password:" or
+// "api_key:" that is code is not a literal (BUG-072): a call or a generic
+// (`z.string()`, `Joi.string()`, `constr(...)`, `Array<string>`) or a
+// TypeScript primitive type (`string|undefined`). A quoted value always
+// counts, and so does any other unquoted one (`.env`, YAML).
+const CODE_VALUE = String.raw`(?:[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*[(<]|(?:string|number|boolean|bigint|symbol|object|unknown|any|never|null|undefined|void)(?![A-Za-z0-9_$]))`;
+const inlineValue = (key) => new RegExp(String.raw`${key}\s*[:=]\s*(?:["'][^\s"']{8,}|(?!${CODE_VALUE})[^\s"']{8,})`, "i");
+
 const SECRET_PATTERNS = [
   { pattern: /sk-proj-[a-zA-Z0-9_-]{20,}/,               label: "OpenAI Project API Key",    id: "GUARD-SEC-001" },
   { pattern: /sk-ant-(?:api|oat|admin)\d{2}-[a-zA-Z0-9_-]{20,}/, label: "Anthropic API Key",  id: "GUARD-SEC-010" },
@@ -388,8 +396,8 @@ const SECRET_PATTERNS = [
   // GUARD-SEC-007: any PEM private key header (RSA, EC, DSA, OPENSSH, ENCRYPTED, bare).
   // The old form only allowed an optional "RSA", so OpenSSH and EC keys passed clean.
   { pattern: /-----BEGIN\s+(?:[A-Z0-9]+\s+){0,3}PRIVATE\s+KEY-----/, label: "Private Key", id: "GUARD-SEC-007" },
-  { pattern: /password\s*[:=]\s*["']?[^\s"']{8,}/i,    label: "Inline Password",   id: "GUARD-SEC-008" },
-  { pattern: /api[_-]?key\s*[:=]\s*["']?[^\s"']{8,}/i, label: "Inline API Key",    id: "GUARD-SEC-009" },
+  { pattern: inlineValue("password"),                  label: "Inline Password",   id: "GUARD-SEC-008" },
+  { pattern: inlineValue("api[_-]?key"),               label: "Inline API Key",    id: "GUARD-SEC-009" },
   // GUARD-SEC-011: connection strings with embedded credentials.
   // Covers the common protocol schemes (postgres/postgresql, mysql,
   // mongodb and mongodb+srv SRV records, redis/rediss, amqp/amqps)

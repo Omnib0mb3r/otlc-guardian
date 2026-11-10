@@ -83,7 +83,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-069 | SMOKE-TESTING | `AUTHZ-003` (JS IDOR) counts caller-supplied ids as ownership: `userId: req.params.userId`, a `:teamId` path parameter |
 | BUG-070 | SMOKE-TESTING | `AUTHZ-001` ignores route-level middleware: `router.delete(path, requireAuth, handler)` is reported CRITICAL as unauthenticated |
 | BUG-071 | IN-PROGRESS | Scanner misses a pattern split by one U+2028/U+2029 or an empty HTML comment (`ignore<!---->all previous instructions`) |
-| BUG-072 | OPEN | Runtime secret pattern `GUARD-SEC-008` (Inline Password) fires on a schema such as `password: z.string().min(12)` |
+| BUG-072 | IN-PROGRESS | Runtime secret pattern `GUARD-SEC-008` (Inline Password) fires on a schema such as `password: z.string().min(12)` |
 | BUG-073 | IN-PROGRESS | HIGH: a settings change that leaves a known key with the wrong type (`"disableAllHooks": "true"`, `"timeout": "1"`) switches Guardian off, silently |
 | BUG-074 | IN-PROGRESS | HIGH: a settings change that adds a command (a SessionStart or Stop hook, a second PreToolUse hook, `statusLine`, `apiKeyHelper`) can delete Guardian, silently |
 | BUG-075 | IN-PROGRESS | HIGH: shell forms no reader parses change Guardian's files silently: `{ rm ...; }`, brace expansion, `$'...'`, `cmd /r`, PowerShell pipelines, `python -Ic`, a heredoc fed to `bash` |
@@ -1052,9 +1052,13 @@ Re-probe 2, S11 (`C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-a
 
 ### BUG-072: Runtime secret pattern GUARD-SEC-008 fires on a password schema
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** IN-PROGRESS · **Found:** 2026-11-10
 
 Found during BUG-002 while writing the test that an init'd project's instruction files scan clean. `scan(text, "all")` on Guardian's own `STANDARDS.md` reports CRITICAL `GUARD-SEC-008` (Inline Password) at line 250, `password: z.string().min(12).max(128),`, a Zod field definition with no secret in it. Cause, from the code: the pattern in `security/01-injection-guard.js` (`SECRET_PATTERNS`, line 313) is `/password\s*[:=]\s*["']?[^\s"']{8,}/i`, so any eight non-space characters after `password:` count as a value, including `z.string()...`, `req.body.password` or `process.env.DB_PASSWORD`. Effect: `guardOutput` on model output that contains ordinary validation or config code reports a CRITICAL secret leak, and `blockOnSecrets` blocks it. The audit's own secret rules are separate (SECRET_PARITY) and not affected. Not fixed: the scanner is a protected file, so the fix goes to `staging/security/01-injection-guard.js` and the Python port, once Lex's re-probe of the staging area reports. The BUG-002 init test scans in `injection` mode, which is the rule's scope, so it does not depend on this.
+
+**Fix in staging (2026-11-10, Lex order), not yet live.** `staging/security/01-injection-guard.js`: `CODE_VALUE` and `inlineValue(key)` build `GUARD-SEC-008` and `GUARD-SEC-009` (the API key rule had the same shape and the same false positive, `apiKey: z.string().min(20)`). The value is either quoted (`["'][^\s"']{8,}`, always a finding) or unquoted and not code: not an identifier path followed by `(` or `<` (a call or a generic: `z.string()`, `z.coerce.string()`, `Joi.string()`, `yup.string()`, `v.pipe(`, `constr(`, `Column(`, `Array<string>`, `z.infer<`), and not a TypeScript primitive type keyword standing alone (`string|undefined`; `stringcheese99` and `undefined_but_real9` still fire). The Python port `security/injection_guard.py` (`_CODE_VALUE`, `_inline_value()`, live) uses the same expression. Tests: `tests/injection-guard.test.js`, "BUG-072": `BUG072_SILENT` (12 lines, staged only) and `BUG072_FIRING` (11 lines, live and staged), and one Python test over both lists. Before the fix: 12 of 12 staged silent tests and the Python test failed, the 22 firing runs passed; after: all pass (live 156/0, staged 225/0). Guardian's `STANDARDS.md`, `CLAUDE.md`, `AGENTS.md` and `GEMINI.md` scan clean in `all` mode with the staged scanner.
+
+Known limit, kept: a member reference (`password: req.body.password`, `process.env.DB_PASSWORD`) still fires. It is not a literal, but on one line it cannot be told from an unquoted `.env` or YAML password with dots in it, and missing a real password is the worse error. A value that starts with an identifier and `(`, such as a real `.env` password `pass(word)99`, is now missed. Smoke test after applying: `guardOutput("password: z.string().min(12)")` in an installed project returns without a secret finding; `guardOutput('password: "hunter2hunter2"')` still blocks.
 
 ### BUG-073: A type-invalid settings value switches Guardian off, silently
 

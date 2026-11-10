@@ -201,6 +201,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A schema, a type or a call after `password:` is not a password
+  literal (BUG-072).** `GUARD-SEC-008` (Inline Password) and `-009`
+  (Inline API Key) took any eight characters after the key as a value, so
+  `password: z.string().min(12)` in Guardian's own `STANDARDS.md` was a
+  CRITICAL secret leak, and `guardOutput` blocked ordinary validation code.
+  An unquoted value that is a call or a generic (Zod, Joi, yup, valibot,
+  Pydantic `constr()`, SQLAlchemy `Column()`, `Array<string>`) or a
+  TypeScript primitive type no longer fires; a quoted value, and any other
+  unquoted one, still does. The Python port matches (live).
+
 - **SECURITY.md states the boundary (re-probe 3 D9).** The threat model now
   says what the hooks are (a tripwire against injected instructions, not
   a sandbox), what they do not see once `staging/` is applied (commands

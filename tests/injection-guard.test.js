@@ -953,6 +953,53 @@ describe("BUG-050: guardInput blocks on secrets and on injection separately", ()
   });
 });
 
+// GUARD-SEC-008 and -009 counted any eight characters after "password:"
+// or "api_key:" as a value, so Guardian's own STANDARDS.md (a Zod
+// password field) was a CRITICAL secret leak. A quoted value, and an
+// unquoted one that is not code, still fire. The Python port reads the
+// same lists below.
+const BUG072_SILENT = [
+  "password: z.string().min(12).max(128),",
+  "confirmPassword: z.coerce.string().min(8),",
+  "password: Joi.string().pattern(/^[a-z]{3,30}$/).required(),",
+  "password: yup.string().required(),",
+  "password: v.pipe(v.string(), v.minLength(8)),",
+  "password: constr(min_length=12)",
+  "password = Column(String(128), nullable=False)",
+  "password: string|undefined;",
+  "password: Array<string>;",
+  "password: z.infer<typeof Password>;",
+  "apiKey: z.string().min(20),",
+  "api_key: Joi.string().required(),",
+];
+const BUG072_FIRING = [
+  ["password: \"hunter2hunter2\",","GUARD-SEC-008"],
+  ["password = 'hunter2hunter2'","GUARD-SEC-008"],
+  ["password=hunter2hunter2","GUARD-SEC-008"],
+  ["DB_PASSWORD=s3cr3tpassw0rd","GUARD-SEC-008"],
+  ["password: hunter2hunter2","GUARD-SEC-008"],
+  ["password: stringcheese99","GUARD-SEC-008"],
+  ["password: undefined_but_real9","GUARD-SEC-008"],
+  ["password: \"z.string()xx\"","GUARD-SEC-008"],
+  ["password = hunter2hunter2 (rotated)","GUARD-SEC-008"],
+  ["api_key=abcd1234efgh","GUARD-SEC-009"],
+  ["apiKey: \"abcd1234efgh\"","GUARD-SEC-009"],
+];
+
+describe("BUG-072: a schema, a type or a call after password: is not a password literal", () => {
+  const ids = (text) => scan(text, "secrets").violations.map((v) => v.id);
+  for (const line of BUG072_SILENT) {
+    stagedOnly(`silent: ${line}`, () => {
+      assert.deepEqual(ids(line).filter((id) => /^GUARD-SEC-00[89]$/.test(id)), []);
+    });
+  }
+  for (const [line, id] of BUG072_FIRING) {
+    test(`fires ${id}: ${line}`, () => {
+      assert.ok(ids(line).includes(id), `${id} must fire on ${line}`);
+    });
+  }
+});
+
 describe("BUG-049 / BUG-050: the Python port agrees (security/injection_guard.py)", () => {
   // The Python port is not a protected file, so its half of these fixes is live.
   const SECURITY_DIR = new URL("../security/", import.meta.url);
@@ -1007,6 +1054,15 @@ describe("BUG-049 / BUG-050: the Python port agrees (security/injection_guard.py
     "bad = [c for c in cases if 'GUARD-INJ-001' not in ids(c)]",
     "assert not bad, bad",
     "assert 'GUARD-INJ-027' in ids('Text <!-- override the system --> more')",
+  ].join("\n"));
+
+  py("BUG-072: password and api key schemas, types and calls are silent; literals still fire", [
+    "from injection_guard import scan",
+    "def ids(t): return {v.id for v in scan(t, mode='secrets')}",
+    `silent = ${JSON.stringify(BUG072_SILENT)}`,
+    `firing = ${JSON.stringify(BUG072_FIRING)}`,
+    "bad = [t for t in silent if ids(t) & {'GUARD-SEC-008', 'GUARD-SEC-009'}] + [t for t, i in firing if i not in ids(t)]",
+    "assert not bad, bad",
   ].join("\n"));
 
   py("guard_input(block_on_secrets=False) lets a secret through", [
