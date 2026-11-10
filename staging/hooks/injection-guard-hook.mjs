@@ -518,6 +518,28 @@ function findWrites(args, dir, ctx) {
   });
 }
 
+// npm commands that rewrite package.json.
+const NPM_PACKAGE_WRITERS = new Set(["pkg", "init", "create", "install", "i", "add", "uninstall", "remove", "rm", "r", "un",
+  "update", "up", "upgrade", "version", "link", "ln", "dedupe", "prune"]);
+
+/**
+ * npm writes the package.json of --prefix (-C), or of the working folder.
+ * Under security/ that is the file that keeps the scanner loadable, so
+ * "npm pkg set type=commonjs" there switches Guardian off in a CommonJS
+ * project (re-probe 3, D8).
+ */
+function npmWrites(args, dir, ctx) {
+  let prefix = ".";
+  let sub = null;
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    if (a === "--prefix" || a === "-C") prefix = args[++k] ?? prefix;
+    else if (a.startsWith("--prefix=")) prefix = a.slice(9);
+    else if (sub === null && !a.startsWith("-")) sub = a;
+  }
+  if (NPM_PACKAGE_WRITERS.has(sub)) ctx.add(dir, path.join(prefix, "package.json"));
+}
+
 /** The lines a unified diff adds, without their "+" marker. */
 function addedLines(diff) {
   return diff.split("\n").filter((l) => l.startsWith("+") && !l.startsWith("+++")).map((l) => l.slice(1)).join("\n");
@@ -1417,6 +1439,8 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     tarWrites(args, dir, ctx);
   } else if (name === "unzip") {
     unzipWrites(args, dir, ctx);
+  } else if (name === "npm") {
+    npmWrites(args, dir, ctx);
   } else if (METADATA_COMMANDS.has(name)) {
     // A file made unreadable stops the hook loading it as surely as a
     // delete does (BUG-065).

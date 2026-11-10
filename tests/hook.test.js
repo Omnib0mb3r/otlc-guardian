@@ -106,14 +106,15 @@ process.on("exit", () => rmSync(EMPTY_PROJECT, { recursive: true, force: true })
 const HOOK_ENV = { ...process.env };
 delete HOOK_ENV.CLAUDE_PROJECT_DIR;
 
-function runHook(hookPath, payload) {
+/** @param {object} [env] - variables to set for this run (CLAUDE_PROJECT_DIR, when the session cwd is a subfolder) */
+function runHook(hookPath, payload, env = {}) {
   const cwd = payload.cwd ?? EMPTY_PROJECT;
   const result = spawnSync("node", [hookPath], {
     input:    JSON.stringify({ ...payload, cwd }),
     encoding: "utf8",
     timeout:  10_000,
     cwd,
-    env:      HOOK_ENV,
+    env:      { ...HOOK_ENV, ...env },
   });
   if (result.status !== 0) {
     throw new Error(`Hook exited with non-zero status ${result.status}: ${result.stderr}`);
@@ -2400,6 +2401,34 @@ describe("PreToolUse hook - a command naming a guarded file asks unless it only 
   ]) {
     test(`${tool}: the same copy of clean notes is silent (D1): ${command}`, () => {
       expectSilent(runWith(tool, command, { "notes/x.md": "Use pnpm.\n" }));
+    });
+  }
+
+  // Re-probe 3, D8 (T20): npm writes the package.json of --prefix or the
+  // working folder; under security/ that switches the scanner off in a
+  // CommonJS project (the R1 fail-open).
+  const runIn = (sub, command) => withTempProject((dir) => {
+    for (const [rel, text] of Object.entries({ ".claude/settings.json": "{}", "security/package.json": "{\"type\":\"module\"}\n", "package.json": "{}\n", "src/.keep": "" })) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), text);
+    }
+    return runHook(PRE_HOOK, { tool_name: "Bash", cwd: path.join(dir, sub), tool_input: { command } }, { CLAUDE_PROJECT_DIR: dir });
+  });
+  for (const [sub, command] of [
+    [".", "npm pkg set type=commonjs --prefix security"],
+    ["security", "npm pkg set type=commonjs"],
+    ["security", "npm pkg delete type"],
+    ["security", "npm install left-pad"],
+    ["src", "npm --prefix=../security pkg set type=commonjs"],
+  ]) {
+    stagedOnly(`npm writing security/package.json asks (D8): ${command} in ${sub}`, () => {
+      const out = runIn(sub, command);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 300));
+    });
+  }
+  for (const command of ["npm pkg set scripts.test=vitest", "npm install zod", "npm version patch"]) {
+    test(`npm writing the project's own package.json is silent (D8): ${command}`, () => {
+      expectSilent(runIn(".", command));
     });
   }
 

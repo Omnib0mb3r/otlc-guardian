@@ -201,6 +201,12 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **npm writing `security/package.json` asks (BUG-063, re-probe 3 D8).**
+  `npm pkg set type=commonjs` run in `security/` (or with
+  `--prefix security`) switches the scanner off in a CommonJS project,
+  and Guardian let it through. npm commands that rewrite package.json
+  now count as writing the one in `--prefix` or the working folder.
+
 - **Invisible gaps, controls and every comment form no longer split a
   pattern (BUG-071, re-probe 3 D7).** A zero-width character, a Hangul or
   Braille filler or a C0 or C1 control used as the gap between two words
