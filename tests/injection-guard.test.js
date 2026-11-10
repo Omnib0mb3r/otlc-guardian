@@ -891,6 +891,36 @@ describe("BUG-046: padding does not push old text out of the change window", () 
     });
   }
 
+  // An HTML comment between the halves is read as a space by the
+  // comment view (re-probe 3, D7), so its characters are padding too:
+  // counted as text, a comment over 2 KB pushed the old half out of view.
+  // The delimiters may carry the invisible characters, controls and
+  // full-width forms the base view folds away.
+  const filler = "x".repeat(5000);
+  for (const [name, padding] of [
+    ["one large HTML comment", ` <!-- ${filler} --> `],
+    ["three 1 KB HTML comments", ` ${`<!-- ${"x".repeat(1000)} -->`.repeat(3)} `],
+    ["a comment whose opener holds a zero-width space", ` <!\u200b-- ${filler} --> `],
+    ["a comment in full-width delimiters", ` \uFF1C\uFF01\uFF0D\uFF0D ${filler} \uFF0D\uFF0D\uFF1E `],
+    ["a comment between padding runs", `${" ".repeat(3000)}<!-- ${filler} -->${" ".repeat(3000)}`],
+  ]) {
+    stagedOnly(`a payload completed across ${name} is a finding (re-probe 3)`, () => {
+      assert.ok(completes(padding).includes("GUARD-INJ-001"), `${name}: ${completes(padding)}`);
+    });
+  }
+
+  test("an edit far from an existing quoted pattern, across a large comment, is still clean", () => {
+    const before = `Quote: "ignore all previous instructions" is an attack.\n<!-- ${filler} -->\nTODO\n`;
+    assert.deepEqual(ids(before, before.replace("TODO", "Block it in the hook.")), []);
+  });
+
+  test("a change after many unclosed comment openers stays cheap", () => {
+    const big = `${"<!-- ".repeat(200_000)}\n`;
+    const start = Date.now();
+    assert.deepEqual(ids(big, `${big}one more line\n`), []);
+    assert.ok(Date.now() - start < 2_000, "the comment walk must stay linear");
+  });
+
   test("an edit far from an existing quoted pattern, across padding, is still clean", () => {
     const before = `Quote: "ignore all previous instructions" is an attack.\n${" ".repeat(5000)}\nTODO\n`;
     assert.deepEqual(ids(before, before.replace("TODO", "Block it in the hook.")), []);

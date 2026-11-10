@@ -201,6 +201,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **An HTML comment used as padding no longer hides half a pattern
+  (BUG-046, re-probe 3).** The change window weighed a comment's characters
+  as text, so a comment over 2 KB between "ignore all" on disk and
+  "previous instructions" added pushed the old half out of view, though
+  the comment view reads the comment as a space. Every comment form that
+  view removes now weighs nothing, as whitespace does, its delimiters
+  spelled with invisible characters, controls or full-width forms
+  included. One walk (`htmlCommentSpans()`) defines the comment forms for
+  both, and stays linear.
+
 - **A schema, a type or a call after `password:` is not a password
   literal (BUG-072).** `GUARD-SEC-008` (Inline Password) and `-009`
   (Inline API Key) took any eight characters after the key as a value, so

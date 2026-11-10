@@ -273,29 +273,67 @@ function spacedView(text) {
     .replace(EMPTY_HTML_COMMENT, " ");
 }
 
+// Invisible characters and controls: the base view deletes them, the
+// spaced view reads them as a space, and the change window weighs them
+// as nothing (BUG-046).
+const INVISIBLE_CLASS = INVISIBLE_STRIP_PATTERN.source.slice(1, -1) + CONTROL_PATTERN.source.slice(1, -1);
+
+// HTML comment delimiters as the base view reads them: NFKC folds the
+// full-width and small forms to "<", "!", "-" and ">", and invisible
+// characters and controls between them are deleted. In the base view
+// these are exactly "<!--", "<!-->", "<!--->" and "-->"; the raw text
+// the change window weighs may spell them any of these ways. The classes
+// are disjoint, so each expression runs in linear time.
+const COMMENT_GAP   = `[${INVISIBLE_CLASS}]*`;
+const COMMENT_LT    = "[<\\uFE64\\uFF1C]";
+const COMMENT_BANG  = "[!\\uFE15\\uFE57\\uFF01]";
+const COMMENT_DASH  = "[\\-\\uFE63\\uFF0D]";
+const COMMENT_GT    = "[>\\uFE65\\uFF1E]";
+const COMMENT_OPEN  = new RegExp(`${COMMENT_LT}${COMMENT_GAP}${COMMENT_BANG}${COMMENT_GAP}${COMMENT_DASH}${COMMENT_GAP}${COMMENT_DASH}`, "gu");
+const COMMENT_EMPTY = new RegExp(`${COMMENT_GAP}(?:${COMMENT_DASH}${COMMENT_GAP})?${COMMENT_GT}`, "uy");
+const COMMENT_CLOSE = new RegExp(`${COMMENT_DASH}${COMMENT_GAP}${COMMENT_DASH}${COMMENT_GAP}${COMMENT_GT}`, "gu");
+
 /**
- * The text with every HTML comment form replaced by a space: "<!-->" and
- * "<!--->" (which HTML reads as empty comments) and any "<!-- ... -->",
- * so a comment between two words does not split a pattern (re-probe 3,
- * D7). A comment's newlines are kept, so lines stay in place. Walked with
- * indexOf, so the cost is linear (BUG-023); an opener with no closer ends
- * the walk and the rest reads as text. The base view keeps comments for
- * GUARD-INJ-027.
+ * Where each HTML comment in `text` starts and ends, as [start, end)
+ * pairs in order: "<!-->" and "<!--->" (which HTML reads as empty
+ * comments) and any "<!-- ... -->". An opener with no closer ends the
+ * walk and the rest reads as text. Each search starts where the last
+ * comment ended, so the cost is linear (BUG-023).
+ */
+function htmlCommentSpans(text) {
+  const spans = [];
+  for (let pos = 0; ;) {
+    COMMENT_OPEN.lastIndex = pos;
+    const open = COMMENT_OPEN.exec(text);
+    if (!open) break;
+    const body = open.index + open[0].length;
+    COMMENT_EMPTY.lastIndex = body;
+    const empty = COMMENT_EMPTY.exec(text);
+    let end;
+    if (empty) {
+      end = body + empty[0].length;
+    } else {
+      COMMENT_CLOSE.lastIndex = body;
+      const close = COMMENT_CLOSE.exec(text);
+      if (!close) break;
+      end = close.index + close[0].length;
+    }
+    spans.push([open.index, end]);
+    pos = end;
+  }
+  return spans;
+}
+
+/**
+ * The text with every HTML comment replaced by a space, so a comment
+ * between two words does not split a pattern (re-probe 3, D7). A
+ * comment's newlines are kept, so lines stay in place. The base view
+ * keeps comments for GUARD-INJ-027.
  */
 function withoutHtmlComments(text) {
   let out = "";
   let pos = 0;
-  for (;;) {
-    const start = text.indexOf("<!--", pos);
-    if (start < 0) break;
-    let end;
-    if (text.startsWith(">", start + 4)) end = start + 5;
-    else if (text.startsWith("->", start + 4)) end = start + 6;
-    else {
-      const close = text.indexOf("-->", start + 4);
-      if (close < 0) break;
-      end = close + 3;
-    }
+  for (const [start, end] of htmlCommentSpans(text)) {
     out += `${text.slice(pos, start)} ${text.slice(start, end).replace(/[^\n]/g, "")}`;
     pos = end;
   }
@@ -667,13 +705,13 @@ const POSITIONAL_VIEWS = new Set([0, 2, 3, 4, 8, 9]);
 /**
  * The context is counted in characters that are not padding (BUG-046).
  * Padding is what some scan view reads as whitespace or as nothing:
- * whitespace, invisible characters, markdown emphasis markers, and
- * entities or %-escapes of whitespace. Counted by raw length, 5,000
- * spaces between "ignore all" on disk and "previous instructions" added
- * would push the old half out of the window. The text itself is never
- * changed, so every view still reads it as written.
+ * whitespace, invisible characters, markdown emphasis markers, entities
+ * or %-escapes of whitespace, and HTML comments (re-probe 3), which the
+ * comment view reads as a space. Counted by raw length, 5,000 spaces or
+ * a 5,000-character comment between "ignore all" on disk and "previous
+ * instructions" added would push the old half out of the window. The
+ * text itself is never changed, so every view still reads it as written.
  */
-const INVISIBLE_CLASS = INVISIBLE_STRIP_PATTERN.source.slice(1, -1) + CONTROL_PATTERN.source.slice(1, -1);
 const CONTEXT_TOKEN = new RegExp(
   `((?:[\\s*_\`~]|[${INVISIBLE_CLASS}])+)` +              // 1: padding run
   `|(&#?[0-9A-Za-z]{1,8};|(?:%[0-9A-Fa-f]{2})+)` +        // 2: entity or %-run
@@ -687,15 +725,44 @@ function tokenWeight([token, padding, encoded]) {
   return token.length;
 }
 
+/** How many characters of [from, to) lie inside the comment spans. */
+function commentOverlap(spans, from, to) {
+  let lo = 0;
+  let hi = spans.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (spans[mid][1] <= from) lo = mid + 1; else hi = mid;
+  }
+  let inside = 0;
+  for (let i = lo; i < spans.length && spans[i][0] < to; i++) {
+    inside += Math.min(to, spans[i][1]) - Math.max(from, spans[i][0]);
+  }
+  return inside;
+}
+
+/**
+ * A token's weight at `at` in a text with these comment spans. A token
+ * partly inside a comment is `partial`: where its weighed characters sit
+ * is not known, so a window edge falls on the token's edge, which only
+ * widens the window.
+ */
+function weighToken(token, at, comments) {
+  const weight = tokenWeight(token);
+  if (weight === 0) return { weight, partial: false };
+  const inside = commentOverlap(comments, at, at + token[0].length);
+  return { weight: weight - inside, partial: inside > 0 };
+}
+
 /** Where the context before `end` starts: CHANGE_CONTEXT weighed characters back. */
-function contextStart(text, end) {
+function contextStart(text, end, comments) {
   for (let span = CHANGE_CONTEXT * 4; ; span *= 4) {
     const start  = Math.max(0, end - span);
     const tokens = [...text.slice(start, end).matchAll(CONTEXT_TOKEN)];
     let need = CHANGE_CONTEXT;
     for (let k = tokens.length - 1; k >= 0; k--) {
-      const weight = tokenWeight(tokens[k]);
-      if (weight >= need) return start + tokens[k].index + tokens[k][0].length - need;
+      const at = start + tokens[k].index;
+      const { weight, partial } = weighToken(tokens[k], at, comments);
+      if (weight >= need) return partial ? at : at + tokens[k][0].length - need;
       need -= weight;
     }
     if (start === 0) return 0;
@@ -703,13 +770,14 @@ function contextStart(text, end) {
 }
 
 /** Where the context after `begin` ends: CHANGE_CONTEXT weighed characters on. */
-function contextEnd(text, begin) {
+function contextEnd(text, begin, comments) {
   for (let span = CHANGE_CONTEXT * 4; ; span *= 4) {
     const end = Math.min(text.length, begin + span);
     let need = CHANGE_CONTEXT;
     for (const token of text.slice(begin, end).matchAll(CONTEXT_TOKEN)) {
-      const weight = tokenWeight(token);
-      if (weight >= need) return begin + token.index + need;
+      const at = begin + token.index;
+      const { weight, partial } = weighToken(token, at, comments);
+      if (weight >= need) return partial ? at + token[0].length : at + need;
       need -= weight;
     }
     if (end === text.length) return end;
@@ -726,8 +794,9 @@ function changedWindows(before, after) {
   while (head < shorter && before.charCodeAt(head) === after.charCodeAt(head)) head++;
   let tail = 0;
   while (tail < shorter - head && before.charCodeAt(before.length - 1 - tail) === after.charCodeAt(after.length - 1 - tail)) tail++;
-  const from = contextStart(before, head);
-  const keep = before.length - contextEnd(before, before.length - tail);
+  const comments = htmlCommentSpans(before);
+  const from = contextStart(before, head, comments);
+  const keep = before.length - contextEnd(before, before.length - tail, comments);
   return [before.slice(from, before.length - keep), after.slice(from, after.length - keep), from];
 }
 
