@@ -35,6 +35,14 @@ project (each project picks it up when `guardian update` is run there).
   counts only when the change adds a matched string that was not there
   before, view by view (plain, decoded, folded). A second copy of an
   already-quoted pattern is still new.
+- **Bash can no longer undo the settings protection by removing the
+  folder (verification P2).** `rm -rf .claude`, `mv .claude .claude-old`
+  and `git checkout HEAD~3 -- .claude/settings.json` were allowed, because
+  only an exact settings-file target counted. A Bash target now counts
+  when it is a settings file or a directory that holds one (so `rm -rf .`
+  too); `mv` sources count as written; and `git checkout`, `restore`, `rm`
+  and `mv` paths are read. Targets the command does not spell out (a
+  variable, a glob, `node -e` code) are not seen by this hook.
 - **Path spelling no longer dodges the watch list (verification P4, P5).**
   Matching was case-sensitive, so `.PLANNING/STATE.md` and
   `.Claude/agents/a.md` were not watched on Windows, where they are the

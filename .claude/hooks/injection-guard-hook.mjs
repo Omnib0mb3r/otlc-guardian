@@ -455,6 +455,9 @@ function commandWrites(allWords, dir, add, recurse) {
     const sources = operands.filter((p) => p !== dest);
     add(dir, dest);
     for (const src of sources) add(dir, `${dest}/${path.basename(src)}`);
+    if (name === "mv") for (const src of sources) add(dir, src); // a moved file is gone from its old path
+  } else if (name === "git") {
+    gitWrites(args, dir, add);
   } else if (name === "dd") {
     for (const a of args) if (a.startsWith("of=")) add(dir, a.slice(3));
   } else if (name === "curl" || name === "wget") {
@@ -465,6 +468,39 @@ function commandWrites(allWords, dir, add, recurse) {
     });
   }
   return dir;
+}
+
+/**
+ * Working-tree paths a git command overwrites or removes: checkout and
+ * restore of paths, rm, mv. A branch switch, reset, stash or merge also
+ * rewrites files, but which ones is not visible in the command.
+ */
+function gitWrites(args, dir, add) {
+  let i = 0;
+  let cwd = dir;
+  while (i < args.length && args[i].startsWith("-")) {
+    if (args[i] === "-C") cwd = path.resolve(cwd, args[i + 1] ?? ".");
+    i += ["-C", "-c", "--git-dir", "--work-tree"].includes(args[i]) ? 2 : 1;
+  }
+  const sub = args[i];
+  const rest = args.slice(i + 1);
+  const dashes = rest.indexOf("--");
+  const operands = (list) => list.filter((a, k) => !a.startsWith("-") && !["-s", "--source"].includes(list[k - 1]));
+
+  let paths = [];
+  if (sub === "checkout" || sub === "restore") {
+    if (dashes >= 0) paths = rest.slice(dashes + 1);
+    else if (sub === "restore") paths = operands(rest);
+    else {
+      // "git checkout X": X is a branch or commit unless it exists as a path.
+      const ops = operands(rest);
+      const first = ops[0] !== undefined && existsSync(path.resolve(cwd, ops[0]));
+      paths = first ? ops : ops.slice(1);
+    }
+  } else if (sub === "rm" || sub === "mv") {
+    paths = operands(dashes >= 0 ? rest.filter((_, k) => k !== dashes) : rest);
+  }
+  for (const p of paths) add(cwd, p);
 }
 
 function commandName(word) {
@@ -743,16 +779,24 @@ process.stdin.on("end", () => {
         });
       }
     }
-    for (const target of bashWrites.filter(isSettings)) {
-      const reasons = settingsWeakening(target, null);
-      if (reasons.length > 0) {
-        emit({
-          permissionDecision: confirmOrDeny,
-          permissionDecisionReason:
-            `${TAG} This command writes ${safeEcho(target, 120)} and may weaken Guardian: ` +
-            `${reasons.join("; ")}. Use Edit for settings changes, or approve only if you asked for it.${bypassNote}`,
-        });
-      }
+    // A shell command's result cannot be read, so writing, moving or
+    // deleting a settings file, or any directory that holds one, is judged
+    // as a settings change Guardian cannot check.
+    const settingsFiles = [".claude/settings.json", ".claude/settings.local.json"].map((f) => path.join(projectRoot, f));
+    const covers = (target, file) => {
+      const t = watchKey(target);
+      const f = watchKey(file);
+      return t === f || f.startsWith(t.endsWith("/") ? t : `${t}/`);
+    };
+    for (const target of bashWrites) {
+      if (!isSettings(target) && !settingsFiles.some((f) => covers(target, f))) continue;
+      emit({
+        permissionDecision: confirmOrDeny,
+        permissionDecisionReason:
+          `${TAG} This command writes, moves or removes ${safeEcho(target, 120)}, which holds Guardian's settings, ` +
+          `and may weaken Guardian: Guardian cannot see the result, so it cannot tell whether hooks are removed ` +
+          `or disableAllHooks is set. Use Edit for settings changes, or approve only if you asked for it.${bypassNote}`,
+      });
     }
 
     // ── Which targets are watched? ────────────────────────────────────

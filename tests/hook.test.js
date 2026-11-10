@@ -868,6 +868,37 @@ describe("PreToolUse hook — self-protection of .claude/settings.json (1.5.0)",
     });
   }
 
+  // Verification P2: the directory that holds the settings counts too.
+  for (const command of [
+    "rm -rf .claude",
+    "mv .claude .claude-old",
+    "git checkout HEAD~3 -- .claude/settings.json",
+    "git checkout HEAD~3 .claude/settings.json",
+    "git restore --source=HEAD~2 .claude/settings.local.json",
+    "git -C . checkout main -- .claude",
+    "rm -rf .",
+    "cd .claude && rm settings.json",
+  ]) {
+    test(`Bash that removes or replaces the settings asks: ${command} (verifier's case)`, () => {
+      const out = inProject((dir) => runHook(PRE_HOOK, { tool_name: "Bash", cwd: dir, tool_input: { command } }));
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    });
+  }
+
+  for (const command of [
+    "rm -rf node_modules dist",
+    "git checkout main",
+    "git restore src/app.ts",
+    "mv notes.txt archive/notes.txt",
+    "cp .claude/settings.json /tmp/settings.bak",
+    "jq . .claude/settings.json > /tmp/out.json",
+  ]) {
+    test(`Bash that leaves the settings alone is silent: ${command}`, () => {
+      const out = inProject((dir) => runHook(PRE_HOOK, { tool_name: "Bash", cwd: dir, tool_input: { command } }));
+      expectSilent(out);
+    });
+  }
+
   test("Bash write to settings in bypass mode is denied", () => {
     const out = inProject((dir) => runHook(PRE_HOOK, {
       tool_name: "Bash", cwd: dir, permission_mode: "bypassPermissions",
