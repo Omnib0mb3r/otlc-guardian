@@ -98,7 +98,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <h4>Exit codes</h4>
 <div class="tbl dense"><table><thead><tr><th>Code</th><th>When</th></tr></thead><tbody>
 <tr><td><code>0</code></td><td>The run finished and either <code>--fail-on-error</code> was not given, or it was given and no CRITICAL or HIGH finding exists. Also <code>--help</code>.</td></tr>
-<tr><td><code>1</code></td><td><code>--fail-on-error</code> and at least one CRITICAL or HIGH finding. Also any uncaught exception (Node's default), for example DEP-001's <code>checkFn</code>, which reads every file with <code>readFileSync</code> and no <code>try</code>, so a file that becomes unreadable mid-run crashes the audit (BUG-055).</td></tr>
+<tr><td><code>1</code></td><td><code>--fail-on-error</code> and at least one CRITICAL or HIGH finding. Also any uncaught exception (Node's default). A file that cannot be read during a project check is not one: <code>readForCheck()</code> warns on stderr and the file contributes no text (BUG-055, fixed 2026-11-10).</td></tr>
 <tr><td><code>2</code></td><td>Usage error: an unknown flag, more than one path, or a path that does not exist. Nothing is scanned and stdout stays empty, so a <code>--json</code> consumer gets no half report. <code>guardian audit</code> passes the code through, and treats a child killed by a signal as exit 1.</td></tr>
 </tbody></table></div>
 
@@ -390,7 +390,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <li><b>Audit secret rules lag the runtime guard (BUG-054).</b> The SEC comment says the rules are kept in lockstep with the runtime <code>SECRET_PATTERNS</code>. The 1.5.0 runtime fix (BUG-026) added OpenSSH, EC and encrypted keys, <code>github_pat_</code>, Slack and others to <code>security/01-injection-guard.js</code>; the audit's SEC-003 still matches only <code>ghp_</code> and SEC-004 only RSA and bare PEM headers.</li>
 <li><b>VAL-002 comment versus code.</b> The rule's comment says a <code>replace(/[\r\n]/g, "")</code> strip helper on the same line clears the finding. VAL-002 has no exclusion list, and whole-file rules never consult <code>excludeLinePatterns</code>, so a stripped value still fires. Needs check against a fixture.</li>
 <li><b>JSON plus exit 1.</b> With <code>--json --fail-on-error</code>, <code>process.exit(1)</code> follows the <code>console.log</code> of the JSON directly. On Windows, writes to a pipe are asynchronous in Node, so a large report could be cut short. Needs check.</li>
-<li><b>DEP-001 can crash the run (BUG-055).</b> Its <code>checkFn</code> reads every file with <code>readFileSync</code> and no <code>try</code>; every other read in the engine is guarded.</li>
+<li><b>DEP-001 could crash the run (BUG-055, fixed 2026-11-10).</b> Its <code>checkFn</code> read every file with <code>readFileSync</code> and no <code>try</code>; every other read in the engine is guarded. It now reads through <code>readForCheck()</code>, which prints <code>DEP-001 could not read &lt;file&gt;: &lt;reason&gt;</code> on stderr and treats the file as empty.</li>
 <li><b>Header comment is stale.</b> Until the 1.5.0 label sweep the file header said Version 1.4.1 and that <code>--fail-on-error</code> exits 1 "if issues found"; the package is 1.5.0 and the code exits 1 only on CRITICAL or HIGH.</li>
 </ul></div>
 

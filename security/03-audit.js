@@ -782,6 +782,25 @@ function checkPyMissingObjectAuthz(content) {
   return findings;
 }
 
+/**
+ * Read a file for a project check (checkFn). A file that vanished or
+ * cannot be read between collectFiles() and the check contributes no
+ * text, and the reader says so on stderr (never stdout, so --json stays
+ * clean). Pre-fix DEP-001 read with a bare readFileSync and one such
+ * file threw out of runAudit (BUG-055).
+ */
+function readForCheck(file, ruleId, root) {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch (err) {
+    console.warn(
+      `⚠️  [OTLC GUARDIAN] ${ruleId} could not read ` +
+      `${path.relative(root, file).replace(/\\/g, "/")}: ${err.message}`
+    );
+    return "";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // WEB-002 SUPPORT: nginx server block with no Content-Security-Policy (1.5.0)
 // ---------------------------------------------------------------------------
@@ -1202,7 +1221,7 @@ const AUDIT_RULES = [
     evidence: "project",
     checkFn: (files, projectRoot) => {
       if (!looksLikeHttpServer(projectRoot, files)) return false;
-      return !files.some((f) => /health/.test(fs.readFileSync(f, "utf8").toLowerCase()));
+      return !files.some((f) => /health/.test(readForCheck(f, "DEP-001", projectRoot).toLowerCase()));
     },
   },
   {

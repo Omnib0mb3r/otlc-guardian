@@ -66,7 +66,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-052 | OPEN | Audit: a project inside a folder named `test`, `tests` or `spec` loses every rule that skips test files |
 | BUG-053 | SMOKE-TESTING | Importing `security/03-audit.js` (package export `./audit`) runs an audit of the cwd as a side effect |
 | BUG-054 | OPEN | Audit secret rules lag the runtime guard: SEC-003 matches only `ghp_`, SEC-004 misses OpenSSH, EC and encrypted keys |
-| BUG-055 | OPEN | `DEP-001` reads files with no error handling, so one unreadable file crashes the audit |
+| BUG-055 | SMOKE-TESTING | `DEP-001` reads files with no error handling, so one unreadable file crashes the audit |
 | BUG-056 | OPEN | Audit allowlist accepts an entry with an empty `# reason:`, though SECURITY.md says entries without a reason are rejected |
 | BUG-057 | OPEN | Any mention of `otlc-guardian:audit-exempt` in a file's first 4 KB exempts the whole file, including a string or a comment about the marker |
 | BUG-058 | OPEN | Hook `ignorePaths` is a substring match: an entry such as `docs` exempts every path containing it |
@@ -738,9 +738,11 @@ From code: SEC-003 is `/ghp_[a-zA-Z0-9]{36}/` and SEC-004 matches only `BEGIN PR
 
 ### BUG-055: `DEP-001` can crash the audit
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 From code: DEP-001's `checkFn` calls `fs.readFileSync(f, "utf8")` for every file with no try/catch (about line 1203), unlike every other read in the engine. A file that disappears or cannot be read mid-scan throws out of `runAudit`. Fix: the same guarded read the other checks use, with the unreadable file reported.
+
+**Fix (2026-11-10).** New `readForCheck(file, ruleId, root)` in `security/03-audit.js` wraps the read: on failure it prints `DEP-001 could not read <path>: <reason>` with `console.warn` (stderr, so `--json` stdout stays clean) and returns `""`, so the file is no evidence of a health route either way. DEP-001's `checkFn` uses it. WEB-002's `readSmallText()` was already guarded. Tests: `tests/audit.test.js`, "BUG-055" block (2 cases calling DEP-001's `checkFn` with a path that no longer exists; both threw ENOENT before the fix). Smoke test: run `guardian audit` on an Express project while a source file is unreadable (on Linux, `chmod 000`) and confirm the run finishes with the warning.
 
 BUG-056 to BUG-062 were found by the manual writer for chapters 05 and 06 (2026-11-10), from `security/03-audit.js` and `bin/guardian.js` at `0fa32ce`, with `init`, `check` and `update` run in a scratch directory. BUG-062 was confirmed again in `runCheck()` while logging.
 

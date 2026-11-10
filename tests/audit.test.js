@@ -2270,6 +2270,57 @@ describe("BUG-053: importing security/03-audit.js does not run an audit", () => 
 });
 
 // ---------------------------------------------------------------------------
+// BUG-055: DEP-001 must survive a file it cannot read
+// ---------------------------------------------------------------------------
+//
+// A file can vanish or lose its read permission between collectFiles()
+// and DEP-001's check. The check is called directly with a path that no
+// longer exists, which is the same failure without a race in the test.
+
+const { AUDIT_RULES } = await import(pathToFileURL(AUDIT_SCRIPT).href);
+
+describe("BUG-055: DEP-001 does not crash on an unreadable file", () => {
+  const dep001 = AUDIT_RULES.find((r) => r.id === "DEP-001");
+
+  test("a vanished file is skipped with a warning, and a readable health route still counts", () => {
+    withTempProject({
+      "package.json": JSON.stringify({ dependencies: { express: "4.21.2" } }),
+      "src/server.js": "app.get('/health', (req, res) => res.send('ok'));\n",
+    }, (dir) => {
+      const gone = path.join(dir, "src", "gone.js");
+      const warnings = [];
+      const origWarn = console.warn;
+      console.warn = (msg) => { warnings.push(String(msg)); };
+      let fired;
+      try {
+        fired = dep001.checkFn([gone, path.join(dir, "src", "server.js")], dir);
+      } finally {
+        console.warn = origWarn;
+      }
+      assert.equal(fired, false, "the health route in server.js was not seen");
+      assert.ok(warnings.some((w) => /DEP-001/.test(w) && /gone\.js/.test(w)), `no warning naming the file: ${warnings.join(" | ")}`);
+    });
+  });
+
+  test("with no readable health route the rule still fires", () => {
+    withTempProject({
+      "package.json": JSON.stringify({ dependencies: { express: "4.21.2" } }),
+      "src/server.js": "app.listen(3000);\n",
+    }, (dir) => {
+      const origWarn = console.warn;
+      console.warn = () => {};
+      let fired;
+      try {
+        fired = dep001.checkFn([path.join(dir, "src", "gone.js"), path.join(dir, "src", "server.js")], dir);
+      } finally {
+        console.warn = origWarn;
+      }
+      assert.equal(fired, true);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

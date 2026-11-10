@@ -172,6 +172,13 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **An unreadable file no longer crashes the audit (BUG-055).** DEP-001's
+  check read every file with a bare `readFileSync`, so a file that
+  vanished or lost its read permission mid-scan threw out of `runAudit`.
+  It now reads through `readForCheck()`, which names the file and the
+  reason on stderr (stdout stays clean for `--json`) and counts the file
+  as having no text.
+
 - **Importing the audit module no longer runs an audit (BUG-053).** The
   CLI block at the bottom of `security/03-audit.js` ran on every load, so
   `import { runAudit } from "otlc-guardian/audit"` audited the importer's
