@@ -30,11 +30,11 @@
  */
 
 import { strict as assert } from "assert";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { spawnSync } from "child_process";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 const __dirname   = path.dirname(fileURLToPath(import.meta.url));
 const AUDIT_SCRIPT = path.resolve(__dirname, "..", "security", "03-audit.js");
@@ -2206,6 +2206,65 @@ describe("BUG-051: bad audit arguments exit 2 instead of passing", () => {
       const r = runAuditArgs(dir, "--json", "--fail-on-error");
       assert.equal(r.status, 0, r.stderr.slice(-300));
       JSON.parse(r.stdout);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-053: importing the audit module must not run an audit
+// ---------------------------------------------------------------------------
+//
+// package.json exports the engine as "./audit", but the CLI block at the
+// bottom ran on every load, so `import { runAudit } from "otlc-guardian/audit"`
+// audited the importer's cwd, printed a report and could exit the process.
+
+function importAuditIn(dir) {
+  const code = `const m = await import(${JSON.stringify(pathToFileURL(AUDIT_SCRIPT).href)});\n` +
+               `process.stdout.write("IMPORTED " + typeof m.runAudit + " " + Array.isArray(m.AUDIT_RULES));\n`;
+  return spawnSync("node", ["--input-type=module", "-e", code], { cwd: dir, encoding: "utf8", shell: false });
+}
+
+describe("BUG-053: importing security/03-audit.js does not run an audit", () => {
+  test("an import prints nothing but the importer's own output and exits 0", () => {
+    withTempProject({ "src/a.js": "try { run(); } catch (e) {}\n" }, (dir) => {
+      const r = importAuditIn(dir);
+      assert.equal(r.status, 0, r.stderr.slice(0, 300));
+      assert.equal(r.stdout, "IMPORTED function true");
+      assert.ok(!/SAFETY AUDIT/.test(r.stdout + r.stderr), (r.stdout + r.stderr).slice(0, 300));
+    });
+  });
+
+  test("runAudit() is still callable after an import", () => {
+    withTempProject({ "src/a.js": "export const a = 1;\n" }, (dir) => {
+      const code = `const { runAudit } = await import(${JSON.stringify(pathToFileURL(AUDIT_SCRIPT).href)});\n` +
+                   `const findings = runAudit(${JSON.stringify(dir)}, { outputJson: true });\n` +
+                   `process.stderr.write("RETURNED " + Array.isArray(findings));\n`;
+      const r = spawnSync("node", ["--input-type=module", "-e", code], { encoding: "utf8", shell: false });
+      assert.equal(r.status, 0, r.stderr.slice(-300));
+      assert.ok(/RETURNED true/.test(r.stderr));
+    });
+  });
+
+  test("running the file directly still runs the CLI", () => {
+    withTempProject({ "src/a.js": "export const a = 1;\n" }, (dir) => {
+      const r = spawnSync("node", [AUDIT_SCRIPT, dir, "--json"], { encoding: "utf8", shell: false });
+      assert.equal(r.status, 0);
+      assert.ok(Array.isArray(JSON.parse(r.stdout).findings));
+    });
+  });
+
+  test("running it through a symlink (npm's bin link on Unix) still runs the CLI", () => {
+    withTempProject({ "src/a.js": "export const a = 1;\n" }, (dir) => {
+      const link = path.join(dir, "guardian-audit.mjs");
+      try {
+        symlinkSync(AUDIT_SCRIPT, link);
+      } catch (e) {
+        if (e.code === "EPERM") return; // Windows without symlink rights: npm uses .cmd shims there instead
+        throw e;
+      }
+      const r = spawnSync("node", [link, dir, "--json"], { encoding: "utf8", shell: false });
+      assert.equal(r.status, 0, r.stderr.slice(-300));
+      assert.ok(Array.isArray(JSON.parse(r.stdout).findings), "the CLI did not run through the link");
     });
   });
 });

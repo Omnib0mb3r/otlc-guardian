@@ -64,7 +64,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-050 | OPEN | `guardInput` with `blockOnSecrets: false` still throws on a secret, with a "prompt injection" message (Node only; Python differs) |
 | BUG-051 | SMOKE-TESTING | Audit of a path that does not exist scans 0 files and exits 0, even with `--fail-on-error` |
 | BUG-052 | OPEN | Audit: a project inside a folder named `test`, `tests` or `spec` loses every rule that skips test files |
-| BUG-053 | OPEN | Importing `security/03-audit.js` (package export `./audit`) runs an audit of the cwd as a side effect |
+| BUG-053 | SMOKE-TESTING | Importing `security/03-audit.js` (package export `./audit`) runs an audit of the cwd as a side effect |
 | BUG-054 | OPEN | Audit secret rules lag the runtime guard: SEC-003 matches only `ghp_`, SEC-004 misses OpenSSH, EC and encrypted keys |
 | BUG-055 | OPEN | `DEP-001` reads files with no error handling, so one unreadable file crashes the audit |
 | BUG-056 | OPEN | Audit allowlist accepts an entry with an empty `# reason:`, though SECURITY.md says entries without a reason are rejected |
@@ -723,9 +723,11 @@ Found by the manual writer; reproduced: the same `console.log` file reports ERR-
 
 ### BUG-053: Importing the audit module runs an audit
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 From code: the CLI entry point at the bottom of `security/03-audit.js` calls `runAudit(targetDir, ...)` at module load, and `package.json` exports the file as `./audit`. `import { runAudit } from "otlc-guardian/audit"` audits the cwd and can call `process.exit`. Fix: run the CLI block only when the file is the entry point (compare `import.meta.url` with `process.argv[1]`).
+
+**Fix (2026-11-10).** `isEntryPoint()` in `security/03-audit.js` compares `fs.realpathSync(process.argv[1])` with the real path of `import.meta.url`, so an import does nothing and a start through npm's bin symlink (`node_modules/.bin/guardian-audit` on Unix) still runs the CLI; a plain URL comparison would have broken that. Tests: `tests/audit.test.js`, "BUG-053" block (4 cases: the import case failed before the fix; the others guard `runAudit()` after import, a direct run and a symlinked run, which skips on Windows without symlink rights). Smoke test: on Linux or macOS, `npm i -g` the package and run `guardian-audit .`.
 
 ### BUG-054: Audit secret rules lag the runtime guard
 

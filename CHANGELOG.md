@@ -172,6 +172,12 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **Importing the audit module no longer runs an audit (BUG-053).** The
+  CLI block at the bottom of `security/03-audit.js` ran on every load, so
+  `import { runAudit } from "otlc-guardian/audit"` audited the importer's
+  directory and could exit its process. It now runs only when the file is
+  the program Node started, compared by real path so npm's bin symlink still
+  works.
 - **`init` installs a project's files, not Guardian's repo files
   (BUG-060).** It copied Guardian's whole `.github/` folder, including a
   `CODEOWNERS` that made Guardian's maintainer the owner of everything, and

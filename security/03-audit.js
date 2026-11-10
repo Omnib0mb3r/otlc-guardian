@@ -26,6 +26,7 @@
 
 import fs   from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 
 // ---------------------------------------------------------------------------
 // TEST FILE RECOGNITION
@@ -2079,14 +2080,34 @@ function parseArgs(argv) {
   return { targetDir, outputJson: flags.includes("--json"), failOnError: flags.includes("--fail-on-error") };
 }
 
-const parsed = parseArgs(process.argv.slice(2));
-if (parsed.help) {
-  process.stdout.write(USAGE);
-} else if (parsed.error) {
-  process.stderr.write(`[OTLC GUARDIAN] audit: ${parsed.error}\n\n${USAGE}`);
-  process.exitCode = 2;
-} else {
-  runAudit(parsed.targetDir, { outputJson: parsed.outputJson, failOnError: parsed.failOnError });
+/**
+ * True when this file is the program Node was started with, false when it
+ * was imported (`import { runAudit } from "otlc-guardian/audit"`). Before
+ * BUG-053 the CLI below ran on every import. Real paths are compared, so a
+ * start through npm's bin symlink (node_modules/.bin/guardian-audit on
+ * Unix) still counts as the entry point.
+ */
+function isEntryPoint() {
+  const started = process.argv[1];
+  if (!started) return false;
+  try {
+    return fs.realpathSync(started) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch (err) {
+    // argv[1] names no file we can resolve (node -e, a REPL): not this file.
+    return false;
+  }
+}
+
+if (isEntryPoint()) {
+  const parsed = parseArgs(process.argv.slice(2));
+  if (parsed.help) {
+    process.stdout.write(USAGE);
+  } else if (parsed.error) {
+    process.stderr.write(`[OTLC GUARDIAN] audit: ${parsed.error}\n\n${USAGE}`);
+    process.exitCode = 2;
+  } else {
+    runAudit(parsed.targetDir, { outputJson: parsed.outputJson, failOnError: parsed.failOnError });
+  }
 }
 
 export { runAudit, AUDIT_RULES };
