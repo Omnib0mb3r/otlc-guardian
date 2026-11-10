@@ -304,7 +304,9 @@ Claude session as instructions, memory, or research:
 - `MEMORY.md` - auto-memory index
 - `.env*` - environment files (sometimes contain embedded payloads)
 
-### Hook 2: `web-content-guard.mjs` (PostToolUse on WebFetch, WebSearch, `mcp__firecrawl__crawl`, `mcp__exa__search`)
+### Hook 2: `web-content-guard.mjs` (PostToolUse on WebFetch, WebSearch and the web MCP servers)
+
+Registered on `^(?:WebFetch|WebSearch|mcp__(?:firecrawl|exa|claude-in-chrome|chrome-devtools|playwright|car-browser|context7)__.*)$`: WebFetch, WebSearch, and every tool of the firecrawl, exa, claude-in-chrome, chrome-devtools, playwright, car-browser and context7 MCP servers. The hook script scanning those servers by prefix is staged in `staging/`, not yet live; until it is applied, the live script scans only WebFetch, WebSearch, `mcp__firecrawl__crawl` and `mcp__exa__search` (BUG-036).
 
 Fires every time Claude fetches a URL or runs a web search, and scans the
 returned content **before Claude reasons about it**. This is the entry
@@ -699,7 +701,7 @@ Remove from `hooks.PostToolUse`:
 
 ```json
 {
-  "matcher": "WebFetch|WebSearch|mcp__firecrawl__crawl|mcp__exa__search",
+  "matcher": "^(?:WebFetch|WebSearch|mcp__(?:firecrawl|exa|claude-in-chrome|chrome-devtools|playwright|car-browser|context7)__.*)$",
   "hooks": [
     { "type": "command", "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/web-content-guard.mjs\"" }
   ]

@@ -1512,8 +1512,13 @@ function extractWrite(toolName, toolInput) {
 const DEFAULT_HOOK_TIMEOUT_S = 60; // Claude Code's default for command hooks
 
 // Tools a matcher is tested against, besides every name a matcher lists:
-// the ones Guardian's two hooks are registered for.
-const GUARDIAN_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "PowerShell", "WebFetch", "WebSearch", "mcp__firecrawl__crawl", "mcp__exa__search"];
+// the ones Guardian's two hooks are registered for. The web guard covers
+// MCP web servers by prefix (BUG-036), so each server is tested through
+// one of its real tool names.
+const GUARDIAN_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "PowerShell", "WebFetch", "WebSearch",
+  "mcp__firecrawl__firecrawl_scrape", "mcp__exa__web_search_exa", "mcp__claude-in-chrome__get_page_text",
+  "mcp__chrome-devtools__take_snapshot", "mcp__playwright__browser_snapshot", "mcp__car-browser__browser_snapshot",
+  "mcp__context7__query-docs"];
 // Claude Code reads a matcher of only these characters as a list of exact
 // names separated by | or , (spaces allowed); anything else is an
 // unanchored JavaScript regex. "*" and "" match every tool.

@@ -224,6 +224,14 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
   ordinary line is reported, where the count used to stay the same.
   Moving a pattern into quotes is never a finding.
 
+- **The web guard scans every web content server's tools (BUG-036).**
+  `web-content-guard.mjs` scans WebFetch, WebSearch and any tool whose
+  name starts with `mcp__firecrawl__`, `mcp__exa__`,
+  `mcp__claude-in-chrome__`, `mcp__chrome-devtools__`, `mcp__playwright__`,
+  `mcp__car-browser__` or `mcp__context7__` (`WEB_SERVERS`), instead of
+  two guessed tool names. The PreToolUse hook's settings protection tests
+  coverage through a real tool name of each server.
+
 - **Padding no longer crosses the change window (BUG-046).**
   `scanChange()` counts its 2 KB of context in characters that are not
   padding: whitespace, invisible characters, markdown emphasis markers,
@@ -319,6 +327,19 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
   of silently switching the scanner off.
 
 ### Fixed
+
+- **The web guard is registered for every web content server (BUG-036,
+  registration half).** `guardian init` and `update` register the web
+  content guard on `^(?:WebFetch|WebSearch|mcp__(?:firecrawl|exa|claude-in-chrome|chrome-devtools|playwright|car-browser|context7)__.*)$`: WebFetch, WebSearch, and every tool of the
+  firecrawl, exa, claude-in-chrome, chrome-devtools, playwright,
+  car-browser and context7 MCP servers. The 1.5.0 matcher named
+  `mcp__firecrawl__crawl` and `mcp__exa__search`, which are not the
+  servers' real tool names, so it never fired on them. `update` moves an
+  existing registration from the old matcher. `guardian check` reads
+  matchers as Claude Code does: an exact list split on `|` or `,` with
+  spaces allowed, else a regex, where an invalid one covers nothing; it
+  used to split on `|` only and failed `Write |Edit`, which Claude Code
+  accepts.
 
 - **Hook commands are anchored to the project root (BUG-028, BUG-034).**
   `guardian init` and `update` register `node "${CLAUDE_PROJECT_DIR}/.claude/hooks/injection-guard-hook.mjs"` and the same form for

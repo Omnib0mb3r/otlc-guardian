@@ -443,10 +443,7 @@ function smokeTestHook(hookPath, projectRoot = CWD) {
  * Code merges the two). A requirement is met when some registered command
  * names the hook file under the event and a matcher that covers the tool.
  *
- * Matchers are read the way Claude Code reads them: "*" or empty matches
- * every tool, otherwise "|" separates exact names. Tokens are NOT trimmed:
- * "Write " with a space is not "Write" to Claude Code (BUG-045), so it is
- * not counted here either.
+ * Matchers are read the way Claude Code reads them (matcherCovers()).
  *
  * @returns {string[]} problems; empty when every requirement is registered
  */
@@ -455,19 +452,33 @@ const REQUIRED_HOOK_REGISTRATIONS = [
   { event: "PostToolUse", tool: "WebFetch", file: "web-content-guard.mjs" },
 ];
 
+// Claude Code's hooks reference: "*" or an empty matcher matches every
+// tool; a matcher of only letters, digits, "_", "-", ",", "|" and spaces
+// is a list of exact names split on "|" or ",", spaces around a name
+// allowed; anything else is an unanchored JavaScript regex, and an
+// invalid one matches nothing. The staged hook reads matchers the same
+// way (BUG-045).
+const EXACT_MATCHER = /^[A-Za-z0-9_\-\s,|]*$/;
+function matcherCovers(matcher, tool) {
+  const m = typeof matcher === "string" ? matcher.trim() : "";
+  if (m === "" || m === "*") return true;
+  if (EXACT_MATCHER.test(m)) return m.split(/[|,]/).some((name) => name.trim() === tool);
+  try {
+    return new RegExp(m).test(tool);
+  } catch {
+    return false; // an invalid pattern matches no tool
+  }
+}
+
 function hookRegistrationProblems(root) {
   const { layers, problems } = settingsLayers(root);
   if (layers.some((s) => s.disableAllHooks === true)) {
     problems.push("disableAllHooks is true, so no Guardian hook runs");
   }
-  const covers = (matcher, tool) => {
-    const m = typeof matcher === "string" ? matcher : "";
-    return m === "" || m === "*" || m.split("|").includes(tool);
-  };
   for (const req of REQUIRED_HOOK_REGISTRATIONS) {
     const registered = layers.some((s) => {
       const blocks = Array.isArray(s?.hooks?.[req.event]) ? s.hooks[req.event] : [];
-      return blocks.some((b) => covers(b?.matcher, req.tool) &&
+      return blocks.some((b) => matcherCovers(b?.matcher, req.tool) &&
         (Array.isArray(b?.hooks) ? b.hooks : []).some((h) =>
           (h?.type === undefined || h.type === "command") && typeof h?.command === "string" && h.command.includes(req.file)));
     });
@@ -946,10 +957,18 @@ function mergeMd(existingPath, guardianSrcPath, label, { refresh = false } = {})
  * relative path stops resolving once the session changes directory, and
  * with Bash in the matcher that is every Bash call after a cd (BUG-028,
  * BUG-034). The double quotes keep a path with spaces in one word.
+ *
+ * The web guard's matcher is a regex (Claude Code reads any matcher with
+ * characters beyond names, "|" and "," as an unanchored regex, so it is
+ * anchored here): WebFetch, WebSearch, and every tool of the MCP servers
+ * that return third-party web content, by server prefix (BUG-036). It
+ * must list the same servers as WEB_SERVERS in web-content-guard.mjs.
  */
+const WEB_GUARD_MATCHER =
+  "^(?:WebFetch|WebSearch|mcp__(?:firecrawl|exa|claude-in-chrome|chrome-devtools|playwright|car-browser|context7)__.*)$";
 const GUARDIAN_HOOKS = [
-  { event: "PreToolUse",  matcher: "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell",          file: "injection-guard-hook.mjs" },
-  { event: "PostToolUse", matcher: "WebFetch|WebSearch|mcp__firecrawl__crawl|mcp__exa__search", file: "web-content-guard.mjs" },
+  { event: "PreToolUse",  matcher: "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell", file: "injection-guard-hook.mjs" },
+  { event: "PostToolUse", matcher: WEB_GUARD_MATCHER,                                  file: "web-content-guard.mjs" },
 ].map((h) => ({ ...h, command: `node "\${CLAUDE_PROJECT_DIR}/.claude/hooks/${h.file}"` }));
 
 // `node` on one of Guardian's hook files and nothing else, relative or

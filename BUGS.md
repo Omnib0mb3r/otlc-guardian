@@ -47,7 +47,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-033 | SMOKE-TESTING | `WEB-001` misses token constants and JSON-wrapped tokens; flags `refreshCount` |
 | BUG-034 | SMOKE-TESTING | Bash in the PreToolUse matcher makes BUG-028 worse: hook error on every Bash call after a `cd` |
 | BUG-035 | OPEN | "ask" stalls unattended workers in default and acceptEdits modes |
-| BUG-036 | OPEN | Web guard MCP tool names (`mcp__firecrawl__crawl`, `mcp__exa__search`) are probably wrong |
+| BUG-036 | IN-PROGRESS | Web guard MCP tool names (`mcp__firecrawl__crawl`, `mcp__exa__search`) are probably wrong |
 | BUG-037 | OPEN | `guardian update` hook migration overrides a custom wider matcher and duplicates the `$CLAUDE_PROJECT_DIR` form |
 | BUG-038 | OPEN | Small hook and audit defects: deny message loses the file name, NGINX check cost, CSP comment suppresses WEB-002 |
 | BUG-039 | SMOKE-TESTING | `DEP-002` can never fire: the walker never collects a bare `.env` file |
@@ -598,11 +598,15 @@ Review finding 12 (MEDIUM). Source: `C:/dev/data/skill-connections/brainstorms/1
 
 ### BUG-036: Web guard MCP tool names (`mcp__firecrawl__crawl`, `mcp__exa__search`) are probably wrong
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** IN-PROGRESS · **Found:** 2026-11-10
 
 Review finding 13 (LOW). Source: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`. Logged when 1.5.0 landed; not fixed in it.
 
 - The PostToolUse matcher (`bin/guardian.js`, `.claude/settings.json`) names `mcp__firecrawl__crawl` and `mcp__exa__search`, which probably do not match the servers' real tool names, so the hook would not fire on them. Fix: match on the `mcp__firecrawl__` and `mcp__exa__` prefixes. Docs describe the matcher as registered today (finding 15 commit).
+
+**Lex decision (2026-11-10, handover HANDOVER-2026-11-10_17-40-12-042Z), scope.** The web guard covers every tool that returns third-party web content: the `mcp__firecrawl__` and `mcp__exa__` prefixes, plus `mcp__claude-in-chrome__`, `mcp__chrome-devtools__`, `mcp__playwright__`, `mcp__car-browser__` and `mcp__context7__`, matched by prefix. A tool that returns no text is harmless to scan.
+
+**Fix: registration live, hook staged (2026-11-10).** Staging commit: recorded in `staging/APPLY.md`. In `bin/guardian.js` (live): `GUARDIAN_HOOKS` registers the web guard on `WEB_GUARD_MATCHER`, `^(?:WebFetch|WebSearch|mcp__(?:firecrawl|exa|claude-in-chrome|chrome-devtools|playwright|car-browser|context7)__.*)$`, a regex (Claude Code reads a matcher with characters beyond names, `|` and `,` as an unanchored regex, hence the anchors); `update`'s migration moves an existing registration off the 1.5.0 matcher. In the blast radius: `guardian check` split matchers on `|` only, so it would have read a regex matcher wrongly and it still failed `Write |Edit`, which Claude Code accepts (BUG-045's correction); it now uses `matcherCovers()` with Claude Code's rules, and the old test "a matcher token with a trailing space does not count as Write" encoded the corrected premise and now asserts the documented behavior. In `staging/hooks/web-content-guard.mjs`: `isWebTool()` with `WATCHED_TOOLS` (WebFetch, WebSearch) and `WEB_SERVERS` (prefix `mcp__<server>__`); the header names the covered tools. In `staging/hooks/injection-guard-hook.mjs`: `GUARDIAN_TOOLS` tests settings coverage through one real tool name per server. Tests: `tests/hook.test.js`, group "every tool that returns third-party web content (BUG-036)" (7 staged, one per server, all failing against the staged hook before the fix; the two old names still covered and four non-web tools silent pass on both) and 2 staged settings-protection tests (moving to the prefix matcher is silent, which passed already; narrowing back to `WebFetch|WebSearch` asks, which failed); `tests/init.test.js`, group "BUG-036" (fresh init matcher covers the nine and none of five others; six check-reading cases; 6 of the 7 failing before the fix, `Writes|Edit` already failing check correctly). Until the staged hook is applied, the live hook exits 0 on the new servers' tools, so the wider matcher costs nothing. Left for Michael: this repo's own `.claude/settings.json` takes the new matcher with the BUG-028 command (`staging/APPLY.md`). Smoke test after applying: in a session with the playwright or claude-in-chrome server, open a page that contains "ignore all previous instructions" and see the web content warning naming the tool.
 
 ### BUG-037: `guardian update` hook migration overrides a custom wider matcher and duplicates the `$CLAUDE_PROJECT_DIR` form
 

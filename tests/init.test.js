@@ -662,11 +662,13 @@ describe("BUG-062: guardian check fails on a broken or unregistered hook", () =>
     });
   });
 
-  test("a matcher token with a trailing space does not count as Write", () => {
+  // Corrected 2026-11-10 (BUG-045): Claude Code allows spaces around the
+  // names of an exact-list matcher, so "Write |Edit" covers Write.
+  test("a matcher token with a trailing space still counts as Write, as in Claude Code", () => {
     withTempDir((dir) => {
       runCli(dir, "init");
       editSettings(dir, (s) => { s.hooks.PreToolUse[0].matcher = "Write |Edit|MultiEdit|NotebookEdit|Bash|PowerShell"; });
-      assert.equal(runCheck(dir).status, 1);
+      assert.equal(runCheck(dir).status, 0);
     });
   });
 
@@ -978,6 +980,54 @@ describe("BUG-028 / BUG-034: Guardian's hook commands do not depend on the sessi
         assert.equal(JSON.parse(r.stdout).hookSpecificOutput?.permissionDecision, "deny", r.stdout.slice(0, 200));
       });
     });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-036: the web guard is registered for every web content server
+// ---------------------------------------------------------------------------
+
+/** Claude Code's matcher rule: an exact list of names, else an unanchored regex. */
+function claudeCodeMatches(matcher, tool) {
+  if (matcher === "" || matcher === "*") return true;
+  if (/^[A-Za-z0-9_\-\s,|]*$/.test(matcher)) return matcher.split(/[|,]/).some((n) => n.trim() === tool);
+  try { return new RegExp(matcher).test(tool); } catch { return false; }
+}
+
+describe("BUG-036: the web guard's matcher covers each web content server by prefix", () => {
+  test("a fresh init registers the web guard for WebFetch, WebSearch and the seven server prefixes, nothing else", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      const settings = JSON.parse(readFileSync(path.join(dir, ".claude", "settings.json"), "utf8"));
+      const { matcher } = settings.hooks.PostToolUse.find((b) => b.hooks.some((h) => h.command.includes("web-content-guard")));
+      for (const tool of ["WebFetch", "WebSearch", "mcp__firecrawl__firecrawl_scrape", "mcp__exa__web_search_exa",
+        "mcp__claude-in-chrome__get_page_text", "mcp__chrome-devtools__take_snapshot", "mcp__playwright__browser_snapshot",
+        "mcp__car-browser__browser_snapshot", "mcp__context7__query-docs"]) {
+        assert.ok(claudeCodeMatches(matcher, tool), `${matcher} must match ${tool}`);
+      }
+      for (const tool of ["mcp__autocad__status", "Read", "Bash", "mcp__firecrawlx__scrape", "xWebFetch"]) {
+        assert.ok(!claudeCodeMatches(matcher, tool), `${matcher} must not match ${tool}`);
+      }
+    });
+  });
+
+  // check reads matchers the way Claude Code does (BUG-045's correction).
+  for (const [matcher, ok] of [
+    ["Write | Edit", true],
+    ["Write,Edit", true],
+    [".*", true],
+    ["^(?:Write|Edit)$", true],
+    ["Writes|Edit", false],
+    ["Write|(", false],
+  ]) {
+    test(`guardian check reads the PreToolUse matcher "${matcher}" as ${ok ? "covering" : "not covering"} Write`, () => {
+      withTempDir((dir) => {
+        runCli(dir, "init");
+        editSettings(dir, (s) => { s.hooks.PreToolUse[0].matcher = matcher; });
+        const r = runCheck(dir);
+        assert.equal(r.status, ok ? 0 : 1, (r.stdout + r.stderr).slice(-300));
+      });
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------

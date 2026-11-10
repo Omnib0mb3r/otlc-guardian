@@ -1582,6 +1582,22 @@ describe("PreToolUse hook - settings protection reads matchers and hook commands
     });
   }
 
+  // BUG-036: the web guard's matcher moves from two guessed names to server prefixes.
+  const WEB_PREFIXES = "^(?:WebFetch|WebSearch|mcp__(?:firecrawl|exa|claude-in-chrome|chrome-devtools|playwright|car-browser|context7)__.*)$";
+  const withPost = (matcher) => () => {
+    const s = settings();
+    s.hooks.PostToolUse[0].matcher = matcher;
+    return s;
+  };
+  stagedOnly("moving the web guard's matcher to the server prefixes is unchanged (it widens)", () => {
+    expectSilent(change(withPost("WebFetch|WebSearch|mcp__firecrawl__crawl|mcp__exa__search"), withPost(WEB_PREFIXES)));
+  });
+  stagedOnly("narrowing the web guard's prefixes back to WebFetch|WebSearch asks", () => {
+    const out = change(withPost(WEB_PREFIXES), withPost("WebFetch|WebSearch"));
+    assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    expectWarning(out, "no longer runs on PostToolUse mcp__playwright__");
+  });
+
   // The documented placeholder form is the BUG-028 fix; it must not read as a weakening.
   for (const command of [
     'node "${CLAUDE_PROJECT_DIR}/.claude/hooks/injection-guard-hook.mjs"',
@@ -1749,6 +1765,36 @@ describe("PreToolUse hook - removals and read-only inline code are judged by the
     test(`a change to the settings still asks: ${command}`, () => {
       assert.equal(decisionOf(run(command)), "ask");
     });
+  }
+});
+
+describe("Web content guard - every tool that returns third-party web content (BUG-036)", () => {
+  const hostile = (tool_name) => runHook(POST_HOOK, {
+    tool_name,
+    tool_input: { url: "https://attacker.example/page" },
+    tool_response: { content: [{ type: "text", text: `page text: ${CRITICAL_PAYLOAD}` }] },
+  });
+
+  // Real tool names of each server, matched by the server's prefix.
+  for (const tool of [
+    "mcp__firecrawl__firecrawl_scrape",
+    "mcp__exa__web_search_exa",
+    "mcp__claude-in-chrome__get_page_text",
+    "mcp__chrome-devtools__take_snapshot",
+    "mcp__playwright__browser_snapshot",
+    "mcp__car-browser__browser_snapshot",
+    "mcp__context7__query-docs",
+  ]) {
+    stagedOnly(`a hostile ${tool} result is reported`, () => expectWarning(hostile(tool), "GUARD-INJ-001", tool));
+  }
+
+  test("the names the old matcher listed are still covered", () => {
+    expectWarning(hostile("mcp__firecrawl__crawl"), "GUARD-INJ-001");
+    expectWarning(hostile("mcp__exa__search"), "GUARD-INJ-001");
+  });
+
+  for (const tool of ["mcp__autocad__status", "mcp__firecrawlx__scrape", "mcp__playwright_browser_snapshot", "Read"]) {
+    test(`a tool outside the web servers is not scanned: ${tool}`, () => expectSilent(hostile(tool)));
   }
 });
 
