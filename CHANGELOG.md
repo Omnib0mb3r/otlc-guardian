@@ -35,6 +35,17 @@ project (each project picks it up when `guardian update` is run there).
   counts only when the change adds a matched string that was not there
   before, view by view (plain, decoded, folded). A second copy of an
   already-quoted pattern is still new.
+- **PowerShell is covered (verification P6).** The PowerShell tool was not
+  in the matcher and the hook ignored it, so `Add-Content CLAUDE.md ...` and
+  `Set-Content .claude/settings.local.json ...` were allowed. It is now in
+  the PreToolUse matcher (`guardian update` migrates) and judged like Bash
+  with a PowerShell reader: `Set-Content`, `Add-Content`, `Out-File`,
+  `Tee-Object`, `New-Item`, `Copy-Item`, `Move-Item`, `Remove-Item`,
+  `Rename-Item` and their aliases, by named or positional parameter,
+  `[IO.File]::Write*` calls, and `Get-Content` piped into a writer. Bash
+  `powershell "..."` was only read when `-Command` was given; any script
+  argument is now read, and `-EncodedCommand` is decoded. `-File` scripts
+  are not.
 - **A shell copy is judged by what it copies (verification P1).** Writing a
   payload to an unwatched file and then `cp notes/x.md CLAUDE.md`,
   `cat x > CLAUDE.md` or `git apply p.diff` was allowed: the command text

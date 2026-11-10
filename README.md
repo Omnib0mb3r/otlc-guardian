@@ -348,8 +348,8 @@ lifecycle, which no other agent exposes today. They're installed automatically b
   watched file (a command that only reads or names it gets an advisory),
   asks before `.claude/settings.json` or `settings.local.json` is changed in a way that
   weakens Guardian (by Edit, Write or a Bash write), and
-  warns on HIGH/MEDIUM findings. It scans Write, Edit, MultiEdit, NotebookEdit and
-  Bash on a wide default watch list — `.planning/`,
+  warns on HIGH/MEDIUM findings. It scans Write, Edit, MultiEdit, NotebookEdit,
+  Bash and PowerShell on a wide default watch list — `.planning/`,
   `.gsd/`, `.plans/`, `.cursor/`, `.continue/`, `.aider/`, `.windsurf/`, every `*/memory/`
   directory, plus `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursorrules`, `.windsurfrules`,
   `MEMORY.md`, `copilot-instructions.md`, and `.env*`. Patterns are imported from the
@@ -424,7 +424,7 @@ builtin, which you can verify by grepping the source tree.
 **Full step-by-step uninstall instructions live in [`SETUP.md`](SETUP.md#uninstalling).** It walks through:
 
 1. **Un-merging files Guardian appended into** — open `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `STANDARDS.md`, `.gitignore`, and `.env.example` in your editor and delete only the content between the `<!-- OTLC-GUARDIAN-START -->` and `<!-- OTLC-GUARDIAN-END -->` markers (or `# OTLC-GUARDIAN-START` for shell-comment files).
-2. **Cleaning `.claude/settings.json`** — remove only the two Guardian hook entries (PreToolUse `Write|Edit|MultiEdit|NotebookEdit|Bash` → `injection-guard-hook.mjs` and PostToolUse `WebFetch|WebSearch|mcp__firecrawl__crawl|mcp__exa__search` → `web-content-guard.mjs`). Leave every other hook alone.
+2. **Cleaning `.claude/settings.json`** — remove only the two Guardian hook entries (PreToolUse `Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell` → `injection-guard-hook.mjs` and PostToolUse `WebFetch|WebSearch|mcp__firecrawl__crawl|mcp__exa__search` → `web-content-guard.mjs`). Leave every other hook alone.
 3. **Deleting pure-Guardian files individually by name** — `security/01-injection-guard.js`, `security/02-code-security.js`, `security/03-audit.js`, `security/04-sql-guard.js`, `security/injection_guard.py`, `.claude/hooks/injection-guard-hook.mjs`, `.claude/hooks/web-content-guard.mjs`. **Never** `rm -rf security/` or `rm -rf .claude/hooks/` — those would also delete any custom files you added.
 4. **Optionally uninstalling the global CLI** — `npm uninstall -g otlc-guardian`.
 

@@ -697,6 +697,49 @@ describe("PreToolUse hook — a copy into a watched path is judged by what it co
   });
 });
 
+describe("PreToolUse hook — PowerShell is judged like Bash (1.5.0 verify, P6)", () => {
+  const ps = (tool, command, files = {}) => withTempProject((dir) => {
+    mkdirSync(path.join(dir, ".claude"), { recursive: true });
+    writeFileSync(path.join(dir, ".claude", "settings.json"), "{}");
+    for (const [rel, text] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), text);
+    }
+    return runHook(PRE_HOOK, { tool_name: tool, cwd: dir, permission_mode: "bypassPermissions", tool_input: { command } });
+  });
+  const encoded = (script) => Buffer.from(script, "utf16le").toString("base64");
+
+  for (const [name, tool, command, files] of [
+    ["PowerShell tool Add-Content (verifier's case)",    "PowerShell", `Add-Content CLAUDE.md '${CRITICAL_PAYLOAD}'`],
+    ["PowerShell tool Set-Content -Path",                "PowerShell", `Set-Content -Path .planning\\STATE.md -Value "${CRITICAL_PAYLOAD}"`],
+    ["PowerShell tool Out-File",                         "PowerShell", `"${CRITICAL_PAYLOAD}" | Out-File -FilePath AGENTS.md -Append`],
+    ["PowerShell tool Get-Content piped to Set-Content", "PowerShell", `Get-Content notes\\x.md | Set-Content CLAUDE.md`, { "notes/x.md": `${CRITICAL_PAYLOAD}\n` }],
+    ["PowerShell tool Copy-Item",                        "PowerShell", `Copy-Item -Path notes\\x.md -Destination CLAUDE.md`, { "notes/x.md": `${CRITICAL_PAYLOAD}\n` }],
+    ["Bash powershell without -Command (verifier's case)", "Bash",     `powershell "Add-Content CLAUDE.md '${CRITICAL_PAYLOAD}'"`],
+    ["Bash powershell -NoProfile -Command",              "Bash",       `powershell -NoProfile -Command "Add-Content CLAUDE.md '${CRITICAL_PAYLOAD}'"`],
+    ["Bash pwsh -EncodedCommand",                        "Bash",       `pwsh -NoProfile -EncodedCommand ${encoded("Copy-Item notes/x.md CLAUDE.md")}`, { "notes/x.md": `${CRITICAL_PAYLOAD}\n` }],
+  ]) {
+    test(`${name} is denied`, () => assert.equal(decisionOf(ps(tool, command, files)), "deny"));
+  }
+
+  test("PowerShell tool Set-Content on settings asks, denied in bypass (verifier's case)", () => {
+    assert.equal(decisionOf(ps("PowerShell", `Set-Content .claude/settings.local.json '{"disableAllHooks":true}'`)), "deny");
+  });
+
+  test("PowerShell tool Remove-Item -Recurse .claude is denied in bypass", () => {
+    assert.equal(decisionOf(ps("PowerShell", "Remove-Item -Recurse -Force .claude")), "deny");
+  });
+
+  test("PowerShell tool that only reads is silent", () => {
+    expectSilent(ps("PowerShell", `Select-String -Path CLAUDE.md -Pattern '${CRITICAL_PAYLOAD}'`.replace(CRITICAL_PAYLOAD, "pnpm")));
+    expectSilent(ps("PowerShell", "Get-Content .claude\\settings.json | ConvertFrom-Json"));
+  });
+
+  test("a Windows path with backslashes is not mangled by escape handling", () => {
+    assert.equal(decisionOf(ps("PowerShell", `Set-Content C:\\work\\proj\\CLAUDE.md "${CRITICAL_PAYLOAD}"`)), "deny");
+  });
+});
+
 describe("PreToolUse hook — path spelling does not dodge the watch list (1.5.0 verify, P4/P5)", () => {
   const writeTo = (rel, content = CRITICAL_PAYLOAD) => withTempProject((dir) =>
     runHook(PRE_HOOK, { tool_name: "Write", cwd: dir, permission_mode: "bypassPermissions", tool_input: { file_path: `${dir}/${rel}`, content } }));

@@ -285,7 +285,7 @@ it can only warn. If a hook itself fails, the tool call is not blocked,
 but the failure is printed and reported as a hook error. Both are wired up
 automatically by `guardian init` and registered in `.claude/settings.json`.
 
-### Hook 1 — `injection-guard-hook.mjs` (PreToolUse on Write, Edit, MultiEdit, NotebookEdit, Bash)
+### Hook 1 — `injection-guard-hook.mjs` (PreToolUse on Write, Edit, MultiEdit, NotebookEdit, Bash, PowerShell)
 
 Fires every time Claude writes or edits a file in a watched location, or
 runs a Bash command that names or writes one, and scans the content for
@@ -663,7 +663,7 @@ Remove from `hooks.PreToolUse`:
 
 ```json
 {
-  "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
+  "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell",
   "hooks": [
     { "type": "command", "command": "node .claude/hooks/injection-guard-hook.mjs" }
   ]

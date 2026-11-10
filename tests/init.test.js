@@ -235,7 +235,7 @@ describe("mergeClaudeSettings — JSON hook merge", () => {
       assert.equal(bashBlock.hooks[0].command, "node my-bash-hook.js");
       assert.equal(bashBlock.hooks.length, 1, "Guardian must not join the user's Bash-only block");
       // Guardian's own block must be added under its current matcher
-      const writeBlock = result.hooks.PreToolUse.find((b) => b.matcher === "Write|Edit|MultiEdit|NotebookEdit|Bash");
+      const writeBlock = result.hooks.PreToolUse.find((b) => b.matcher === "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell");
       assert.ok(writeBlock, "Guardian's write-tools block must be added");
     });
   });
@@ -248,7 +248,7 @@ describe("mergeClaudeSettings — JSON hook merge", () => {
       writeFileSync(userPath, JSON.stringify({
         hooks: {
           PreToolUse: [{
-            matcher: "Bash|NotebookEdit|MultiEdit|Edit|Write",
+            matcher: "PowerShell|Bash|NotebookEdit|MultiEdit|Edit|Write",
             hooks: [{ type: "command", command: "node my-existing-hook.js" }],
           }],
         },
@@ -260,7 +260,7 @@ describe("mergeClaudeSettings — JSON hook merge", () => {
       const result = JSON.parse(readFileSync(userPath, "utf8"));
       // There should be exactly ONE matcher block, not two
       const writeEditBlocks = result.hooks.PreToolUse.filter(
-        (b) => canonicalMatcher(b.matcher) === canonicalMatcher("Write|Edit|MultiEdit|NotebookEdit|Bash")
+        (b) => canonicalMatcher(b.matcher) === canonicalMatcher("Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell")
       );
       assert.equal(writeEditBlocks.length, 1, "Must not create a duplicate parallel block");
       assert.equal(writeEditBlocks[0].hooks.length, 2, "User hook + Guardian hook");
@@ -286,7 +286,7 @@ describe("mergeClaudeSettings — JSON hook merge", () => {
 
       // Both Guardian hooks should be registered exactly once
       const parsed = JSON.parse(after2);
-      const preBlock  = parsed.hooks.PreToolUse.find((b) => canonicalMatcher(b.matcher) === canonicalMatcher("Write|Edit|MultiEdit|NotebookEdit|Bash"));
+      const preBlock  = parsed.hooks.PreToolUse.find((b) => canonicalMatcher(b.matcher) === canonicalMatcher("Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell"));
       const postBlock = parsed.hooks.PostToolUse.find((b) => b.hooks.some((h) => h.command.includes("web-content-guard")));
       assert.equal(preBlock.hooks.filter((h) => h.command.includes("injection-guard-hook")).length, 1);
       assert.equal(postBlock.hooks.filter((h) => h.command.includes("web-content-guard")).length, 1);

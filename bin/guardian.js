@@ -847,7 +847,7 @@ function mergeClaudeSettings(existingPath, guardianSrcPath) {
   const GUARDIAN_HOOKS = [
     {
       event:   "PreToolUse",
-      matcher: "Write|Edit|MultiEdit|NotebookEdit|Bash",
+      matcher: "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell",
       command: "node .claude/hooks/injection-guard-hook.mjs",
     },
     {

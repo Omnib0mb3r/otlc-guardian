@@ -10,7 +10,7 @@
 // Defense in depth against indirect prompt injection laundered
 // through web research, memory, or planning artifacts.
 //
-// Triggered on: Write, Edit, MultiEdit, NotebookEdit, Bash
+// Triggered on: Write, Edit, MultiEdit, NotebookEdit, Bash, PowerShell
 //               (registered in .claude/settings.json)
 //
 // Decisions (1.5.0):
@@ -280,8 +280,9 @@ const WRITE_REDIRECTS   = new Set([">", ">>", ">|", "&>", "&>>", "<>", ">&"]);
 const READ_REDIRECTS    = new Set(["<", "<<", "<<-", "<<<", "<&"]);
 const COMMAND_WRAPPERS  = new Set(["sudo", "doas", "env", "command", "builtin", "exec", "nohup", "time", "nice", "timeout", "stdbuf", "xargs"]);
 const SHELLS            = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
-const INTERPRETERS      = new Set(["node", "deno", "bun", "python", "python3", "py", "ruby", "perl", "php", "pwsh", "powershell"]);
-const INLINE_CODE_FLAGS = new Set(["-c", "-e", "-p", "-r", "--eval", "--print", "-command", "-Command"]);
+const INTERPRETERS      = new Set(["node", "deno", "bun", "python", "python3", "py", "ruby", "perl", "php"]);
+const INLINE_CODE_FLAGS = new Set(["-c", "-e", "-p", "-r", "--eval", "--print"]);
+const POWERSHELLS       = new Set(["powershell", "pwsh"]);
 const COPY_COMMANDS     = new Set(["cp", "mv", "install", "ln", "rsync", "scp"]);
 const DELETE_COMMANDS   = new Set(["rm", "unlink", "truncate", "shred"]);
 // Commands whose stdout is (a selection of) the files they read.
@@ -306,10 +307,15 @@ function closingParen(text, from) {
 }
 
 /**
+ * @param {"bash"|"powershell"} dialect - PowerShell escapes with a
+ *   backtick and keeps a backslash literal (it is the path separator);
+ *   it has no backtick substitution.
  * @returns {{ tokens: Array<{word: string}|{op: string}>, subs: string[] }}
  *   subs: the text of each $( ) and backtick substitution, for recursion
  */
-function lexShell(text) {
+function lexShell(text, dialect = "bash") {
+  const ESC = dialect === "powershell" ? "`" : "\\";
+  const backtickSubs = dialect === "bash";
   const tokens = [];
   const subs = [];
   const heredocs = [];
@@ -335,7 +341,7 @@ function lexShell(text) {
   let i = 0;
   while (i < text.length) {
     const ch = text[i];
-    if (ch === "\\") {
+    if (ch === ESC) {
       if (text[i + 1] !== "\n") word = `${word ?? ""}${text[i + 1] ?? ""}`;
       i += 2;
     } else if (ch === "'") {
@@ -347,15 +353,15 @@ function lexShell(text) {
       word = word ?? "";
       i++;
       while (i < text.length && text[i] !== '"') {
-        if (text[i] === "\\" && i + 1 < text.length) { word += text[i + 1]; i += 2; }
+        if (text[i] === ESC && i + 1 < text.length) { word += text[i + 1]; i += 2; }
         else if (text.startsWith("$(", i)) i = substitution(i + 2, false);
-        else if (text[i] === "`") i = substitution(i + 1, true);
+        else if (backtickSubs && text[i] === "`") i = substitution(i + 1, true);
         else word += text[i++];
       }
       i++;
     } else if (text.startsWith("$(", i)) {
       i = substitution(i + 2, false);
-    } else if (ch === "`") {
+    } else if (backtickSubs && ch === "`") {
       i = substitution(i + 1, true);
     } else if (ch === "#" && word === null) {
       while (i < text.length && text[i] !== "\n") i++;
@@ -408,7 +414,7 @@ function pathLikeWords(text) {
  *   when the write adds to the file (>>, tee -a, a patch) instead of
  *   replacing it.
  */
-function shellWriteTargets(command, cwd, depth = 0) {
+function shellWriteTargets(command, cwd, depth = 0, dialect = "bash") {
   const targets = new Map();
   if (depth > MAX_SHELL_DEPTH) return targets;
   const abs = (dir, p) => path.resolve(dir, p.replace(/^~(?=$|[\\/])/, os.homedir())).replace(/\\/g, "/");
@@ -420,18 +426,23 @@ function shellWriteTargets(command, cwd, depth = 0) {
     entry.append ||= append;
     targets.set(key, entry);
   };
-  const recurse = (text, dir) => {
-    for (const [key, entry] of shellWriteTargets(text, dir, depth + 1)) {
+  const recurse = (text, dir, inner = dialect) => {
+    for (const [key, entry] of shellWriteTargets(text, dir, depth + 1, inner)) {
       const mine = targets.get(key) ?? { sources: new Set(), append: false };
       for (const s of entry.sources) mine.sources.add(s);
       mine.append ||= entry.append;
       targets.set(key, mine);
     }
   };
-  const ctx = { add, abs, recurse };
+  const ctx = { add, abs, recurse, dialect };
 
-  const { tokens, subs } = lexShell(command);
+  const { tokens, subs } = lexShell(command, dialect);
   for (const sub of subs) recurse(sub, cwd);
+  if (dialect === "powershell") {
+    // [IO.File]::WriteAllText('CLAUDE.md', ...): the path is an argument
+    // of a .NET call, so every path-like word in the call counts.
+    for (const m of command.matchAll(DOTNET_FILE_WRITE)) for (const p of pathLikeWords(m[1])) add(cwd, p);
+  }
 
   let dir = cwd;
   let words = [];
@@ -489,10 +500,17 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   // carries its file operands' content; any other carries its stdin's.
   const out = CONTENT_PASSERS.has(name) ? [...stdin, ...operands.map((p) => abs(dir, p))] : stdin;
 
-  if (name === "cd" || name === "pushd") {
+  if (["cd", "pushd", "chdir", "set-location", "sl", "push-location"].includes(name)) {
     return { dir: operands[0] && operands[0] !== "-" ? abs(dir, operands[0]) : dir, out };
   }
-  if (SHELLS.has(name)) {
+  if (ctx.dialect === "powershell") {
+    powershellWrites(name, args, dir, ctx, stdin);
+    return { dir, out: PS_CONTENT_PASSERS.has(name) ? [...out, ...psPaths(args, ["path", "literalpath"], 0).map((p) => abs(dir, p))] : out };
+  }
+  if (POWERSHELLS.has(name)) {
+    const script = powershellScript(args);
+    if (script !== null) recurse(script, dir, "powershell");
+  } else if (SHELLS.has(name)) {
     const flag = args.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a));
     if (flag >= 0 && args[flag + 1] !== undefined) recurse(args[flag + 1], dir);
   } else if (name === "eval") {
@@ -588,6 +606,92 @@ function gitWrites(args, dir, ctx) {
   for (const p of paths) add(cwd, p);
 }
 
+// ---------------------------------------------------------------------------
+// POWERSHELL: which paths a command writes
+// ---------------------------------------------------------------------------
+//
+// Cmdlets and their common aliases. Parameters are read by name (-Path,
+// -LiteralPath, -FilePath, -Destination, "-Path:x") or by position, the
+// way PowerShell binds them. Like the Bash reader, it does not expand
+// variables, wildcards or script blocks.
+
+const PS_WRITERS = new Set(["set-content", "sc", "add-content", "ac", "out-file", "tee-object", "tee", "new-item", "ni", "clear-content", "clc"]);
+const PS_COPIERS = new Set(["copy-item", "cp", "copy", "cpi", "move-item", "mv", "move", "mi"]);
+const PS_MOVERS  = new Set(["move-item", "mv", "move", "mi"]);
+const PS_REMOVERS = new Set(["remove-item", "rm", "del", "erase", "ri", "rd", "rmdir"]);
+const PS_RENAMERS = new Set(["rename-item", "ren", "rni"]);
+const PS_CONTENT_PASSERS = new Set(["get-content", "gc", "cat", "type", "select-string", "sls"]);
+const PS_SWITCHES = new Set(["force", "recurse", "append", "nonewline", "noclobber", "passthru", "confirm", "whatif", "verbose", "debug", "raw", "asbytestream", "container"]);
+const DOTNET_FILE_WRITE = /\[(?:system\.)?io\.file\]::(?:write|append|create|delete|copy|move|replace)\w*\s*\(([^)]*)\)/gi;
+
+/** Named parameters (lowercased, comma lists split) and positional arguments. */
+function psParse(args) {
+  const named = new Map();
+  const positional = [];
+  const put = (key, value) => named.set(key, [...(named.get(key) ?? []), ...String(value).split(",").filter(Boolean)]);
+  for (let k = 0; k < args.length; k++) {
+    const m = /^-([A-Za-z]+)(?::(.*))?$/.exec(args[k]);
+    if (!m) positional.push(args[k]);
+    else if (m[2] !== undefined) put(m[1].toLowerCase(), m[2]);
+    else if (PS_SWITCHES.has(m[1].toLowerCase()) || args[k + 1] === undefined) named.set(m[1].toLowerCase(), named.get(m[1].toLowerCase()) ?? []);
+    else put(m[1].toLowerCase(), args[++k]);
+  }
+  return { named, positional };
+}
+
+/** Values of the first named parameter present, else the positional argument at `position`. */
+function psPaths(args, names, position) {
+  const { named, positional } = psParse(args);
+  for (const n of names) if (named.get(n)?.length) return named.get(n);
+  return position !== null && positional[position] !== undefined ? [positional[position]] : [];
+}
+
+function powershellWrites(name, args, dir, ctx, stdin) {
+  const { add, abs } = ctx;
+  const { named, positional } = psParse(args);
+  if (PS_WRITERS.has(name)) {
+    const append = name === "add-content" || name === "ac" || named.has("append");
+    for (const p of psPaths(args, ["path", "literalpath", "filepath"], 0)) add(dir, p, stdin, append);
+  } else if (PS_COPIERS.has(name)) {
+    const sources = psPaths(args, ["path", "literalpath"], 0);
+    const dest = psPaths(args, ["destination"], 1)[0];
+    if (dest) {
+      const intoDir = sources.length > 1 || /[\\/]$/.test(dest) || Boolean(statSync(abs(dir, dest), { throwIfNoEntry: false })?.isDirectory());
+      if (intoDir) for (const src of sources) add(dir, `${dest}/${path.basename(src)}`, [abs(dir, src)]);
+      else add(dir, dest, sources.map((s) => abs(dir, s)));
+    }
+    if (PS_MOVERS.has(name)) for (const src of sources) add(dir, src);
+  } else if (PS_REMOVERS.has(name)) {
+    for (const p of [...(named.get("path") ?? []), ...(named.get("literalpath") ?? []), ...positional]) add(dir, p);
+  } else if (PS_RENAMERS.has(name)) {
+    const [target] = psPaths(args, ["path", "literalpath"], 0);
+    const [newName] = psPaths(args, ["newname"], 1);
+    if (target) add(dir, target);
+    if (target && newName) add(dir, path.join(path.dirname(target), newName));
+  }
+}
+
+/**
+ * The script a powershell / pwsh invocation runs, or null for -File (a
+ * script file the hook cannot read). A bare argument is judged as a
+ * command: powershell.exe runs it as one, and pwsh would run it as a file.
+ */
+function powershellScript(args) {
+  const VALUE_OPTIONS = new Set(["-executionpolicy", "-ex", "-ep", "-windowstyle", "-w", "-inputformat", "-if", "-outputformat", "-of", "-o",
+    "-configurationname", "-workingdirectory", "-wd", "-settingsfile", "-custompipename", "-version", "-v", "-psconsolefile"]);
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k].toLowerCase();
+    if (["-command", "-c", "-commandwithargs", "-cwa"].includes(a)) return args.slice(k + 1).join(" ");
+    if (["-encodedcommand", "-ec", "-e", "-enc"].includes(a)) {
+      return args[k + 1] ? Buffer.from(args[k + 1], "base64").toString("utf16le") : null;
+    }
+    if (a === "-file" || a === "-f") return null;
+    if (VALUE_OPTIONS.has(a)) k++;
+    else if (!a.startsWith("-")) return args.slice(k).join(" ");
+  }
+  return null;
+}
+
 function commandName(word) {
   return path.basename(word.replace(/\\/g, "/")).replace(/\.exe$/i, "").toLowerCase();
 }
@@ -623,13 +727,15 @@ function extractWrite(toolName, toolInput) {
     }
     case "NotebookEdit":
       return { kind: "file", targets: [str(toolInput.notebook_path)], content: str(toolInput.new_source) };
-    case "Bash": {
+    case "Bash":
+    case "PowerShell": {
       const command = str(toolInput.command);
       // Shell words, split on whitespace, quotes, and operators. Good
       // enough to see which paths a command names. This is not a shell
-      // parser and does not claim to follow variables or subshells.
-      const words = command.split(/[\s"'`;|&<>()=]+/).filter(Boolean);
-      return { kind: "bash", targets: words, content: command };
+      // parser and does not claim to follow variables or subshells. The
+      // paths it writes come from shellWriteTargets().
+      const words = command.split(/[\s"'`;|&<>()=,]+/).filter(Boolean);
+      return { kind: "bash", dialect: toolName === "PowerShell" ? "powershell" : "bash", targets: words, content: command };
     }
     default:
       return null;
@@ -848,7 +954,7 @@ process.stdin.on("end", () => {
 
     // Paths a Bash command writes, resolved against the session cwd.
     const sessionCwd = (typeof data.cwd === "string" && data.cwd) || projectRoot;
-    const bashTargets = write.kind === "bash" ? shellWriteTargets(write.content, sessionCwd) : new Map();
+    const bashTargets = write.kind === "bash" ? shellWriteTargets(write.content, sessionCwd, 0, write.dialect) : new Map();
     const bashWrites = [...bashTargets.keys()];
 
     // ── Self-protection: settings changes that weaken Guardian ────────
@@ -965,7 +1071,7 @@ process.stdin.on("end", () => {
         emit({
           permissionDecision: confirmOrDeny,
           permissionDecisionReason:
-            `⚠️  ${TAG} PROMPT INJECTION WARNING (Bash command writes to a watched path)\n` + summary +
+            `⚠️  ${TAG} PROMPT INJECTION WARNING (${toolName} command writes to a watched path)\n` + summary +
             `    Action   : Confirmation required. The command text contains instruction-override\n` +
             `               content and writes to a file that agents load as instructions.${bypassNote}`,
         });
