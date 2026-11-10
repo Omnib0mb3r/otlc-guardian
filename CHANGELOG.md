@@ -119,6 +119,14 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **Partial scans gave wrong project-level answers (BUG-041).** Reported by
+  DevNeural: auditing `07-daemon/src/capture/hooks` reported DEP-001 though
+  the project serves a health route in another folder. Project checks
+  answered from the scanned subtree only. Checks that prove an absence
+  across the project (DEP-001, WEB-002) now read the project root's files
+  on a partial scan, and their finding names the project root; DEP-002, a
+  presence check, still reads the scanned files. A single file given as
+  the target used to scan nothing at all; it is now audited.
 - **Docs that disagreed with the code (review finding 15).** The audit
   rule breakdown is now the audit's own header (34 pattern, 5 analyzer,
   3 project; 42 in all) in README.md and the skill, which still said 33.

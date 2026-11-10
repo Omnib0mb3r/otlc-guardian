@@ -613,6 +613,8 @@ function checkUnvalidatedBody(content) {
 // Each rule is one of three kinds:
 //   { id, category, severity, description, pattern, fileTypes }      regex
 //   { id, ..., checkFn(files, projectRoot) -> boolean }              project
+//       evidence: "project" when the check proves an absence across the
+//       project; it then sees the project root's files on a partial scan.
 //   { id, ..., fileCheckFn(content, filePath) -> [{line, content}] } per-file
 // ---------------------------------------------------------------------------
 
@@ -1195,6 +1197,7 @@ const AUDIT_RULES = [
     // fallback (which still worked for express because of `app.listen`,
     // but failed for projects whose framework only registered via the
     // manifest).
+    evidence: "project",
     checkFn: (files, projectRoot) => {
       if (!looksLikeHttpServer(projectRoot, files)) return false;
       return !files.some((f) => /health/.test(fs.readFileSync(f, "utf8").toLowerCase()));
@@ -1369,6 +1372,7 @@ const AUDIT_RULES = [
     description: "nginx server block with no Content-Security-Policy header anywhere in the project",
     pattern: null,
     fileTypes: [],
+    evidence: "project",
     checkFn: nginxWithoutCsp,
   },
 
@@ -1475,6 +1479,13 @@ const SKIP_DIRS = new Set([
 
 function collectFiles(rootDir, extensions) {
   const results = [];
+  const wanted = (name) => extensions.length === 0 || extensions.includes(path.extname(name).toLowerCase());
+
+  // A single file as the target (a commit hook auditing changed files).
+  // readdirSync on a file throws, which used to leave the list empty.
+  if (fs.statSync(rootDir, { throwIfNoEntry: false })?.isFile()) {
+    return wanted(rootDir) ? [rootDir] : [];
+  }
 
   function walk(dir) {
     let entries;
@@ -1487,11 +1498,8 @@ function collectFiles(rootDir, extensions) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         walk(fullPath);
-      } else if (entry.isFile()) {
-        const ext = path.extname(entry.name).toLowerCase();
-        if (extensions.length === 0 || extensions.includes(ext)) {
-          results.push(fullPath);
-        }
+      } else if (entry.isFile() && wanted(entry.name)) {
+        results.push(fullPath);
       }
     }
   }
@@ -1890,11 +1898,22 @@ function runAudit(targetDir, options = {}) {
   // see the project root, not the subdirectory the user happened to
   // scan. Existing rules that only need the file list (e.g. DEP-002)
   // can still ignore the second argument.
+  //
+  // BUG-041: a check that proves an absence across the project
+  // (`evidence: "project"`: DEP-001 no health route, WEB-002 no CSP)
+  // cannot answer from a subfolder or one file, so on a partial scan it
+  // gets the project root's files and its finding names the project
+  // root. A presence check (DEP-002) keeps the scanned files: a hit
+  // there is true for the part the user asked about.
+  let projectFiles = null;
   for (const rule of AUDIT_RULES) {
     if (!rule.checkFn) continue;
-    const triggered = rule.checkFn(files, projectRoot);
-    if (triggered) {
-      allFindings.push({ file: targetDir, line: null, content: null, rule });
+    const wholeProject = rule.evidence === "project";
+    const evidence = wholeProject && projectRoot !== scanRoot
+      ? (projectFiles ??= collectFiles(projectRoot, allExtensions))
+      : files;
+    if (rule.checkFn(evidence, projectRoot)) {
+      allFindings.push({ file: wholeProject ? projectRoot : targetDir, line: null, content: null, rule });
     }
   }
 

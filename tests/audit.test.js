@@ -2033,6 +2033,56 @@ describe("WEB-002 — nginx server block with no CSP (1.5.0)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// BUG-041: partial scans (a subfolder or one file of a project)
+// ---------------------------------------------------------------------------
+
+describe("BUG-041 — project checks on a partial scan see the whole project", () => {
+  // DevNeural's shape: the health route lives in one folder, the audit is
+  // pointed at another.
+  const server = (withHealth) => ({
+    "package.json":           JSON.stringify({ dependencies: { express: "4.21.0" } }),
+    "src/dashboard/routes.ts": withHealth ? `router.get("/health", (_req, res) => res.json({ ok: true }));\n` : `router.get("/stats", stats);\n`,
+    "src/capture/hooks/session.ts": `export function onSession(e: unknown) { return e; }\n`,
+  });
+  const auditAt = (files, rel) => {
+    const dir = makeProject(files);
+    try {
+      const report = spawnSync("node", [AUDIT_SCRIPT, path.join(dir, rel), "--json"], { encoding: "utf8" });
+      return JSON.parse(report.stdout);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  test("auditing a subfolder of a project with a health route does not report DEP-001 (DevNeural's case)", () => {
+    assert.ok(!hasFinding(auditAt(server(true), "src/capture/hooks"), "DEP-001"));
+  });
+
+  test("auditing one file of a project with a health route does not report DEP-001", () => {
+    assert.ok(!hasFinding(auditAt(server(true), "src/capture/hooks/session.ts"), "DEP-001"));
+  });
+
+  test("a project that really has no health route still reports DEP-001 on a subfolder scan", () => {
+    assert.ok(hasFinding(auditAt(server(false), "src/capture/hooks"), "DEP-001"));
+  });
+
+  test("WEB-002 on a subfolder sees CSP middleware elsewhere in the project", () => {
+    const files = {
+      "requirements.txt":   "fastapi==0.115.0\n",
+      "deploy/nginx.conf":  "server {\n  listen 80;\n  server_name app.example.com;\n}\n",
+      "app/security.py":    "app.add_middleware(CSPMiddleware)  # sets Content-Security-Policy\n",
+      "app/routes/items.py": "def list_items():\n    return []\n",
+    };
+    assert.ok(!hasFinding(auditAt(files, "app/routes"), "WEB-002"));
+  });
+
+  test("a single file given as the target is scanned", () => {
+    const report = auditAt({ "package.json": "{}", "src/calc.js": "const r = eval(input);\n" }, "src/calc.js");
+    assert.ok(hasFinding(report, "INJ-001"), "the target file itself must be audited");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Rules that had no test before 2026-11-10 (gate plan, step 0).
 // One sample each rule must flag and one it must not. A rule that fails
 // its own fixture is logged in BUGS.md; the fixture is not loosened.

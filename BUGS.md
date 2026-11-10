@@ -52,6 +52,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-038 | OPEN | Small hook and audit defects: deny message loses the file name, NGINX check cost, CSP comment suppresses WEB-002 |
 | BUG-039 | OPEN | `DEP-002` can never fire: the walker never collects a bare `.env` file |
 | BUG-040 | OPEN | Audit `INJ-001` (eval) fires on any call whose name ends in `eval`, e.g. `retrieval(` |
+| BUG-041 | RESOLVED | Partial scans: project checks judge the scanned subtree as the whole project (false `DEP-001`), and a single-file target scans nothing |
 
 <!-- INDEX END -->
 
@@ -561,5 +562,16 @@ Found by the fixtures for the audit's INJ-001 (gate plan step 0).
 - The pattern is `/eval\s*\(/` with no word boundary, so `retrieval(query)` is reported CRITICAL as "Direct user input passed to eval()".
 - The description also overstates what is checked: any `eval(` fires, with or without user input. The likely fix is `\beval\s*\(` (and `new Function(`, which the rule does not cover), with the description matched to what it detects.
 - The fixture is kept as a known-bug test (`knownBug("BUG-040", ...)`).
+
+### BUG-041: Partial scans: project checks judge the scanned subtree as the whole project (false `DEP-001`), and a single-file target scans nothing
+
+**Status:** RESOLVED · **Found:** 2026-11-10 · **Fixed:** 2026-11-10
+
+Reported by DevNeural, reproduced by DevNeural's Lex: `node security/03-audit.js 07-daemon/src/capture/hooks`, run from DevNeural, reports DEP-001 although DevNeural serves `GET /health` in `07-daemon/src/dashboard/routes.ts`. Reproduced again here on a scratch project.
+
+- Project checks (`checkFn`) received `files`, collected from the scan root, while `projectRoot` (already found for manifests and the allowlist) was used only for manifests. A check that proves an absence across the project then answers from part of it: DEP-001 (no health route) and WEB-002 (no CSP anywhere; its nginx search already used the project root, its CSP search did not) both report falsely on a subfolder scan. DEP-002 (`.env` present) is a presence check, so a hit in the scanned subtree is true.
+- A file given as the target: `collectFiles()` called `readdirSync` on it, failed, and returned no files, so the audit scanned nothing and reported only project checks. Same trigger (a partial scan), found while reproducing this bug.
+
+Fix: project checks declare `evidence: "project"` when they prove an absence (DEP-001, WEB-002) and then read the project root's files on a partial scan; `collectFiles()` accepts a file target. Tests: `tests/audit.test.js`, "BUG-041" block. Verified live: the pre-fix engine reports DEP-001 on DevNeural's `07-daemon/src/capture/hooks`, the fixed engine does not.
 
 <!-- DETAILS END -->
