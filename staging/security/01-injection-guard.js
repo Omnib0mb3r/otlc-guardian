@@ -236,8 +236,23 @@ function decodeHtmlEntities(text) {
  * @param {string} text
  * @returns {string[]}
  */
+// Line and paragraph separators (and NEL) break a line, so they read as
+// whitespace, not as nothing; INVISIBLE_STRIP_PATTERN would delete them
+// and join the words around them. An HTML comment holding only whitespace
+// or invisible characters renders as nothing between two words (BUG-071).
+const LINE_SEPARATORS    = /[\u0085\u2028\u2029]/g;
+const EMPTY_HTML_COMMENT = /<!--\s*-->/g;
+
+/** The text as the patterns read it: NFKC, separators as spaces, invisibles and empty comments removed. */
+function baseView(text) {
+  return text.normalize("NFKC")
+    .replace(LINE_SEPARATORS, " ")
+    .replace(INVISIBLE_STRIP_PATTERN, "")
+    .replace(EMPTY_HTML_COMMENT, " ");
+}
+
 function scanViews(text) {
-  const base   = text.normalize("NFKC").replace(INVISIBLE_STRIP_PATTERN, "");
+  const base   = baseView(text);
   const tagRun = text.match(TAG_CHAR_PATTERN);
 
   const compact = text.replace(/\s/g, "");
@@ -725,7 +740,7 @@ export function scanChange(before, after, mode = "all") {
   const rules    = new Map([...INJECTION_PATTERNS, ...SECRET_PATTERNS].map((r) => [r.id, r]));
   // Both windows start at `from` after the same text, so they share the
   // fence state there, read from that text as the base view reads it.
-  const fence    = fenceAtEnd(original.slice(0, from).normalize("NFKC").replace(INVISIBLE_STRIP_PATTERN, ""));
+  const fence    = fenceAtEnd(baseView(original.slice(0, from)));
   const partial  = from > 0 && original[from - 1] !== "\n";
   const oldKinds = viewKinds(oldViews, fence, partial);
   const newKinds = viewKinds(newViews, fence, partial);

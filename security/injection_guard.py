@@ -137,6 +137,11 @@ INVISIBLE_UNICODE_PATTERN = re.compile(
 INVISIBLE_STRIP_PATTERN = re.compile(
     "[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u2028-\u202F\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\U000E0000-\U000E0FFF]"
 )
+# Line and paragraph separators (and NEL) read as whitespace, not as nothing;
+# an HTML comment holding only whitespace renders as nothing (BUG-071).
+LINE_SEPARATORS = re.compile("[\u0085\u2028\u2029]")
+EMPTY_HTML_COMMENT = re.compile(r"<!--\s*-->")
+
 
 TAG_CHAR_PATTERN = re.compile("[\U000E0020-\U000E007E]")
 
@@ -267,7 +272,10 @@ def _normalize_for_scan(text: str) -> str:
     """
     import unicodedata, urllib.parse, html
 
-    base = INVISIBLE_STRIP_PATTERN.sub("", unicodedata.normalize("NFKC", text))
+    base = unicodedata.normalize("NFKC", text)
+    base = LINE_SEPARATORS.sub(" ", base)
+    base = INVISIBLE_STRIP_PATTERN.sub("", base)
+    base = EMPTY_HTML_COMMENT.sub(" ", base)
     views = [base]
 
     def add_view(view: Optional[str]) -> None:

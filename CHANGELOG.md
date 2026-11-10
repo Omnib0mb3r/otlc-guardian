@@ -201,6 +201,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A line separator or an empty HTML comment no longer splits a pattern
+  (BUG-071, re-probe 2 S11).** U+2028 and U+2029 were in the set of
+  invisible characters the scanner deletes, so `ignore\u2028all previous
+  instructions` became `ignoreall previous instructions` and matched
+  nothing; an empty HTML comment (`ignore all <!----> previous`) left the
+  words apart. The base view now reads line and paragraph separators and
+  NEL as spaces, and removes comments holding only whitespace or invisible
+  characters, before the patterns run. A lone U+2028 is still reported as
+  invisible Unicode. The Python port has the same change, live.
+
 - **Prose that names an opening and closing role tag is not a delimiter
   (BUG-043, re-probe 2 S8).** "Wrap the request in <user> and </user>
   tags." and "Put the text in a <user>...</user> block." were still denied
