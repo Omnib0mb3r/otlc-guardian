@@ -72,7 +72,7 @@ Short answer: **no, but it's a controlled trust mechanism worth being explicit a
 
 Two ways to exempt a file from `guardian audit` scanning:
 
-1. **Per-file marker** (`otlc-guardian:audit-exempt`) - drop a comment in any file.
+1. **Per-file marker** (`otlc-guardian:audit-exempt`) - a comment line that starts with the marker, in the file's first 4 KB. A mention elsewhere (a string, prose) does not exempt the file.
 2. **Central allowlist** (`security/.audit-allowlist`) - one file, one line per exemption, **required reason field**.
 
 For an attacker to abuse either mechanism, they need write access to your repository. If they have that, they can already do strictly worse things - modify the audit script itself, modify the patterns, add backdoors, change the CI workflow.

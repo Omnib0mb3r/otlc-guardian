@@ -75,7 +75,7 @@ carry the reasoning that makes a fix stick.
 A finding is suppressed only when it is genuinely wrong, and only in a way a
 reviewer can see:
 
-- per-file: an `otlc-guardian:audit-exempt` marker in the first 4 KB
+- per-file: a comment line starting with `otlc-guardian:audit-exempt` in the first 4 KB
 - central: a line in `security/.audit-allowlist` with a mandatory `# reason:` field
 
 Both are reported in every audit run. If the exempt count grows, that is visible

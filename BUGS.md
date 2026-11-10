@@ -68,7 +68,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-054 | SMOKE-TESTING | Audit secret rules lag the runtime guard: SEC-003 matches only `ghp_`, SEC-004 misses OpenSSH, EC and encrypted keys |
 | BUG-055 | SMOKE-TESTING | `DEP-001` reads files with no error handling, so one unreadable file crashes the audit |
 | BUG-056 | SMOKE-TESTING | Audit allowlist accepts an entry with an empty `# reason:`, though SECURITY.md says entries without a reason are rejected |
-| BUG-057 | OPEN | Any mention of `otlc-guardian:audit-exempt` in a file's first 4 KB exempts the whole file, including a string or a comment about the marker |
+| BUG-057 | SMOKE-TESTING | Any mention of `otlc-guardian:audit-exempt` in a file's first 4 KB exempts the whole file, including a string or a comment about the marker |
 | BUG-058 | OPEN | Hook `ignorePaths` is a substring match: an entry such as `docs` exempts every path containing it |
 | BUG-059 | OPEN | Audit exemptions do not reach the project checks: `DEP-001`, `DEP-002`, `WEB-002` still read exempt files |
 | BUG-060 | SMOKE-TESTING | `guardian init` copies Guardian's own `.github/` (CODEOWNERS naming Guardian's maintainer, templates) and allowlist into every project |
@@ -758,9 +758,11 @@ An allowlist line with `# reason:` and nothing after it is accepted. SECURITY.md
 
 ### BUG-057: The audit-exempt marker matches a mention
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 The marker check looks for the string anywhere in the first 4096 characters, so a file that only names the marker (in a string, a regex or a comment about it) is exempt in full. `bin/guardian.js` and `security/03-audit.js` both qualify that way today. The exemption is listed in the summary, so it is visible, but it is not the deliberate comment the docs describe. Fix: require the marker as a standalone comment line.
+
+**Fix (2026-11-10).** `exemptionMechanism()` in `security/03-audit.js` tests `MARKER_LINE` (multiline: optional indent, a comment opener `//`, `#`, `/*`, `*`, `<!--` or `--`, then the marker not followed by a word character or `-`) against the first `MARKER_WINDOW` (4096) characters. Tests: `tests/audit.test.js`, "BUG-057" block (6 comment forms that exempt; string, regex, prose, backquoted mention, trailing comment and a longer word that do not; the 6 negatives failed before the fix). The repo audit now reports 0 marker exemptions (it was 1, manual chapter 06). Docs: manual chapters 02 and 06, FAQ.md, SECURITY.md, skill/SKILL.md. Smoke test: in a real project, a file whose header only names the marker in prose shows its findings, and `// otlc-guardian:audit-exempt - reason` exempts it.
 
 ### BUG-058: Hook `ignorePaths` is a substring match
 

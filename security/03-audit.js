@@ -1563,9 +1563,11 @@ function collectFiles(rootDir, extensions) {
 // Two ways to exempt a file from audit scanning, both visible to reviewers:
 //
 //   1. PER-FILE MARKER (otlc-guardian:audit-exempt)
-//      A file containing this string in its first 4 KB is skipped. Easy
-//      for end users - drop the marker into a file header comment and
-//      you're done. Greppable in any code review.
+//      A file whose first 4 KB holds a comment line that starts with
+//      the marker is skipped. Easy for end users - drop the marker into
+//      a file header comment and you're done. Greppable in any code
+//      review. A mere mention (a string, a regex, prose about the
+//      marker) does not count (BUG-057).
 //
 //   2. CENTRAL ALLOWLIST (security/.audit-allowlist)
 //      A single file listing each exempted path with a required reason.
@@ -1579,6 +1581,17 @@ function collectFiles(rootDir, extensions) {
 // Visibility is the strongest defense against the exemption being abused.
 
 const AUDIT_EXEMPT_MARKER = "otlc-guardian:audit-exempt";
+const MARKER_WINDOW = 4096;
+
+// A line that is nothing but a comment opener (`//`, `#`, `/*`, a JSDoc
+// `*`, `<!--`, `--`) followed by the marker as a whole word. Text after
+// it (a reason, a closing `*/` or `-->`) is allowed. Matched per line,
+// so a marker trailing code on the same line does not count. The
+// marker text has no regex metacharacters, so it is used as is.
+const MARKER_LINE = new RegExp(
+  String.raw`^[ \t]*(?:\/\/+|#+|\/\*+|\*+|<!--|--)[ \t]*` + AUDIT_EXEMPT_MARKER + String.raw`(?![\w-])`,
+  "m"
+);
 
 /**
  * Load the central allowlist from security/.audit-allowlist if present.
@@ -1648,7 +1661,7 @@ function exemptionMechanism(filePath, content, allowlist, rootDir) {
   if (allowlist.has(rel)) return "allowlist";
 
   // Marker fallback - for end-user projects that prefer per-file headers
-  if (content.slice(0, 4096).includes(AUDIT_EXEMPT_MARKER)) return "marker";
+  if (MARKER_LINE.test(content.slice(0, MARKER_WINDOW))) return "marker";
 
   return null;
 }

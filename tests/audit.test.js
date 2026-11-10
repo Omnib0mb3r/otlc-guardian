@@ -2427,6 +2427,41 @@ describe("BUG-056: allowlist entries need a non-empty reason", () => {
 });
 
 // ---------------------------------------------------------------------------
+// BUG-057: only a standalone marker comment exempts a file
+// ---------------------------------------------------------------------------
+
+describe("BUG-057: the audit-exempt marker must be its own comment line", () => {
+  const M = "otlc-guardian:" + "audit-exempt";
+  const body = `const k = "${"AKIA" + "ABCDEFGHIJKLMNOP"}";\n`;
+  const exempt = (name, head) => {
+    const report = withTempProject({ [name]: head + "\n" + body }, (dir) => runAuditOn(dir));
+    return report.exempt.marker.length === 1 && !hasFinding(report, "SEC-002");
+  };
+
+  for (const [label, name, head] of [
+    ["a // line comment", "src/a.js", `// ${M} - legacy fixture, tracked in BUGS.md`],
+    ["an indented // comment", "src/a.js", `  //${M}`],
+    ["a # comment in Python", "src/a.py", `# ${M}  fixture`],
+    ["a block comment", "src/a.js", `/* ${M} */`],
+    ["a JSDoc continuation line", "src/a.js", `/**\n * ${M} - generated file\n */`],
+    ["an HTML comment", "src/a.js", `<!-- ${M} -->`],
+  ]) {
+    test(`${label} exempts the file`, () => assert.ok(exempt(name, head)));
+  }
+
+  for (const [label, head] of [
+    ["the marker in a string", `const MARKER = "${M}";`],
+    ["the marker in a regex", `const re = /${M}/;`],
+    ["a comment that talks about the marker", `// Add the ${M} marker to skip a file.`],
+    ["a backquoted mention in a comment", `// the \`${M}\` marker is supported`],
+    ["a trailing comment after code", `run(); // ${M}`],
+    ["a longer word that starts with the marker", `// ${M}ion`],
+  ]) {
+    test(`${label} does not exempt the file`, () => assert.ok(!exempt("src/a.js", head)));
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

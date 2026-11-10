@@ -172,6 +172,13 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **Only a marker comment exempts a file (BUG-057).** Any occurrence of
+  `otlc-guardian:audit-exempt` in a file's first 4 KB used to exempt it,
+  including a string, a regex or a sentence about the marker. The marker
+  now counts only on its own comment line (`//`, `#`, `/*`, `*`, `<!--`,
+  `--`), as a whole word. A file that relied on a bare mention is audited
+  again; give it a real marker line or an allowlist entry.
+
 - **An allowlist entry with an empty reason is rejected (BUG-056).**
   `src/a.js  # reason:` with nothing after the prefix used to exempt the
   file, though SECURITY.md says entries without a reason are rejected.
