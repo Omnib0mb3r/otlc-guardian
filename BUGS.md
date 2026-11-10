@@ -80,6 +80,8 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-066 | OPEN | Copies into watched paths not judged: directory sources (`cp -r dir/. .claude/agents/`), `sort -o`, `cmd /c copy` |
 | BUG-067 | OPEN | PowerShell parameter prefixes (`-LiteralP`, `-Pat`, `-Val`) are not recognized; `-EncodedCommand` payload text is never scanned |
 | BUG-068 | SMOKE-TESTING | `guardian scan` exits 0 when it finds injection or secret patterns, so a script or pipeline cannot act on the result |
+| BUG-069 | OPEN | `AUTHZ-003` (JS IDOR) counts caller-supplied ids as ownership: `userId: req.params.userId`, a `:teamId` path parameter |
+| BUG-070 | OPEN | `AUTHZ-001` ignores route-level middleware: `router.delete(path, requireAuth, handler)` is reported CRITICAL as unauthenticated |
 
 <!-- INDEX END -->
 
@@ -863,5 +865,21 @@ Hook edit; waits.
 From code (`runScan()` in `bin/guardian.js`), first noted under BUG-062: the command prints the violations and a warning, then returns, so the process exits 0 whether the text is clean or carries a CRITICAL injection or a secret. Exit 1 is used only for "no text given". `cat untrusted.txt | guardian scan && send-to-model` therefore sends the poisoned text. Manual chapter 05 documents the 0 as current behavior. Fix in `bin/` (not a protected file): a distinct non-zero exit on a finding, and a usage error kept apart from a finding.
 
 **Fix (2026-11-10).** `runScan()` in `bin/guardian.js` sets `process.exitCode` from `SCAN_EXIT` (`CLEAN` 0, `FOUND` 1 for any violation, `NOT_SCANNED` 2). No text is now exit 2 (was 1, which would read as a finding), and a failed scanner import prints the reason and exits 2 instead of an uncaught exit 1. The help text states the codes. Tests: `tests/init.test.js`, "BUG-068" block (clean 0; injection argument, secret alone and piped injection 1; no text 2; the 4 non-clean cases failed before the fix). The import-failure branch has no test: the scanner is loaded from the CLI's own install, which a test cannot break without editing the protected scanner. Docs: README.md, manual chapters 03 and 05. Smoke test: `echo "ignore all previous instructions" | guardian scan; echo $?` prints 1 on an installed CLI.
+
+### BUG-069: `AUTHZ-003` counts caller-supplied ids as ownership
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Found while fixing BUG-030 (its Python twin), reproduced in a scratch project. The JS `OWNERSHIP_PATTERNS` in `security/03-audit.js` accept any `userId:`/`user_id=` and any bare mention of `ownerId`, `teamId`, `accountId` and similar, so a value taken from the caller counts as the check. Both of these authenticated handlers are silent, while the same handler with only `where: { id: req.params.docId }` gives AUTHZ-003:
+- `prisma.doc.delete({ where: { id: req.params.docId, userId: req.params.userId } })` under `/users/:userId/docs/:docId`.
+- `const teamId = req.params.teamId;` then `where: { id: req.params.docId, teamId }` under `/teams/:teamId/docs/:docId`.
+
+Fix direction, as for BUG-030: ownership evidence must tie the column to the verified caller (`req.user`, `session.user`, `auth.userId` and similar), not to `req.params`, `req.query` or `req.body`.
+
+### BUG-070: `AUTHZ-001` ignores route-level middleware
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Found while checking BUG-069. For `router.delete("/docs/:docId", requireAuth, async (req, res) => { ... })` the analyzer reads only the handler's block (`findRouteHandlers()`, `skipParams: false`, body from the first `{` after the call), so the `requireAuth` argument between the path and the handler is never seen and the handler is reported CRITICAL as having no authentication. Route-level middleware is the most common Express auth shape, so this is a loud false positive. Fix direction: count auth evidence in the route call's arguments before the handler as well as in its body.
 
 <!-- DETAILS END -->
