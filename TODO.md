@@ -1,5 +1,19 @@
 # otlc-guardian TODO
 
+## R&D AND PLAN ONLY: Self-Growing Gate spec (Michael 2026-11-10 00:09 EST, via DevNeural Lex)
+
+Spec: C:/dev/data/lex-phone/files/c3136af8-4030-429c-94b5-5e69caa5c9ea-OTLC_Guardian_Self-Growing_Gate_Spec.md. Michael's terms: research and a plan for his approval. Nothing is built, merged, installed or wired into CI until he approves it. No brainstorm supervises otlc-guardian yet, so this waits here.
+
+Guardian's part: Lanes 1 to 4 (Semgrep layer, guardian deploy-check, review briefs, dependency audits), Lane 5's hard-no PreToolUse hook as a Guardian component, accepted-risks files, the monthly growth loop and the coverage map. The DevNeural hardening items section belongs to DevNeural.
+
+Deliverable: read all of this repo's code first (audit engine, rules, skill, guides). Then a full plan, per lane: what exists today with file evidence, what changes, pros and cons, blast radius (projects and hooks touched, what could regress, rollback), build order. The spec's order (deploy-check, Semgrep, briefs, growth loop) is a suggestion, not a decision. Publish it as an artifact for Michael.
+
+Points to weigh:
+- The growth loop overlaps the threat-feed spec below (2026-11-08). Merge the two into one design, not two loops.
+- DevNeural already runs a cross-project write guard as a PreToolUse hook; on the live machine its matcher lacks Bash, though DevNeural's install-hooks.ts:156 and manual chapter 13 say it covers it. The hard-no hook extends or sits on that guard, never duplicates it; agree the boundary with DevNeural's Lex (brainstorm 4bbafb48) first.
+- Signed Lex Phone approvals are the biggest piece: their own phase, after the hard-no hook. The same phone key may serve car box authentication, which DevNeural is designing.
+- A hard no fails closed and must not disturb unattended workers that never touch the list.
+
 ## SPEC: Guardian keeps itself current (threat feed)
 
 Added 2026-11-08 by Lex (White Board brainstorm), from Michael's ask: "write up a little spec for OTLC Guardian to check those known sources against itself, so whenever Guardian is called it is as up to date as we can make it." Not started. Start after the plan-usage hold lifts (2026-11-10 08:00 EST).
