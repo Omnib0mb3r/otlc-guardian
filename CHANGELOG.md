@@ -172,6 +172,12 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **A project under a folder named `test`, `tests` or `spec` keeps its
+  rules (BUG-052).** The test-file exclusions ran on the absolute path,
+  so every file of such a project counted as test code and lost the 17
+  test-excluded rules. `excludedByRule()` now tests the path inside the
+  project root.
+
 - **What an audit exemption means for the project checks is defined
   (BUG-059).** An exemption silences findings about a file and never
   hides the file as evidence. The absence checks DEP-001 and WEB-002

@@ -1666,7 +1666,21 @@ function exemptionMechanism(filePath, content, allowlist, rootDir) {
   return null;
 }
 
-function scanFile(filePath, rule, exemptionState) {
+/**
+ * True when a rule's excludePatterns match the file. The patterns are
+ * tested against the path inside the project ("/src/a.test.js"), never
+ * the absolute path: a project that lives under a folder named tests
+ * used to lose every test-excluded rule on every file (BUG-052). The
+ * leading "/" lets the directory forms match a folder at the project
+ * root.
+ */
+function excludedByRule(rule, file, projectRoot) {
+  if (!rule.excludePatterns) return false;
+  const inProject = "/" + path.relative(projectRoot, file).replace(/\\/g, "/");
+  return rule.excludePatterns.some((ep) => ep.test(inProject));
+}
+
+function scanFile(filePath, rule, scanContext) {
   if (!rule.pattern) return [];
 
   let content;
@@ -1675,10 +1689,10 @@ function scanFile(filePath, rule, exemptionState) {
 
   // Whole-file exemption - handled outside per-rule logic so the same
   // file isn't checked once per rule. State is precomputed in runAudit.
-  if (exemptionState?.exemptPaths?.has(filePath)) return [];
+  if (scanContext.exemptPaths.has(filePath)) return [];
 
   // Per-rule exclude patterns (e.g. ERR-003 already excludes *.test.*)
-  if (rule.excludePatterns?.some((ep) => ep.test(filePath))) return [];
+  if (excludedByRule(rule, filePath, scanContext.projectRoot)) return [];
 
   const findings = [];
 
@@ -1874,7 +1888,7 @@ function runAudit(targetDir, options = {}) {
     }
   }
 
-  const exemptionState = { exemptPaths };
+  const scanContext = { exemptPaths, projectRoot };
 
   status(`    Files   : ${files.length} scanned`);
   status(`    Exempt  : ${exemptPaths.size} (${exemptByMarker.length} marker, ${exemptByList.length} allowlist)`);
@@ -1902,7 +1916,7 @@ function runAudit(targetDir, options = {}) {
     );
 
     for (const file of relevantFiles) {
-      const findings = scanFile(file, rule, exemptionState);
+      const findings = scanFile(file, rule, scanContext);
       allFindings.push(...findings);
     }
   }
@@ -1931,7 +1945,7 @@ function runAudit(targetDir, options = {}) {
 
     for (const file of relevantFiles) {
       if (exemptPaths.has(file)) continue;
-      if (rule.excludePatterns?.some((ep) => ep.test(file))) continue;
+      if (excludedByRule(rule, file, projectRoot)) continue;
 
       let content;
       try { content = fs.readFileSync(file, "utf8"); }

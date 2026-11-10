@@ -63,7 +63,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-049 | OPEN | Runtime `scan()` with an unknown `mode` runs no rules and returns clean (fails open on a typo) |
 | BUG-050 | OPEN | `guardInput` with `blockOnSecrets: false` still throws on a secret, with a "prompt injection" message (Node only; Python differs) |
 | BUG-051 | SMOKE-TESTING | Audit of a path that does not exist scans 0 files and exits 0, even with `--fail-on-error` |
-| BUG-052 | OPEN | Audit: a project inside a folder named `test`, `tests` or `spec` loses every rule that skips test files |
+| BUG-052 | SMOKE-TESTING | Audit: a project inside a folder named `test`, `tests` or `spec` loses every rule that skips test files |
 | BUG-053 | SMOKE-TESTING | Importing `security/03-audit.js` (package export `./audit`) runs an audit of the cwd as a side effect |
 | BUG-054 | SMOKE-TESTING | Audit secret rules lag the runtime guard: SEC-003 matches only `ghp_`, SEC-004 misses OpenSSH, EC and encrypted keys |
 | BUG-055 | SMOKE-TESTING | `DEP-001` reads files with no error handling, so one unreadable file crashes the audit |
@@ -718,9 +718,11 @@ Found by the manual writer; reproduced: `node security/03-audit.js ./does-not-ex
 
 ### BUG-052: Audit: projects under a test-named folder lose the test-skipping rules
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 Found by the manual writer; reproduced: the same `console.log` file reports ERR-003 at `scratch/proj/src/a.js` and nothing at `scratch/tests/proj/src/a.js`. The test-file check runs on the absolute path, so any project whose parent folders include `test`, `tests` or `spec` is treated as test code throughout. Fix: judge the path relative to the project root.
+
+**Fix (2026-11-10).** New `excludedByRule(rule, file, projectRoot)` in `security/03-audit.js` tests `excludePatterns` against `"/" + path.relative(projectRoot, file)` with forward slashes; `scanFile()` (its third argument renamed `scanContext`, now carrying `projectRoot`) and the analyzer loop in `runAudit()` both use it. Tests: `tests/audit.test.js`, "BUG-052" block (ERR-003 in a project under `tests/`, `test/`, `spec/` and `__tests__/`; a `tests/` folder in the project and a subfolder scan of it still excluded; a root `test_app.py` excluded while `app.py` beside it gets CFG-001; 5 failed before the fix). Manual chapter 02 updated. Smoke test: `guardian audit` on a real project cloned under a folder named `tests` reports its ERR-003 and CFG findings.
 
 ### BUG-053: Importing the audit module runs an audit
 

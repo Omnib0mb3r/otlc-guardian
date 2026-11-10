@@ -2514,6 +2514,55 @@ describe("BUG-059: exemptions and the project checks", () => {
 });
 
 // ---------------------------------------------------------------------------
+// BUG-052: test-file exclusions judge the path inside the project
+// ---------------------------------------------------------------------------
+//
+// TEST_FILE_EXCLUDES used to run on the absolute path, so a project that
+// lives under a folder named test, tests or spec lost every
+// test-excluded rule on every file.
+
+describe("BUG-052: a project under a test-named folder keeps its rules", () => {
+  const withNested = (parent, files, fn) => withTempProject({}, (base) => {
+    const root = path.join(base, parent, "proj");
+    mkdirSync(path.join(root, ".git"), { recursive: true });
+    for (const [name, content] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
+      writeFileSync(path.join(root, name), content, "utf8");
+    }
+    return fn(root);
+  });
+
+  for (const parent of ["tests", "test", "spec", "__tests__"]) {
+    test(`ERR-003 fires in src/ of a project under ${parent}/`, () => {
+      withNested(parent, { "src/a.js": "console.log('x');\n" }, (root) => {
+        assert.ok(hasFinding(runAuditOn(root), "ERR-003"));
+      });
+    });
+  }
+
+  test("a tests/ folder inside the project is still excluded", () => {
+    withNested("tests", { "tests/a.js": "console.log('x');\n", "src/test_b.py": "print('x')\n" }, (root) => {
+      const report = runAuditOn(root);
+      assert.ok(!hasFinding(report, "ERR-003"), JSON.stringify(report.findings.map((f) => [f.rule.id, f.file])));
+    });
+  });
+
+  test("a subfolder scan of tests/ inside the project is still excluded", () => {
+    withNested("spec", { "tests/a.js": "console.log('x');\n" }, (root) => {
+      assert.ok(!hasFinding(runAuditOn(path.join(root, "tests")), "ERR-003"));
+    });
+  });
+
+  test("a root-level test_*.py is still excluded, and app.py beside it is not", () => {
+    const url = `URL = "http://localhost:3000"\n`;
+    withNested("tests", { "test_app.py": url, "app.py": url, "requirements.txt": "fastapi\n" }, (root) => {
+      const files = runAuditOn(root).findings.filter((f) => f.rule.id === "CFG-001").map((f) => path.basename(f.file));
+      assert.deepEqual(files, ["app.py"]);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 
