@@ -374,16 +374,67 @@ const OBJECT_ID_PATTERNS = [
 ];
 
 // Evidence that the handler checks whether THIS caller may touch THIS
-// object. Ownership column, assignment/junction lookup, role/permission
-// gate, or a centralised access-control helper.
+// object: an owner or tenant column tied to the verified caller, an
+// assignment/junction lookup, a role/permission gate, or a centralised
+// access-control helper.
+//
+// An owner column on its own proves nothing: `userId: req.params.userId`
+// or `const teamId = req.params.teamId; where: { teamId }` scopes by a
+// value the caller chose. Those used to count (BUG-069, the JS twin of
+// BUG-030), so the column must be compared with, or bound to, the caller
+// (JS_PRINCIPAL) or a name taken from the caller earlier in the handler.
+const JS_PRINCIPAL = String.raw`(?:(?:req|request|ctx|c|event|locals|context)\??\.(?:state\??\.user|user|session|auth)|session\??\.user|currentUser|viewer|user|me|auth(?:\(\))?|(?:token|claims|decoded|payload|jwt)\??\.sub)(?![\w$])`;
+const JS_OWNER_FIELD = String.raw`(?:owner|user|author|creator|tenant|team|account|customer|org(?:anization)?|workspace|company|member)(?:Id|ID|_id|_uuid)?`;
+const JS_COMPARE = String.raw`\s*(?::|===?|!==?)\s*`;
+
 const OWNERSHIP_PATTERNS = [
-  /\bowner(?:Id|_id)\b/i, /\buser(?:Id|_id)\s*[:=]/i, /\bauthor(?:Id|_id)\b/i,
-  /\btenant(?:Id|_id)\b/i, /\bteam(?:Id|_id)\b/i, /\baccount(?:Id|_id)\b/i,
+  // userId: req.user.id / doc.ownerId !== session.user.id / "user_id": me.id
+  new RegExp(String.raw`\b${JS_OWNER_FIELD}["'\x60]?${JS_COMPARE}(?:await\s+)?${JS_PRINCIPAL}`),
+  // The caller on the left: req.user.id !== doc.authorId
+  new RegExp(String.raw`(?<![\w$.])${JS_PRINCIPAL}(?:\??\.[\w$]+)+\s*[!=]==?`),
+  // Query builders: .eq("user_id", req.user.id), .where("ownerId", user.id)
+  new RegExp(String.raw`\.(?:eq|where|match)\s*\(\s*["'\x60]${JS_OWNER_FIELD}["'\x60]\s*,\s*${JS_PRINCIPAL}`),
   /\bassign(?:ment|ed|ee)\b/i, /\bmembership\b/i, /\bcollaborator\b/i,
   /\bassertObjectAccess\b/, /\bcanAccess\b/, /\bauthorize\w*\s*\(/, /\bability\b/,
   /\bpermission\b/i, /\bisOwner\b/i, /\bhasAccess\b/i, /\bforbidden\b/i,
-  /\bstatus\s*:\s*403\b/, /\bstatus\s*\(\s*403\s*\)/, /\brole\b/i,
+  /\bstatus\s*:\s*403\b/, /\bstatus\s*\(\s*403\s*\)/, /\bsendStatus\s*\(\s*403\s*\)/, /\brole\b/i,
 ];
+
+const JS_PRINCIPAL_BINDING = new RegExp(
+  String.raw`\b(?:const|let|var)\s+(?:([\w$]+)|\{([^}]*)\})\s*=\s*(?:await\s+)?${JS_PRINCIPAL}`, "g"
+);
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Names bound from the caller in this body: `const userId = req.user.id`, `const { orgId } = auth()`. */
+function principalBoundNames(body) {
+  const names = new Set();
+  for (const m of body.matchAll(JS_PRINCIPAL_BINDING)) {
+    if (m[1]) names.add(m[1]);
+    for (const part of (m[2] ?? "").split(",")) {
+      // `{ id: userId = null }` binds userId; `...rest` is skipped.
+      const name = part.split("=")[0].split(":").pop().trim();
+      if (/^[\w$]+$/.test(name)) names.add(name);
+    }
+  }
+  return names;
+}
+
+function hasJsOwnership(body) {
+  if (matchesAny(OWNERSHIP_PATTERNS, body)) return true;
+  const ownerField = new RegExp(String.raw`^${JS_OWNER_FIELD}$`);
+  for (const name of principalBoundNames(body)) {
+    const n = escapeRegExp(name);
+    const uses = [
+      new RegExp(String.raw`\b${JS_OWNER_FIELD}["'\x60]?${JS_COMPARE}${n}(?![\w$])`),
+      new RegExp(String.raw`(?<![\w$.])${n}(?:\??\.[\w$]+)*\s*[!=]==?\s*[\w$.?]*${JS_OWNER_FIELD}(?![\w$])`),
+      new RegExp(String.raw`\.(?:eq|where|match)\s*\(\s*["'\x60]${JS_OWNER_FIELD}["'\x60]\s*,\s*${n}(?![\w$])`),
+    ];
+    // Shorthand `where: { id, userId }` counts when the name is itself an owner field.
+    if (ownerField.test(name)) uses.push(new RegExp(String.raw`[{,]\s*${n}\s*[,}]`));
+    if (matchesAny(uses, body)) return true;
+  }
+  return false;
+}
 
 /**
  * Extract the body of the block whose opening `{` is at or after `from`.
@@ -566,8 +617,8 @@ function checkMissingObjectAuthz(content) {
     if (!matchesAny(OBJECT_ID_PATTERNS, handler.body)) continue;
     // Must do something with it beyond validating shape.
     if (!matchesAny(SIDE_EFFECT_PATTERNS, handler.body)) continue;
-    // An ownership signal anywhere in the block clears it.
-    if (matchesAny(OWNERSHIP_PATTERNS, handler.body)) continue;
+    // An ownership signal tied to the caller clears it (hasJsOwnership).
+    if (hasJsOwnership(handler.body)) continue;
     const destructive = DESTRUCTIVE_METHOD.test(handler.signature) || DESTRUCTIVE_METHOD.test(handler.body);
     findings.push({
       line: handler.line,
@@ -790,6 +841,23 @@ const PY_OWNERSHIP_PATTERNS = [
   /\bforbidden\b/i, /\bPermissionDenied\b/, /\bstatus_code\s*=\s*403\b/, /\bHTTP_403\w*/, /\babort\s*\(\s*403\b/,
 ];
 
+// `uid = current_user.id` then `filter_by(owner_id=uid)`: a name taken
+// from the caller counts like the caller (same rule as the JS side,
+// principalBoundNames(), BUG-069).
+const PY_PRINCIPAL_BINDING = new RegExp(String.raw`^[ \t]*(\w+)\s*=\s*${PY_PRINCIPAL}\b(?!_)`, "gm");
+
+function pyOwnershipByBoundName(body) {
+  for (const m of body.matchAll(PY_PRINCIPAL_BINDING)) {
+    const n = m[1];
+    const uses = [
+      new RegExp(String.raw`\b${PY_OWNER_FIELD}\s*(?:==|!=|=)\s*${n}\b`),
+      new RegExp(String.raw`\b${n}\s*(?:==|!=)\s*[\w.]*${PY_OWNER_FIELD}\b`),
+    ];
+    if (matchesAny(uses, body)) return true;
+  }
+  return false;
+}
+
 /** Drop `#` comments so a "# TODO: add auth" note does not count as auth. */
 function stripPyComments(text) {
   return text.split("\n").map((line) => {
@@ -878,7 +946,7 @@ function checkPyMissingObjectAuthz(content) {
     // Any execute counts here, reads included: a read by a caller-supplied
     // id with no owner check leaks someone else's row.
     if (!matchesAny(PY_SIDE_EFFECT_PATTERNS, handler.body) && !PY_EXECUTE.test(handler.body)) continue;
-    if (matchesAny(PY_OWNERSHIP_PATTERNS, whole)) continue;
+    if (matchesAny(PY_OWNERSHIP_PATTERNS, whole) || pyOwnershipByBoundName(handler.body)) continue;
     findings.push({ line: handler.line, content: handler.signature.slice(0, 120) });
   }
   return findings;

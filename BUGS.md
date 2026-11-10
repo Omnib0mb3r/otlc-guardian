@@ -80,7 +80,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-066 | OPEN | Copies into watched paths not judged: directory sources (`cp -r dir/. .claude/agents/`), `sort -o`, `cmd /c copy` |
 | BUG-067 | OPEN | PowerShell parameter prefixes (`-LiteralP`, `-Pat`, `-Val`) are not recognized; `-EncodedCommand` payload text is never scanned |
 | BUG-068 | SMOKE-TESTING | `guardian scan` exits 0 when it finds injection or secret patterns, so a script or pipeline cannot act on the result |
-| BUG-069 | OPEN | `AUTHZ-003` (JS IDOR) counts caller-supplied ids as ownership: `userId: req.params.userId`, a `:teamId` path parameter |
+| BUG-069 | SMOKE-TESTING | `AUTHZ-003` (JS IDOR) counts caller-supplied ids as ownership: `userId: req.params.userId`, a `:teamId` path parameter |
 | BUG-070 | OPEN | `AUTHZ-001` ignores route-level middleware: `router.delete(path, requireAuth, handler)` is reported CRITICAL as unauthenticated |
 
 <!-- INDEX END -->
@@ -874,13 +874,15 @@ From code (`runScan()` in `bin/guardian.js`), first noted under BUG-062: the com
 
 ### BUG-069: `AUTHZ-003` counts caller-supplied ids as ownership
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 Found while fixing BUG-030 (its Python twin), reproduced in a scratch project. The JS `OWNERSHIP_PATTERNS` in `security/03-audit.js` accept any `userId:`/`user_id=` and any bare mention of `ownerId`, `teamId`, `accountId` and similar, so a value taken from the caller counts as the check. Both of these authenticated handlers are silent, while the same handler with only `where: { id: req.params.docId }` gives AUTHZ-003:
 - `prisma.doc.delete({ where: { id: req.params.docId, userId: req.params.userId } })` under `/users/:userId/docs/:docId`.
 - `const teamId = req.params.teamId;` then `where: { id: req.params.docId, teamId }` under `/teams/:teamId/docs/:docId`.
 
 Fix direction, as for BUG-030: ownership evidence must tie the column to the verified caller (`req.user`, `session.user`, `auth.userId` and similar), not to `req.params`, `req.query` or `req.body`.
+
+**Fix (2026-11-10).** In `security/03-audit.js`, `OWNERSHIP_PATTERNS` lost its bare column mentions (`ownerId`, `userId[:=]`, `teamId`, `accountId` and the rest). Owner columns (`JS_OWNER_FIELD`) count only compared with or bound to `JS_PRINCIPAL` (`req|ctx|event|locals.user/session/auth`, `ctx.state.user`, `session.user`, `currentUser`, `viewer`, `user`, `me`, `auth()`, `token|claims|decoded.sub`), with the caller on the left, or in `.eq/.where/.match("owner_col", caller)`. New `hasJsOwnership()` also accepts names bound from the caller earlier in the body (`principalBoundNames()`: `const userId = req.user.id`, `const { orgId } = auth()`), including a shorthand `where: { id, userId }` when the name is an owner column. Helpers stay (membership, canAccess, assertObjectAccess, authorize, permission, role, 403, now also `sendStatus(403)`). For consistency the Python rule (BUG-030) gained `pyOwnershipByBoundName()` for `uid = current_user.id` then `owner_id=uid`. Tests: `tests/audit.test.js`, "BUG-069" block (3 fire, 7 silent; the two caller-supplied cases, the destructured binding and the Supabase `eq` failed before the fix) and 2 more silent cases in the BUG-030 block (the bound-name one failed before the fix). Manual chapter 02 updated. Smoke test: `guardian audit` on an Express app with `prisma.doc.delete({ where: { id: req.params.docId, userId: req.params.userId } })` behind auth reports AUTHZ-003.
 
 ### BUG-070: `AUTHZ-001` ignores route-level middleware
 

@@ -2696,6 +2696,8 @@ describe("BUG-030: AUTHZ-013 catches the textbook IDOR", () => {
     ["the caller on the left", `doc = db.get(Document, doc_id)\n    if user.id != doc.owner_id:\n        abort(403)`],
     ["a tenant column scoped to the caller", `doc = db.query(Document).filter(Document.id == doc_id, Document.tenant_id == user.tenant_id).first()`],
     ["an authorize() helper", `doc = db.get(Document, doc_id)\n    authorize(user, "delete", doc)`],
+    ["a name taken from the caller first (BUG-069 parity)", `uid = current_user.id\n    doc = db.query(Document).filter_by(id=doc_id, owner_id=uid).first()`],
+    ["a name taken from the caller, path id named user_id elsewhere", `owner = user.id\n    doc = db.query(Document).filter(Document.id == doc_id, Document.owner_id == owner).first()`],
   ]) {
     test(`silent with ${label}`, () => {
       assert.ok(!fires(handler(
@@ -2855,6 +2857,55 @@ describe("BUG-033: WEB-001 token constants, wrapped tokens, refreshCount", () =>
     fires(line);
     assert.ok(Date.now() - start < 5000, `took ${Date.now() - start} ms`);
   });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-069: AUTHZ-003 needs an ownership check tied to the caller
+// ---------------------------------------------------------------------------
+//
+// The JS twin of BUG-030. An owner or tenant column scoped by a value the
+// caller sent (req.params, req.query, req.body) is no ownership check.
+
+describe("BUG-069: AUTHZ-003 catches caller-supplied ownership", () => {
+  const route = (path, ...body) => [
+    `router.delete("${path}", async (req, res) => {`,
+    `  if (!req.user) return res.status(401).end();`,
+    ...body.map((l) => "  " + l),
+    `  res.status(204).end();`,
+    `});`,
+    ``,
+  ].join("\n");
+  const fires = (src) => auditFires({ "src/routes.js": src }, "AUTHZ-003");
+
+  test("fires when userId comes from the path", () => {
+    assert.ok(fires(route("/users/:userId/docs/:docId",
+      `await prisma.doc.delete({ where: { id: req.params.docId, userId: req.params.userId } });`)));
+  });
+
+  test("fires when teamId is copied from the path first", () => {
+    assert.ok(fires(route("/teams/:teamId/docs/:docId",
+      `const teamId = req.params.teamId;`,
+      `await prisma.doc.delete({ where: { id: req.params.docId, teamId } });`)));
+  });
+
+  test("fires when only a 404 guards the row", () => {
+    assert.ok(fires(route("/docs/:docId",
+      `const doc = await prisma.doc.findUnique({ where: { id: req.params.docId } });`,
+      `if (!doc) return res.status(404).end();`,
+      `await prisma.doc.delete({ where: { id: doc.id } });`)));
+  });
+
+  for (const [label, ...body] of [
+    ["userId bound to req.user", `await prisma.doc.delete({ where: { id: req.params.docId, userId: req.user.id } });`],
+    ["a column compared with the caller", `const doc = await prisma.doc.findUnique({ where: { id: req.params.docId } });`, `if (doc.ownerId !== req.user.id) return res.status(403).end();`, `await prisma.doc.delete({ where: { id: doc.id } });`],
+    ["the caller on the left", `const doc = await Doc.findById(req.params.docId);`, `if (req.user.id !== doc.authorId) return res.sendStatus(404);`, `await doc.remove();`],
+    ["a name taken from the caller first", `const userId = req.user.id;`, `await prisma.doc.delete({ where: { id: req.params.docId, userId } });`],
+    ["a destructured session value", `const { orgId } = req.user;`, `await prisma.doc.delete({ where: { id: req.params.docId, orgId: orgId } });`],
+    ["a Supabase eq on the caller", `await supabase.from("docs").delete().eq("id", req.params.docId).eq("user_id", req.user.id);`],
+    ["an access helper", `await assertObjectAccess(req.user, req.params.docId, "delete");`, `await prisma.doc.delete({ where: { id: req.params.docId } });`],
+  ]) {
+    test(`silent with ${label}`, () => assert.ok(!fires(route("/docs/:docId", ...body))));
+  }
 });
 
 // ---------------------------------------------------------------------------

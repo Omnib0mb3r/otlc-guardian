@@ -172,6 +172,14 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **AUTHZ-003 needs an ownership check tied to the caller (BUG-069).**
+  The JavaScript IDOR rule took any `userId:` or bare `teamId` mention as
+  an ownership check, so `where: { id: req.params.docId, userId:
+  req.params.userId }` passed. Like AUTHZ-013 (BUG-030), the owner column
+  must now be compared with or bound to the verified caller (`req.user`,
+  `session.user`, `auth()` and similar) or a name taken from it first.
+  AUTHZ-013 gains the same bound-name form (`uid = current_user.id`).
+
 - **WEB-001 matches credential words, not substrings (BUG-033).** It
   missed `setItem(TOKEN_KEY, accessToken)` and
   `setItem("auth", JSON.stringify({ accessToken }))`, and flagged
