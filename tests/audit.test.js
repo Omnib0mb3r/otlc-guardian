@@ -1,6 +1,6 @@
 /**
  * ============================================================
- * OTLC GUARDIAN — Audit Rule Tests
+ * OTLC GUARDIAN - Audit Rule Tests
  * // tests · onthelevelconcepts.com
  * Version: 1.5.0
  * ============================================================
@@ -24,7 +24,7 @@
  *
  * Run: node tests/audit.test.js
  * This file is exempted from `guardian audit` via the central allowlist
- * at security/.audit-allowlist — the fixtures below deliberately
+ * at security/.audit-allowlist - the fixtures below deliberately
  * contain patterns that would trip the scanner.
  * ============================================================
  */
@@ -93,7 +93,7 @@ function knownBug(bugId, name, fn) {
 /**
  * Run `node 03-audit.js <tmpDir> --json` as a subprocess and return
  * the parsed findings array. Uses spawnSync (array form, shell: false)
- * — never passes tmpDir through a shell — so paths with spaces work
+ * - never passes tmpDir through a shell - so paths with spaces work
  * and there is no injection surface even for test fixtures.
  */
 function runAuditOn(tmpDir) {
@@ -134,10 +134,10 @@ function makeFixture(name, content) {
 }
 
 // ---------------------------------------------------------------------------
-// SECRET PATTERN TESTS — v1.1.1 regression coverage
+// SECRET PATTERN TESTS - v1.1.1 regression coverage
 // ---------------------------------------------------------------------------
 
-describe("Secret rules — OpenAI + Anthropic key formats (v1.1.1)", () => {
+describe("Secret rules - OpenAI + Anthropic key formats (v1.1.1)", () => {
   test("SEC-001 catches sk-proj- OpenAI project key", () => {
     const dir = makeFixture(
       "bad.js",
@@ -224,10 +224,10 @@ describe("Secret rules — OpenAI + Anthropic key formats (v1.1.1)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// ERROR HANDLING TESTS — ERR-001 silent-catch with comment body
+// ERROR HANDLING TESTS - ERR-001 silent-catch with comment body
 // ---------------------------------------------------------------------------
 
-describe("ERR-001 — silent catch (v1.1.1 false-negative fix)", () => {
+describe("ERR-001 - silent catch (v1.1.1 false-negative fix)", () => {
   test("ERR-001 catches literal empty catch", () => {
     const dir = makeFixture(
       "bad.js",
@@ -264,7 +264,7 @@ describe("ERR-001 — silent catch (v1.1.1 false-negative fix)", () => {
       `  try {\n` +
       `    return await db.get(id);\n` +
       `  } catch (e) {\n` +
-      `    // silent failure — production will never know\n` +
+      `    // silent failure - production will never know\n` +
       `  }\n` +
       `}\n`
     );
@@ -304,14 +304,14 @@ describe("ERR-001 — silent catch (v1.1.1 false-negative fix)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// SQL INJECTION TESTS — INJ-004, INJ-005, INJ-006 (v1.1.1)
+// SQL INJECTION TESTS - INJ-004, INJ-005, INJ-006 (v1.1.1)
 // ---------------------------------------------------------------------------
 //
 // The README has long claimed "raw SQL" detection but the pre-1.1.1
 // audit had no rule for it. A planted file with string-concat SQL
 // produced zero findings. These tests lock in the new rules.
 
-describe("INJ-004 / INJ-005 / INJ-006 — raw SQL detection (v1.1.1)", () => {
+describe("INJ-004 / INJ-005 / INJ-006 - raw SQL detection (v1.1.1)", () => {
   test("INJ-004 catches JS string-concat SQL", () => {
     const dir = makeFixture(
       "bad.js",
@@ -400,7 +400,7 @@ describe("INJ-004 / INJ-005 / INJ-006 — raw SQL detection (v1.1.1)", () => {
 // and the audit caught only one (console.log). This test reproduces
 // that exact fixture and asserts every finding the audit now catches.
 
-describe("End-to-end regression — five bugs, five findings", () => {
+describe("End-to-end regression - five bugs, five findings", () => {
   test("1.1.1 fixture: sk-proj, conn string, SQL concat, silent catch, console.log", () => {
     const dir = makeFixture(
       "bad-code.js",
@@ -435,7 +435,7 @@ describe("End-to-end regression — five bugs, five findings", () => {
 });
 
 // ---------------------------------------------------------------------------
-// v1.2.2 — DEPENDENCY DIRECTORY SKIP LIST
+// v1.2.2 - DEPENDENCY DIRECTORY SKIP LIST
 // ---------------------------------------------------------------------------
 //
 // The pre-1.2.2 audit walked vendor/, target/, bower_components/, and
@@ -448,8 +448,8 @@ describe("End-to-end regression — five bugs, five findings", () => {
 // directories to SKIP_DIRS in lockstep with what the auditor already
 // does for node_modules/.
 
-describe("v1.2.2 — dependency directories are skipped", () => {
-  test("vendor/ (composer) — findings inside are NOT reported", () => {
+describe("v1.2.2 - dependency directories are skipped", () => {
+  test("vendor/ (composer) - findings inside are NOT reported", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       mkdirSync(path.join(dir, "vendor", "phpunit"), { recursive: true });
@@ -468,7 +468,7 @@ describe("v1.2.2 — dependency directories are skipped", () => {
     }
   });
 
-  test("target/ (rust/maven build output) — findings inside are NOT reported", () => {
+  test("target/ (rust/maven build output) - findings inside are NOT reported", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       mkdirSync(path.join(dir, "target", "debug"), { recursive: true });
@@ -487,7 +487,7 @@ describe("v1.2.2 — dependency directories are skipped", () => {
     }
   });
 
-  test("bower_components/ — findings inside are NOT reported", () => {
+  test("bower_components/ - findings inside are NOT reported", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       mkdirSync(path.join(dir, "bower_components", "jquery"), { recursive: true });
@@ -527,7 +527,7 @@ describe("v1.2.2 — dependency directories are skipped", () => {
 });
 
 // ---------------------------------------------------------------------------
-// v1.2.2 — BROADENED TEST-FILE DETECTION
+// v1.2.2 - BROADENED TEST-FILE DETECTION
 // ---------------------------------------------------------------------------
 //
 // The pre-1.2.2 ERR-003 rule already had an excludePatterns list, but
@@ -541,8 +541,8 @@ describe("v1.2.2 — dependency directories are skipped", () => {
 // applies it to every rule whose intent is "production code only":
 // ERR-003, CFG-001, CFG-002, CFG-003, INJ-002, TS-001, SEC-006.
 
-describe("v1.2.2 — test-file detection recognizes more conventions", () => {
-  test("foo.spec.ts with localhost URL — CFG-001 must NOT fire", () => {
+describe("v1.2.2 - test-file detection recognizes more conventions", () => {
+  test("foo.spec.ts with localhost URL - CFG-001 must NOT fire", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       writeFileSync(
@@ -560,7 +560,7 @@ describe("v1.2.2 — test-file detection recognizes more conventions", () => {
     }
   });
 
-  test("test_foo.py with localhost URL — CFG-001 must NOT fire (pytest convention)", () => {
+  test("test_foo.py with localhost URL - CFG-001 must NOT fire (pytest convention)", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       writeFileSync(
@@ -578,7 +578,7 @@ describe("v1.2.2 — test-file detection recognizes more conventions", () => {
     }
   });
 
-  test("foo_test.py with localhost URL — CFG-001 must NOT fire (alt pytest)", () => {
+  test("foo_test.py with localhost URL - CFG-001 must NOT fire (alt pytest)", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       writeFileSync(
@@ -596,7 +596,7 @@ describe("v1.2.2 — test-file detection recognizes more conventions", () => {
     }
   });
 
-  test("test-site.js with console.log — ERR-003 must NOT fire (custom test runner)", () => {
+  test("test-site.js with console.log - ERR-003 must NOT fire (custom test runner)", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       writeFileSync(
@@ -614,7 +614,7 @@ describe("v1.2.2 — test-file detection recognizes more conventions", () => {
     }
   });
 
-  test("nested tests/ directory on any OS — CFG-002 must NOT fire", () => {
+  test("nested tests/ directory on any OS - CFG-002 must NOT fire", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       mkdirSync(path.join(dir, "pkg-a", "tests"), { recursive: true });
@@ -633,7 +633,7 @@ describe("v1.2.2 — test-file detection recognizes more conventions", () => {
     }
   });
 
-  test("__tests__ folder with innerHTML — INJ-002 must NOT fire (JSDOM cleanup)", () => {
+  test("__tests__ folder with innerHTML - INJ-002 must NOT fire (JSDOM cleanup)", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       mkdirSync(path.join(dir, "__tests__"), { recursive: true });
@@ -652,7 +652,7 @@ describe("v1.2.2 — test-file detection recognizes more conventions", () => {
     }
   });
 
-  test("tests/ file with `any` type — TS-001 must NOT fire", () => {
+  test("tests/ file with `any` type - TS-001 must NOT fire", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       mkdirSync(path.join(dir, "tests"), { recursive: true });
@@ -671,7 +671,7 @@ describe("v1.2.2 — test-file detection recognizes more conventions", () => {
     }
   });
 
-  test("test fixture API key assignment — SEC-006 must NOT fire", () => {
+  test("test fixture API key assignment - SEC-006 must NOT fire", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       mkdirSync(path.join(dir, "tests"), { recursive: true });
@@ -730,13 +730,13 @@ describe("v1.2.2 — test-file detection recognizes more conventions", () => {
 });
 
 // ---------------------------------------------------------------------------
-// v1.2.2 — CFG-003 BIND-vs-URL DISTINCTION
+// v1.2.2 - CFG-003 BIND-vs-URL DISTINCTION
 // ---------------------------------------------------------------------------
 //
 // The pre-1.2.2 CFG-003 rule fired on ANY quoted IP address. That
 // conflated two opposite things:
-//   - URL pointing at a hardcoded IP (real bug — production config leak)
-//   - Server BINDING to 127.0.0.1 (security best practice — refuses
+//   - URL pointing at a hardcoded IP (real bug - production config leak)
+//   - Server BINDING to 127.0.0.1 (security best practice - refuses
 //     connections from any other IP)
 // DevNeural's audit had 4 false-positive CFG-003 findings on legitimate
 // `fastify.listen({ host: '127.0.0.1' })` and `server.listen(0,
@@ -744,8 +744,8 @@ describe("v1.2.2 — test-file detection recognizes more conventions", () => {
 // mechanism that lets a rule suppress findings whose surrounding line
 // matches one of a list of "this is the safe form" patterns.
 
-describe("v1.2.2 — CFG-003 distinguishes binding from URL", () => {
-  test("fastify.listen({ host: '127.0.0.1' }) — CFG-003 must NOT fire", () => {
+describe("v1.2.2 - CFG-003 distinguishes binding from URL", () => {
+  test("fastify.listen({ host: '127.0.0.1' }) - CFG-003 must NOT fire", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       mkdirSync(path.join(dir, "src"), { recursive: true });
@@ -764,7 +764,7 @@ describe("v1.2.2 — CFG-003 distinguishes binding from URL", () => {
     }
   });
 
-  test("server.listen(0, '127.0.0.1', cb) — CFG-003 must NOT fire", () => {
+  test("server.listen(0, '127.0.0.1', cb) - CFG-003 must NOT fire", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       mkdirSync(path.join(dir, "src"), { recursive: true });
@@ -783,7 +783,7 @@ describe("v1.2.2 — CFG-003 distinguishes binding from URL", () => {
     }
   });
 
-  test("bind('127.0.0.1', port) — CFG-003 must NOT fire", () => {
+  test("bind('127.0.0.1', port) - CFG-003 must NOT fire", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       mkdirSync(path.join(dir, "src"), { recursive: true });
@@ -823,7 +823,7 @@ describe("v1.2.2 — CFG-003 distinguishes binding from URL", () => {
 });
 
 // ---------------------------------------------------------------------------
-// v1.2.4 — DEP-001 GATED ON "LOOKS LIKE AN HTTP SERVER"
+// v1.2.4 - DEP-001 GATED ON "LOOKS LIKE AN HTTP SERVER"
 // ---------------------------------------------------------------------------
 //
 // The pre-1.2.4 DEP-001 rule fired on any project that didn't contain the
@@ -832,7 +832,7 @@ describe("v1.2.2 — CFG-003 distinguishes binding from URL", () => {
 // package, code-generation skill, desktop app, and notebook produced a
 // spurious "No health check endpoint found" finding. Audit testing across
 // 12 real projects on the user's machine showed 9 of them hitting exactly
-// this false positive — they are not servers, so they do not have health
+// this false positive - they are not servers, so they do not have health
 // endpoints, and that is correct.
 //
 // The fix adds a `looksLikeHttpServer(rootDir, files)` gate that checks
@@ -842,11 +842,11 @@ describe("v1.2.2 — CFG-003 distinguishes binding from URL", () => {
 // server AND no health endpoint is found. Non-server projects are left
 // alone.
 
-describe("v1.2.4 — DEP-001 gated on HTTP server shape", () => {
+describe("v1.2.4 - DEP-001 gated on HTTP server shape", () => {
   // POSITIVE: a Node project with express in package.json and no /health
   // endpoint must still trip DEP-001. This is the original use case of the
   // rule and must not regress.
-  test("express in package.json, no /health — DEP-001 FIRES", () => {
+  test("express in package.json, no /health - DEP-001 FIRES", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       writeFileSync(
@@ -878,7 +878,7 @@ describe("v1.2.4 — DEP-001 gated on HTTP server shape", () => {
 
   // POSITIVE: a Python project with fastapi in requirements.txt and no
   // /health endpoint must trip DEP-001. Mirrors the Node case.
-  test("fastapi in requirements.txt, no /health — DEP-001 FIRES", () => {
+  test("fastapi in requirements.txt, no /health - DEP-001 FIRES", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       writeFileSync(
@@ -907,7 +907,7 @@ describe("v1.2.4 — DEP-001 gated on HTTP server shape", () => {
 
   // NEGATIVE: a pure CLI project with no server framework must NOT trip
   // DEP-001. This is the 9-of-12 false-positive case the fix exists for.
-  test("CLI project, no server framework — DEP-001 does NOT fire", () => {
+  test("CLI project, no server framework - DEP-001 does NOT fire", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       writeFileSync(
@@ -938,7 +938,7 @@ describe("v1.2.4 — DEP-001 gated on HTTP server shape", () => {
   // NEGATIVE: a project with no package.json, no requirements.txt, and no
   // server-looking source files (e.g. a static site or a data/notebook dir)
   // must NOT trip DEP-001.
-  test("static site — no manifest, no server code — DEP-001 does NOT fire", () => {
+  test("static site - no manifest, no server code - DEP-001 does NOT fire", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       writeFileSync(
@@ -963,7 +963,7 @@ describe("v1.2.4 — DEP-001 gated on HTTP server shape", () => {
 
   // CONTROL: a project that IS a server AND HAS a /health endpoint must
   // NOT trip DEP-001. This is the existing happy path and must not regress.
-  test("express app WITH /health endpoint — DEP-001 does NOT fire", () => {
+  test("express app WITH /health endpoint - DEP-001 does NOT fire", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       writeFileSync(
@@ -994,10 +994,10 @@ describe("v1.2.4 — DEP-001 gated on HTTP server shape", () => {
   });
 
   // POSITIVE edge: no manifest at all, but source files contain
-  // app.listen(...) / server.listen(...) / createServer(...) — still
+  // app.listen(...) / server.listen(...) / createServer(...) - still
   // counts as a server. This catches projects that bundle via tsx or
   // run from source without a package.json (rare but real).
-  test("source contains app.listen() but no manifest — DEP-001 FIRES", () => {
+  test("source contains app.listen() but no manifest - DEP-001 FIRES", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       mkdirSync(path.join(dir, "src"), { recursive: true });
@@ -1020,7 +1020,7 @@ describe("v1.2.4 — DEP-001 gated on HTTP server shape", () => {
 });
 
 // ---------------------------------------------------------------------------
-// v1.3.0 — INJ-005b: template literal SQL with ${} interpolation,
+// v1.3.0 - INJ-005b: template literal SQL with ${} interpolation,
 // regardless of how the variable is used (variable indirection fix)
 // ---------------------------------------------------------------------------
 //
@@ -1032,7 +1032,7 @@ describe("v1.2.4 — DEP-001 gated on HTTP server shape", () => {
 //   db.query(sql);
 //
 // The SQL is still unparameterized, the user input is still being
-// spliced into the query text, the injection surface is identical —
+// spliced into the query text, the injection surface is identical - 
 // but the regex sees `db.query(sql)` (no backtick as the first arg)
 // and doesn't fire. A single level of variable indirection bypassed
 // the entire rule.
@@ -1040,14 +1040,14 @@ describe("v1.2.4 — DEP-001 gated on HTTP server shape", () => {
 // Fix: add a companion rule INJ-005b that catches template-literal
 // SQL with `${}` interpolation ANYWHERE in the file, regardless of
 // how (or whether) the variable is subsequently used. Writing
-// `const sql = \`SELECT ... ${x}\`` is independently dangerous — if
+// `const sql = \`SELECT ... ${x}\`` is independently dangerous - if
 // that line exists in your code, it's a bug, whether it's then
 // passed directly to `db.query(sql)` or through 5 more levels of
 // indirection. The original INJ-005 is kept as-is; projects can get
 // the direct-call match from INJ-005 and the declaration-site match
 // from INJ-005b, making the two rules complementary.
 
-describe("v1.3.0 — INJ-005b: variable-indirection template literal SQL", () => {
+describe("v1.3.0 - INJ-005b: variable-indirection template literal SQL", () => {
   test("INJ-005b catches const X = `SELECT ... ${x}` ... db.query(X)", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
@@ -1133,13 +1133,13 @@ describe("v1.3.0 — INJ-005b: variable-indirection template literal SQL", () =>
 });
 
 // ---------------------------------------------------------------------------
-// v1.3.0 — INJ-006: Python f-string SQL with inner quoted literals
+// v1.3.0 - INJ-006: Python f-string SQL with inner quoted literals
 // ---------------------------------------------------------------------------
 //
 // The pre-1.3.0 INJ-006 regex used `[^"']*` between the f-string's
 // opening and closing quotes. That character class excludes BOTH quote
 // types, so any f-string containing a literal like `WHERE name = 'admin'`
-// — which is most real-world SQL — broke the match and the rule silently
+// - which is most real-world SQL - broke the match and the rule silently
 // did nothing.
 //
 // Fix: split into two alternation branches, one for each outer quote
@@ -1150,8 +1150,8 @@ describe("v1.3.0 — INJ-005b: variable-indirection template literal SQL", () =>
 // equality literals like `'admin'` or `'active'`, and the pre-1.3.0
 // regex couldn't see any of them.
 
-describe("v1.3.0 — INJ-006 inner-quote regex fix", () => {
-  test("INJ-006 catches f\"...'{x}'...\" — double-quoted outer, single-quoted inner", () => {
+describe("v1.3.0 - INJ-006 inner-quote regex fix", () => {
+  test("INJ-006 catches f\"...'{x}'...\" - double-quoted outer, single-quoted inner", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       mkdirSync(path.join(dir, "app"), { recursive: true });
@@ -1171,7 +1171,7 @@ describe("v1.3.0 — INJ-006 inner-quote regex fix", () => {
     }
   });
 
-  test("INJ-006 catches f'...\"{x}\"...' — single-quoted outer, double-quoted inner", () => {
+  test("INJ-006 catches f'...\"{x}\"...' - single-quoted outer, double-quoted inner", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
       mkdirSync(path.join(dir, "app"), { recursive: true });
@@ -1233,13 +1233,13 @@ describe("v1.3.0 — INJ-006 inner-quote regex fix", () => {
 });
 
 // ---------------------------------------------------------------------------
-// v1.3.1 — projectRoot vs scanRoot (audit subdirectory scoping)
+// v1.3.1 - projectRoot vs scanRoot (audit subdirectory scoping)
 // ---------------------------------------------------------------------------
 //
 // The pre-1.3.1 audit treated the scan target as the project root for
 // BOTH the file walker AND the project-shape lookups (manifest checks,
 // .audit-allowlist load). That was wrong when the user ran
-// `guardian audit ./src` — the manifest is at the project root, not
+// `guardian audit ./src` - the manifest is at the project root, not
 // inside src/, so DEP-001 gating saw "no package.json" and silently
 // disabled itself, AND the central .audit-allowlist was ignored
 // because it lives at <project-root>/security/.audit-allowlist.
@@ -1248,7 +1248,7 @@ describe("v1.3.0 — INJ-006 inner-quote regex fix", () => {
 // `scanRoot`, but manifest lookups, .audit-allowlist, and any other
 // project-level concept consult the upward-walked project root.
 
-describe("v1.3.1 — projectRoot vs scanRoot (subdirectory audit scoping)", () => {
+describe("v1.3.1 - projectRoot vs scanRoot (subdirectory audit scoping)", () => {
   test("DEP-001 fires when scanning a subdirectory of an express project", () => {
     // Build a project structure:
     //   tmp/
@@ -1311,7 +1311,7 @@ describe("v1.3.1 — projectRoot vs scanRoot (subdirectory audit scoping)", () =
     // Build a project with a centralized allowlist that exempts a file
     // inside src/. Audit ./src and verify the allowlist is consulted.
     // Pre-1.3.1 the allowlist load would look at ./src/security/.audit-allowlist
-    // which doesn't exist, and the file would not be exempted — false
+    // which doesn't exist, and the file would not be exempted - false
     // positive. Post-1.3.1 the allowlist is loaded from the project
     // root and the file is correctly exempted.
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
@@ -1329,7 +1329,7 @@ describe("v1.3.1 — projectRoot vs scanRoot (subdirectory audit scoping)", () =
         "src/legacy.js  # reason: legacy code, scheduled for rewrite in Q3\n",
         "utf8"
       );
-      // The file that should be exempted — contains a SEC-001 trigger
+      // The file that should be exempted - contains a SEC-001 trigger
       mkdirSync(path.join(dir, "src"), { recursive: true });
       writeFileSync(
         path.join(dir, "src", "legacy.js"),
@@ -1350,11 +1350,11 @@ describe("v1.3.1 — projectRoot vs scanRoot (subdirectory audit scoping)", () =
   test("Project-root walker stops at filesystem boundary if no markers found", () => {
     // Edge case: scanning a directory that has no project markers
     // anywhere up the tree (e.g. /tmp/orphaned-source/). The detector
-    // must NOT walk past the original scan target — it should fall
+    // must NOT walk past the original scan target - it should fall
     // back to the scan target as its own project root.
     const dir = mkdtempSync(path.join(tmpdir(), "guardian-audit-test-"));
     try {
-      // No package.json, no .git, no requirements.txt — no markers
+      // No package.json, no .git, no requirements.txt - no markers
       writeFileSync(
         path.join(dir, "main.js"),
         "console.log('hello');\n",
@@ -1371,7 +1371,7 @@ describe("v1.3.1 — projectRoot vs scanRoot (subdirectory audit scoping)", () =
 });
 
 // ---------------------------------------------------------------------------
-// INJ-005b PRECISION — v1.4.1 (BUG-001)
+// INJ-005b PRECISION - v1.4.1 (BUG-001)
 // ---------------------------------------------------------------------------
 //
 // The 1.3.0 rule required only a lone SQL verb plus an interpolation, so
@@ -1383,7 +1383,7 @@ describe("v1.3.1 — projectRoot vs scanRoot (subdirectory audit scoping)", () =
 // the point of the rule now: a security rule that cannot be quieted by
 // writing correct code is a rule people switch off.
 
-describe("INJ-005b — still catches real SQL (regression guard)", () => {
+describe("INJ-005b - still catches real SQL (regression guard)", () => {
   test("fires on SELECT ... FROM with interpolation", () => {
     const dir = makeFixture(
       "db.js",
@@ -1427,7 +1427,7 @@ describe("INJ-005b — still catches real SQL (regression guard)", () => {
   });
 
   test("fires when the only interpolation sits before the companion clause", () => {
-    // `SELECT ${columns} FROM users` — a pattern that required `${` to
+    // `SELECT ${columns} FROM users` - a pattern that required `${` to
     // appear AFTER the clause pair would miss this genuinely
     // unparameterized query.
     const dir = makeFixture(
@@ -1457,7 +1457,7 @@ describe("INJ-005b — still catches real SQL (regression guard)", () => {
   });
 });
 
-describe("INJ-005b — no longer fires on English prose (BUG-001)", () => {
+describe("INJ-005b - no longer fires on English prose (BUG-001)", () => {
   const CLEAN = {
     "window.confirm with the word Delete": "if (!window.confirm(`Delete ${count} items? This cannot be undone.`)) return;\n",
     "console.error with the word update": "console.error(`Failed to update record ${record.id}:`, err);\n",
@@ -1480,7 +1480,7 @@ describe("INJ-005b — no longer fires on English prose (BUG-001)", () => {
 
   test("stays silent on the sql-guard tagged template", () => {
     // security/04-sql-guard.js's `sql` tag auto-parameterizes. It is the
-    // remediation for this bug class, not an instance of it — flagging
+    // remediation for this bug class, not an instance of it - flagging
     // the fix teaches people to stop applying it.
     const dir = makeFixture(
       "db.js",
@@ -1511,7 +1511,7 @@ describe("INJ-005b — no longer fires on English prose (BUG-001)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// AUTHORIZATION + VALIDATION RULES — v1.4.0
+// AUTHORIZATION + VALIDATION RULES - v1.4.0
 // ---------------------------------------------------------------------------
 //
 // AUTHZ-001/003 and VAL-001 run through the per-file analyzer, not a
@@ -1519,7 +1519,7 @@ describe("INJ-005b — no longer fires on English prose (BUG-001)", () => {
 // negative fixture (the correct code stays silent). A security rule that
 // cannot be silenced by writing correct code is a rule people disable.
 
-describe("AUTHZ-001 — unauthenticated side-effecting handler", () => {
+describe("AUTHZ-001 - unauthenticated side-effecting handler", () => {
   test("fires on a send-email handler with no auth check", () => {
     const dir = makeFixture(
       "api/send-welcome-email.ts",
@@ -1569,7 +1569,7 @@ describe("AUTHZ-001 — unauthenticated side-effecting handler", () => {
   });
 });
 
-describe("AUTHZ-002 — identity trusted from the request", () => {
+describe("AUTHZ-002 - identity trusted from the request", () => {
   test("fires on req.body.userId used for a write", () => {
     const dir = makeFixture(
       "api/profile.ts",
@@ -1597,7 +1597,7 @@ describe("AUTHZ-002 — identity trusted from the request", () => {
   });
 });
 
-describe("AUTHZ-003 — IDOR, authenticated but not authorized", () => {
+describe("AUTHZ-003 - IDOR, authenticated but not authorized", () => {
   test("fires on a DELETE that only checks authentication", () => {
     const dir = makeFixture(
       "api/documents/route.ts",
@@ -1654,7 +1654,7 @@ describe("AUTHZ-003 — IDOR, authenticated but not authorized", () => {
   });
 });
 
-describe("AUTHZ-004 — non-constant-time secret comparison", () => {
+describe("AUTHZ-004 - non-constant-time secret comparison", () => {
   test("fires on === against an env secret", () => {
     const dir = makeFixture(
       "api/auth.ts",
@@ -1680,7 +1680,7 @@ describe("AUTHZ-004 — non-constant-time secret comparison", () => {
   });
 });
 
-describe("AUTHZ-005 — cache key not scoped to the user", () => {
+describe("AUTHZ-005 - cache key not scoped to the user", () => {
   test("fires on a cache key built only from an object ID", () => {
     const dir = makeFixture(
       "lib/thumbnails.ts",
@@ -1706,7 +1706,7 @@ describe("AUTHZ-005 — cache key not scoped to the user", () => {
   });
 });
 
-describe("VAL-001 — request body without schema validation", () => {
+describe("VAL-001 - request body without schema validation", () => {
   test("fires when req.body reaches a write unvalidated", () => {
     const dir = makeFixture(
       "api/contact.ts",
@@ -1742,7 +1742,7 @@ describe("VAL-001 — request body without schema validation", () => {
   });
 });
 
-describe("VAL-002 — email header injection", () => {
+describe("VAL-002 - email header injection", () => {
   test("fires on a raw header built by interpolation", () => {
     const dir = makeFixture(
       "lib/mail.ts",
@@ -1793,7 +1793,7 @@ describe("Analyzer robustness", () => {
   test("audit-exempt marker suppresses analyzer rules too", () => {
     const dir = makeFixture(
       "api/legacy.ts",
-      `// otlc-guardian:audit-exempt — legacy route, tracked in BUGS.md\n` +
+      `// otlc-guardian:audit-exempt - legacy route, tracked in BUGS.md\n` +
       `export default async function handler(req, res) {\n` +
       `  await sendEmail({ to: req.body.to });\n` +
       `  return res.status(200).end();\n` +
@@ -1809,7 +1809,7 @@ describe("Analyzer robustness", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 1.5.0 — Python authorization analyzer, WEB-001, WEB-002
+// 1.5.0 - Python authorization analyzer, WEB-001, WEB-002
 // ---------------------------------------------------------------------------
 
 /** Like makeFixture, for a project with several files. */
@@ -1832,7 +1832,7 @@ function auditFires(files, ruleId) {
   }
 }
 
-describe("AUTHZ-011 — Python handler with a side effect and no auth (1.5.0)", () => {
+describe("AUTHZ-011 - Python handler with a side effect and no auth (1.5.0)", () => {
   test("fires on a FastAPI handler that writes with no auth anywhere", () => {
     assert.ok(auditFires({ "portal/documents.py": [
       `from fastapi import APIRouter`,
@@ -1916,7 +1916,7 @@ describe("AUTHZ-011 — Python handler with a side effect and no auth (1.5.0)", 
   });
 });
 
-describe("AUTHZ-013 — Python handler acts on an ID with no owner or tenant check (1.5.0)", () => {
+describe("AUTHZ-013 - Python handler acts on an ID with no owner or tenant check (1.5.0)", () => {
   const unsafe = [
     `@router.put("/documents/{doc_id}")`,
     `async def replace(doc_id: int, body: DocBody, db = Depends(get_db), user = Depends(get_current_user)):`,
@@ -1971,7 +1971,7 @@ describe("AUTHZ-013 — Python handler acts on an ID with no owner or tenant che
   });
 });
 
-describe("WEB-001 — auth token in browser storage (1.5.0)", () => {
+describe("WEB-001 - auth token in browser storage (1.5.0)", () => {
   const fires = {
     "setItem with a token key":     `localStorage.setItem("customer_token", data.token);\n`,
     "property assignment":          `localStorage.authToken = res.token;\n`,
@@ -1993,7 +1993,7 @@ describe("WEB-001 — auth token in browser storage (1.5.0)", () => {
   }
 });
 
-describe("WEB-002 — nginx server block with no CSP (1.5.0)", () => {
+describe("WEB-002 - nginx server block with no CSP (1.5.0)", () => {
   const nginx = (extra = "") => [
     `server {`,
     `    listen 443 ssl;`,
@@ -2036,7 +2036,7 @@ describe("WEB-002 — nginx server block with no CSP (1.5.0)", () => {
 // BUG-041: partial scans (a subfolder or one file of a project)
 // ---------------------------------------------------------------------------
 
-describe("BUG-041 — project checks on a partial scan see the whole project", () => {
+describe("BUG-041 - project checks on a partial scan see the whole project", () => {
   // DevNeural's shape: the health route lives in one folder, the audit is
   // pointed at another.
   const server = (withHealth) => ({

@@ -1,6 +1,6 @@
 /**
  * ============================================================
- * OTLC GUARDIAN — sql-guard tagged template tests
+ * OTLC GUARDIAN - sql-guard tagged template tests
  * // tests · onthelevelconcepts.com
  * Version: 1.5.0
  * ============================================================
@@ -13,14 +13,14 @@
  * value, never spliced into SQL text" contract.
  *
  *   1. All ${expr} interpolations become placeholders, never
- *      inline text — even when expr contains SQL metacharacters,
+ *      inline text - even when expr contains SQL metacharacters,
  *      quotes, comments, or full DROP TABLE payloads.
  *   2. SQL keywords and structure are preserved literally so the
  *      developer's intended query is what reaches the database.
- *   3. Nested sql`` calls compose safely — text merges, values
+ *   3. Nested sql`` calls compose safely - text merges, values
  *      concatenate, placeholders renumber.
  *   4. Identifier interpolation is an explicit escape hatch via
- *      sql.identifier(name, allowList) — raw identifier
+ *      sql.identifier(name, allowList) - raw identifier
  *      interpolation through ${} is not supported and must throw.
  *   5. The helper performs zero input scanning, blocklist
  *      filtering, or keyword detection. Parameter values pass
@@ -66,10 +66,10 @@ function describe(group, fn) {
 }
 
 // ---------------------------------------------------------------------------
-// PROPERTY 1 — interpolations become placeholders, never inline text
+// PROPERTY 1 - interpolations become placeholders, never inline text
 // ---------------------------------------------------------------------------
 
-describe("Property 1 — all ${expr} become placeholders", () => {
+describe("Property 1 - all ${expr} become placeholders", () => {
   test("postgres: single interpolation becomes $1", () => {
     const id = 42;
     const q = sql`SELECT * FROM users WHERE id = ${id}`;
@@ -138,10 +138,10 @@ describe("Property 1 — all ${expr} become placeholders", () => {
 });
 
 // ---------------------------------------------------------------------------
-// PROPERTY 2 — SQL keywords and structure preserved literally
+// PROPERTY 2 - SQL keywords and structure preserved literally
 // ---------------------------------------------------------------------------
 
-describe("Property 2 — SQL text preserved byte-for-byte around placeholders", () => {
+describe("Property 2 - SQL text preserved byte-for-byte around placeholders", () => {
   test("whitespace and case preserved exactly", () => {
     const x = 1;
     const q = sql`  SELECT
@@ -169,7 +169,7 @@ describe("Property 2 — SQL text preserved byte-for-byte around placeholders", 
 
   test("leading interpolation at start of query", () => {
     const schema = "public.users";
-    // leading interpolations are still values — the schema name here is
+    // leading interpolations are still values - the schema name here is
     // being treated as a VALUE for this test (and is not a real-world
     // safe pattern for schema names; that's what sql.identifier is for).
     // But the helper must still produce a placeholder and preserve the
@@ -181,16 +181,16 @@ describe("Property 2 — SQL text preserved byte-for-byte around placeholders", 
 });
 
 // ---------------------------------------------------------------------------
-// PROPERTY 3 — injection payloads pass through as VALUES, never text
+// PROPERTY 3 - injection payloads pass through as VALUES, never text
 // ---------------------------------------------------------------------------
 
-describe("Property 3 — injection payloads are parameter values, not SQL text", () => {
+describe("Property 3 - injection payloads are parameter values, not SQL text", () => {
   test("classic drop-table payload is a value, not text", () => {
     const userInput = "'; DROP TABLE users; --";
     const q = sql`SELECT * FROM users WHERE name = ${userInput}`;
     assert.equal(q.text, "SELECT * FROM users WHERE name = $1");
     assert.deepEqual(q.values, ["'; DROP TABLE users; --"]);
-    // Text must NOT contain the payload — that's the whole point.
+    // Text must NOT contain the payload - that's the whole point.
     assert.ok(!q.text.includes("DROP TABLE"));
     assert.ok(!q.text.includes("'"));
   });
@@ -247,10 +247,10 @@ describe("Property 3 — injection payloads are parameter values, not SQL text",
 });
 
 // ---------------------------------------------------------------------------
-// PROPERTY 4 — identifier escape hatch with allow-list validation
+// PROPERTY 4 - identifier escape hatch with allow-list validation
 // ---------------------------------------------------------------------------
 
-describe("Property 4 — sql.identifier allow-list escape hatch", () => {
+describe("Property 4 - sql.identifier allow-list escape hatch", () => {
   test("identifier on allow-list is inlined into query text", () => {
     const col = "name";
     const q = sql`SELECT * FROM users ORDER BY ${sql.identifier(col, [
@@ -318,10 +318,10 @@ describe("Property 4 — sql.identifier allow-list escape hatch", () => {
 });
 
 // ---------------------------------------------------------------------------
-// PROPERTY 5 — nested sql`` composition
+// PROPERTY 5 - nested sql`` composition
 // ---------------------------------------------------------------------------
 
-describe("Property 5 — nested sql`` composition", () => {
+describe("Property 5 - nested sql`` composition", () => {
   test("nested sql`` merges text and renumbers placeholders", () => {
     const id = 42;
     const tenant = "acme";
@@ -396,10 +396,10 @@ describe("Property 5 — nested sql`` composition", () => {
 });
 
 // ---------------------------------------------------------------------------
-// PROPERTY 6 — no input scanning / no blocklist / no keyword filtering
+// PROPERTY 6 - no input scanning / no blocklist / no keyword filtering
 // ---------------------------------------------------------------------------
 
-describe("Property 6 — zero input scanning, values pass through unchanged", () => {
+describe("Property 6 - zero input scanning, values pass through unchanged", () => {
   test("value containing DROP TABLE keyword is NOT rejected or filtered", () => {
     const userInput = "DROP TABLE users"; // legitimate search term in a help article DB
     const q = sql`SELECT * FROM articles WHERE body LIKE ${userInput}`;
@@ -434,10 +434,10 @@ describe("Property 6 — zero input scanning, values pass through unchanged", ()
 });
 
 // ---------------------------------------------------------------------------
-// PROPERTY 7 — .toMysql() / .toSqlite() conversion idempotency and purity
+// PROPERTY 7 - .toMysql() / .toSqlite() conversion idempotency and purity
 // ---------------------------------------------------------------------------
 
-describe("Property 7 — dialect conversion is pure and idempotent", () => {
+describe("Property 7 - dialect conversion is pure and idempotent", () => {
   test(".toMysql() twice returns the same result", () => {
     const id = 42;
     const q = sql`SELECT * FROM u WHERE id = ${id}`;

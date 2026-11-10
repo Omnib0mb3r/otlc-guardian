@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Thanks for taking the time to file a bug.
-        For **security vulnerabilities**, please use [SECURITY.md](../SECURITY.md) instead — do not open a public issue.
+        For **security vulnerabilities**, please use [SECURITY.md](../SECURITY.md) instead - do not open a public issue.
 
   - type: input
     id: version

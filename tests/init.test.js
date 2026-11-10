@@ -1,6 +1,6 @@
 /**
  * ============================================================
- * OTLC GUARDIAN — guardian init merge function tests
+ * OTLC GUARDIAN - guardian init merge function tests
  * // tests · onthelevelconcepts.com
  * Version: 1.5.0
  * ============================================================
@@ -80,7 +80,7 @@ function withTempDir(fn) {
 // PURE HELPER TESTS
 // ---------------------------------------------------------------------------
 
-describe("canonicalMatcher — sorted token equivalence", () => {
+describe("canonicalMatcher - sorted token equivalence", () => {
   test("Write|Edit canonicalizes to Edit|Write", () => {
     assert.equal(canonicalMatcher("Write|Edit"), "Edit|Write");
   });
@@ -103,7 +103,7 @@ describe("canonicalMatcher — sorted token equivalence", () => {
   });
 });
 
-describe("findMatcherBlock — set-based block lookup", () => {
+describe("findMatcherBlock - set-based block lookup", () => {
   test("finds block whose matcher is the same set in different order", () => {
     const arr = [{ matcher: "Edit|Write", hooks: [] }];
     const block = findMatcherBlock(arr, "Write|Edit");
@@ -123,7 +123,7 @@ describe("findMatcherBlock — set-based block lookup", () => {
   });
 });
 
-describe("gitignorePathToken — strip inline comments", () => {
+describe("gitignorePathToken - strip inline comments", () => {
   test("plain path returns itself", () => {
     assert.equal(gitignorePathToken(".env"), ".env");
   });
@@ -150,10 +150,10 @@ describe("gitignorePathToken — strip inline comments", () => {
 });
 
 // ---------------------------------------------------------------------------
-// mergeMd — markdown append-merge
+// mergeMd - markdown append-merge
 // ---------------------------------------------------------------------------
 
-describe("mergeMd — markdown append-merge", () => {
+describe("mergeMd - markdown append-merge", () => {
   test("preserves user content above Guardian section", () => {
     withTempDir((dir) => {
       const userPath = path.join(dir, "CLAUDE.md");
@@ -171,7 +171,7 @@ describe("mergeMd — markdown append-merge", () => {
     });
   });
 
-  test("idempotent — running twice does not duplicate", () => {
+  test("idempotent - running twice does not duplicate", () => {
     withTempDir((dir) => {
       const userPath = path.join(dir, "CLAUDE.md");
       const srcPath  = path.join(dir, "guardian-CLAUDE.md");
@@ -190,10 +190,10 @@ describe("mergeMd — markdown append-merge", () => {
 });
 
 // ---------------------------------------------------------------------------
-// mergeClaudeSettings — JSON-aware hook merge
+// mergeClaudeSettings - JSON-aware hook merge
 // ---------------------------------------------------------------------------
 
-describe("mergeClaudeSettings — JSON hook merge", () => {
+describe("mergeClaudeSettings - JSON hook merge", () => {
   test("ABORTS on invalid JSON instead of clobbering", () => {
     withTempDir((dir) => {
       const userPath = path.join(dir, "settings.json");
@@ -271,7 +271,7 @@ describe("mergeClaudeSettings — JSON hook merge", () => {
     });
   });
 
-  test("idempotent — second run does not double-register", () => {
+  test("idempotent - second run does not double-register", () => {
     withTempDir((dir) => {
       const userPath = path.join(dir, "settings.json");
       const srcPath  = path.join(dir, "guardian-settings.json");
@@ -297,10 +297,10 @@ describe("mergeClaudeSettings — JSON hook merge", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 1.5.0 — matcher migration and `guardian update` refresh
+// 1.5.0 - matcher migration and `guardian update` refresh
 // ---------------------------------------------------------------------------
 
-describe("mergeClaudeSettings — migrates pre-1.5.0 registrations", () => {
+describe("mergeClaudeSettings - migrates pre-1.5.0 registrations", () => {
   test("moves Guardian's hook from the old matcher to the current one, exactly once", () => {
     withTempDir((dir) => {
       const userPath = path.join(dir, "settings.json");
@@ -344,7 +344,7 @@ describe("mergeClaudeSettings — migrates pre-1.5.0 registrations", () => {
   });
 });
 
-describe("refreshOwnedDir — guardian update replaces stale Guardian files", () => {
+describe("refreshOwnedDir - guardian update replaces stale Guardian files", () => {
   test("stale file is replaced, missing file is copied, project-owned file is kept", () => {
     withTempDir((dir) => {
       const src  = path.join(dir, "src");
@@ -378,7 +378,7 @@ describe("refreshOwnedDir — guardian update replaces stale Guardian files", ()
   });
 });
 
-describe("mergeMd — refresh replaces only the marker block", () => {
+describe("mergeMd - refresh replaces only the marker block", () => {
   test("user content above and below the markers is preserved byte for byte", () => {
     withTempDir((dir) => {
       const dest = path.join(dir, "CLAUDE.md");
@@ -405,10 +405,10 @@ describe("mergeMd — refresh replaces only the marker block", () => {
 });
 
 // ---------------------------------------------------------------------------
-// mergeGitignore — inline-comment-aware dedupe
+// mergeGitignore - inline-comment-aware dedupe
 // ---------------------------------------------------------------------------
 
-describe("mergeGitignore — inline-comment-aware dedupe", () => {
+describe("mergeGitignore - inline-comment-aware dedupe", () => {
   test("does not re-add a path that has an inline comment in the user file", () => {
     withTempDir((dir) => {
       const userPath = path.join(dir, ".gitignore");
@@ -429,7 +429,7 @@ describe("mergeGitignore — inline-comment-aware dedupe", () => {
     });
   });
 
-  test("idempotent — second run is a no-op", () => {
+  test("idempotent - second run is a no-op", () => {
     withTempDir((dir) => {
       const userPath = path.join(dir, ".gitignore");
       const srcPath  = path.join(dir, "guardian-gitignore");
@@ -448,10 +448,10 @@ describe("mergeGitignore — inline-comment-aware dedupe", () => {
 });
 
 // ---------------------------------------------------------------------------
-// mergeEnvExample — key-based dedupe
+// mergeEnvExample - key-based dedupe
 // ---------------------------------------------------------------------------
 
-describe("mergeEnvExample — key-based dedupe", () => {
+describe("mergeEnvExample - key-based dedupe", () => {
   test("does not re-add a key with a different value", () => {
     withTempDir((dir) => {
       const userPath = path.join(dir, ".env.example");
@@ -471,7 +471,7 @@ describe("mergeEnvExample — key-based dedupe", () => {
     });
   });
 
-  test("idempotent — second run is a no-op", () => {
+  test("idempotent - second run is a no-op", () => {
     withTempDir((dir) => {
       const userPath = path.join(dir, ".env.example");
       const srcPath  = path.join(dir, "guardian-env.example");
@@ -490,10 +490,10 @@ describe("mergeEnvExample — key-based dedupe", () => {
 });
 
 // ---------------------------------------------------------------------------
-// copyIfNew — never-overwrite copy
+// copyIfNew - never-overwrite copy
 // ---------------------------------------------------------------------------
 
-describe("copyIfNew — never-overwrite copy", () => {
+describe("copyIfNew - never-overwrite copy", () => {
   test("creates new file when destination missing", () => {
     withTempDir((dir) => {
       const src = path.join(dir, "src.txt");

@@ -1,4 +1,4 @@
-name: OTLC Guardian — Security Audit
+name: OTLC Guardian - Security Audit
 
 on:
   push:
@@ -29,7 +29,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Node.js
-        # Bumped to v6 (Dec 2025, latest stable as of 2026-04-08) — same
+        # Bumped to v6 (Dec 2025, latest stable as of 2026-04-08) - same
         # Node 24 forward path as actions/checkout@v6. The `node-version`
         # input below (the runtime Guardian's tests run against) is a
         # separate concern from the Node version the ACTION ITSELF runs
@@ -41,7 +41,7 @@ jobs:
       - name: Run Guardian unit tests
         # All six test files run via the project's `npm test` script so the
         # CI invocation matches what a developer runs locally. The earlier
-        # if-this-file-exists guards are gone — these test files are part
+        # if-this-file-exists guards are gone - these test files are part
         # of the package and any missing one is a real bug, not a soft skip.
         if: hashFiles('tests/injection-guard.test.js') != ''
         run: npm test
@@ -79,7 +79,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ADVISORY ONLY — does not block the build.
+      # ADVISORY ONLY - does not block the build.
       #
       # `continue-on-error: true` means a known-vulnerable dependency
       # surfaces in the run log but does NOT fail the workflow. This is
@@ -95,12 +95,12 @@ jobs:
       # the default in this template is the more permissive
       # "report but don't block" stance because the template ships
       # to a wide variety of project types.
-      - name: Dependency vulnerability scan (Node) — advisory
+      - name: Dependency vulnerability scan (Node) - advisory
         if: hashFiles('package.json') != ''
         run: npm audit --audit-level=high
         continue-on-error: true
 
-      - name: Dependency vulnerability scan (Python) — advisory
+      - name: Dependency vulnerability scan (Python) - advisory
         if: hashFiles('requirements.txt') != ''
         run: |
           pip install pip-audit

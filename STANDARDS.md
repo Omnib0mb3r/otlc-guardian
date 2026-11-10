@@ -1,4 +1,4 @@
-# OTLC Guardian — Technology Standards
+# OTLC Guardian - Technology Standards
 # // stack standards · onthelevelconcepts.com
 # Version: 1.5.0
 #
@@ -16,12 +16,12 @@
 
 ---
 
-## PART 1 — STACK SELECTION PHILOSOPHY
+## PART 1 - STACK SELECTION PHILOSOPHY
 
 Before writing a single line of code, ask these questions in order:
 
 1. Is there a battle-tested library for this need?
-2. Is it actively maintained — commits within the last 6 months?
+2. Is it actively maintained - commits within the last 6 months?
 3. Does it have >500k weekly downloads or documented enterprise adoption?
 4. Does it have TypeScript types maintained by the library itself?
 
@@ -33,7 +33,7 @@ form of technical debt. Standard choices are a form of respect.**
 
 ---
 
-## PART 2 — PROJECT ARCHITECTURE AND FOLDER STRUCTURE
+## PART 2 - PROJECT ARCHITECTURE AND FOLDER STRUCTURE
 
 ### Node.js / TypeScript API
 
@@ -139,19 +139,19 @@ project-root/
 ```
 
 ### Architecture Rules
-- **Modules are vertical slices** — routes, controller, service, schema, test all live together
-- **No circular imports** — lib imports nothing from modules; modules import from lib/core
-- **One responsibility per file** — routes do not contain business logic; services do not parse HTTP
-- **Tests live next to the code they test** — not in a separate top-level test directory
-- **Config is always injected** — never import config directly inside business logic functions
+- **Modules are vertical slices** - routes, controller, service, schema, test all live together
+- **No circular imports** - lib imports nothing from modules; modules import from lib/core
+- **One responsibility per file** - routes do not contain business logic; services do not parse HTTP
+- **Tests live next to the code they test** - not in a separate top-level test directory
+- **Config is always injected** - never import config directly inside business logic functions
 
 ---
 
-## PART 3 — NODE.JS / TYPESCRIPT STACK
+## PART 3 - NODE.JS / TYPESCRIPT STACK
 
 ### Runtime and Language
-- **Node.js 22 LTS** minimum — never use non-LTS versions in production
-- **TypeScript 5+** — always, no exceptions. JavaScript-only = immediate technical debt.
+- **Node.js 22 LTS** minimum - never use non-LTS versions in production
+- **TypeScript 5+** - always, no exceptions. JavaScript-only = immediate technical debt.
 
 ### TypeScript Configuration
 
@@ -210,14 +210,14 @@ project-root/
 ```
 
 ### Package Management
-- **pnpm** — preferred for speed and disk efficiency
-- **npm** with committed `package-lock.json` — acceptable for single-package projects
+- **pnpm** - preferred for speed and disk efficiency
+- **npm** with committed `package-lock.json` - acceptable for single-package projects
 - Pin exact versions in production: `"express": "4.18.2"` not `"^4.18.2"`
 - Run `npm audit` before every release
 
 ### Web Framework
-- **Fastify 4+** — preferred for new projects (faster, better TS support)
-- **Express 4+** with **Helmet.js** — acceptable for teams already on Express
+- **Fastify 4+** - preferred for new projects (faster, better TS support)
+- **Express 4+** with **Helmet.js** - acceptable for teams already on Express
 - Never use bare `http`/`https` Node modules for production servers
 - Always configure body size limits, explicit CORS allowlist, and security headers
 
@@ -237,9 +237,9 @@ app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 ```
 
 ### Input Validation
-- **Zod** — always. Runtime validation AND TypeScript type inference from a single schema.
-- Schema-first: define Zod schema, infer TypeScript type from it — never the reverse
-- Validate at the boundary — in the controller before the service layer
+- **Zod** - always. Runtime validation AND TypeScript type inference from a single schema.
+- Schema-first: define Zod schema, infer TypeScript type from it - never the reverse
+- Validate at the boundary - in the controller before the service layer
 - Reject unexpected fields with `.strict()` on all object schemas
 
 ```typescript
@@ -269,8 +269,8 @@ export function validate(schema: z.ZodSchema) {
 ```
 
 ### Logging
-- **Pino** — fastest Node.js logger, JSON-native, minimal overhead
-- **Winston** — acceptable when multiple transport targets are needed
+- **Pino** - fastest Node.js logger, JSON-native, minimal overhead
+- **Winston** - acceptable when multiple transport targets are needed
 - Always configure log level from `LOG_LEVEL` environment variable
 - Always include `requestId` in every log entry via child logger
 - Always redact sensitive fields: authorization headers, passwords, tokens
@@ -290,9 +290,9 @@ export const createRequestLogger = (requestId: string) =>
 ```
 
 ### Environment Configuration
-- **dotenv-safe** — not plain dotenv. Crashes loudly if required vars are missing.
-- Single `config/index.ts` — never call `process.env.X` scattered through code
-- All values typed — no string coercion at point of use
+- **dotenv-safe** - not plain dotenv. Crashes loudly if required vars are missing.
+- Single `config/index.ts` - never call `process.env.X` scattered through code
+- All values typed - no string coercion at point of use
 
 ```typescript
 import 'dotenv-safe/config';
@@ -322,25 +322,25 @@ export const config = {
 
 ### Authentication and Authorization
 - **Passport.js** + **passport-jwt** for Express JWT auth strategies
-- **jose** for raw JWT operations — signing, verifying, key rotation
-- **bcryptjs** for password hashing — cost factor 12 minimum in production
+- **jose** for raw JWT operations - signing, verifying, key rotation
+- **bcryptjs** for password hashing - cost factor 12 minimum in production
 - Access tokens: 15 minute expiry, RS256 (asymmetric) preferred over HS256
 - Refresh tokens: 7 day expiry, stored `httpOnly; Secure; SameSite=Strict` cookie
-- Never store any auth token in `localStorage` — XSS steals everything in localStorage
-- Always verify authorization server-side — never trust client-supplied role claims
-- Rotate refresh tokens on use — invalidate old token immediately after rotation
+- Never store any auth token in `localStorage` - XSS steals everything in localStorage
+- Always verify authorization server-side - never trust client-supplied role claims
+- Rotate refresh tokens on use - invalidate old token immediately after rotation
 
 ### Database (SQL)
-- **Prisma** — ORM of choice. Schema-first, type-safe, migration-tracked.
-- **PostgreSQL 15+** — production database. SQLite only for dev/test tooling.
+- **Prisma** - ORM of choice. Schema-first, type-safe, migration-tracked.
+- **PostgreSQL 15+** - production database. SQLite only for dev/test tooling.
 - Every table has: `id` (cuid or UUID), `createdAt`, `updatedAt`
 - Add `@@index` for every column in WHERE, ORDER BY, and foreign keys
-- Cursor-based pagination only — offset pagination degrades at scale
+- Cursor-based pagination only - offset pagination degrades at scale
 - **Zero-dep fallback for raw SQL:** if a project can't adopt Prisma, use the
   `sql` tagged-template helper from `security/04-sql-guard.js`. It auto-parameterizes
   every `${}` interpolation into a `{ text, values }` object compatible with `pg`,
   `mysql2`, and `better-sqlite3`. Dynamic identifiers go through
-  `sql.identifier(name, allowList)` with strict allow-list validation — never
+  `sql.identifier(name, allowList)` with strict allow-list validation - never
   splice table or column names into query text by hand.
 
 ```typescript
@@ -356,15 +356,15 @@ async function getItems(cursor?: string, limit = 20) {
 }
 
 // WRONG: unbounded query kills production
-const users = await prisma.user.findMany(); // never — always add take
+const users = await prisma.user.findMany(); // never - always add take
 ```
 
 ### Testing
-- **Vitest** — preferred (ESM-native, faster than Jest, Jest-compatible API)
-- **Supertest** — for HTTP integration tests
-- **@testing-library/react** — for React component tests
-- **msw (Mock Service Worker)** — for mocking API calls in frontend tests
-- Coverage thresholds enforced — CI fails below minimum
+- **Vitest** - preferred (ESM-native, faster than Jest, Jest-compatible API)
+- **Supertest** - for HTTP integration tests
+- **@testing-library/react** - for React component tests
+- **msw (Mock Service Worker)** - for mocking API calls in frontend tests
+- Coverage thresholds enforced - CI fails below minimum
 
 ```typescript
 // vitest.config.ts
@@ -381,14 +381,14 @@ export default defineConfig({
 ```
 
 ### Error Monitoring
-- **Sentry** — initialized before any route handlers, before other middleware
+- **Sentry** - initialized before any route handlers, before other middleware
 - Capture unhandled promise rejections and uncaught exceptions
 - Tag every error with `requestId` for log correlation
 - Never expose Sentry DSN in frontend source bundles
 
 ### HTTP Client
 - **axios** with interceptors for server-to-server calls
-- Always set explicit timeouts — never allow indefinite hanging
+- Always set explicit timeouts - never allow indefinite hanging
 - Always handle network errors with typed `axios.isAxiosError()` check
 
 ```typescript
@@ -406,7 +406,7 @@ httpClient.interceptors.response.use(
 ```
 
 ### Process Management
-- **PM2** in cluster mode — never run `node server.js` directly in production
+- **PM2** in cluster mode - never run `node server.js` directly in production
 
 ```json
 {
@@ -423,7 +423,7 @@ httpClient.interceptors.response.use(
 
 ### Child Processes (Windows)
 - **Always pass `windowsHide: true`** to every `child_process.spawn`, `spawnSync`, `execSync`, and `exec`. Default behavior allocates a visible console window for each subprocess on Windows; polling loops or per-request shell-outs flash console windows onto the user's desktop multiple times per minute.
-- The option is ignored on POSIX, so include it unconditionally — never gate behind `if (process.platform === 'win32')`.
+- The option is ignored on POSIX, so include it unconditionally - never gate behind `if (process.platform === 'win32')`.
 - For long-running detached processes, combine `windowsHide: true` + `detached: true` + redirected `stdio`. `detached: true` alone allocates a fresh console; `windowsHide` is what hides it.
 - For Windows scheduled tasks invoking PowerShell, action arguments must include `-WindowStyle Hidden` AND `-NonInteractive`. Without `-WindowStyle Hidden`, the task host briefly shows the console.
 - For hooks where a parent harness controls spawn (Claude Code, Stream Deck, etc.), wrap the command in a `wscript.exe` + VBS shim doing `WshShell.Run cmd, 0, False`. Defense in depth because the parent's spawn behavior is not under your control.
@@ -446,18 +446,18 @@ const child = spawn(node, [entry], {
 
 ---
 
-## PART 4 — PYTHON STACK
+## PART 4 - PYTHON STACK
 
 ### Version and Environment
-- **Python 3.11+** minimum — 3.12 preferred
+- **Python 3.11+** minimum - 3.12 preferred
 - **pyenv** for version management
-- **Poetry** — preferred for dependency management and virtual environments
+- **Poetry** - preferred for dependency management and virtual environments
 - Always commit `pyproject.toml` with pinned versions
 - Use `pip-compile` to generate locked `requirements.txt`
-- Never `pip install` globally — always inside a virtual environment
+- Never `pip install` globally - always inside a virtual environment
 
 ### Web Framework
-- **FastAPI** — required for all new AI and API projects
+- **FastAPI** - required for all new AI and API projects
   - Async-native (ASGI), OpenAPI auto-generated, Pydantic-integrated, DI built in
 - Always run with Gunicorn + uvicorn workers in production:
 
@@ -470,7 +470,7 @@ gunicorn app.main:app \
 ```
 
 ### Data Validation
-- **Pydantic v2** — always. Requests, responses, config, data models.
+- **Pydantic v2** - always. Requests, responses, config, data models.
 - Use `model_config = ConfigDict(strict=True)` on all request schemas
 - Never use bare `dict` or `Any` as a request body type
 
@@ -485,7 +485,7 @@ class ChatRequest(BaseModel):
 ```
 
 ### Configuration
-- **pydantic-settings** — typed, validated, fails loudly if required vars missing
+- **pydantic-settings** - typed, validated, fails loudly if required vars missing
 
 ```python
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -493,9 +493,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', extra='ignore')
 
-    database_url: str   # required — no default
-    jwt_secret:   str   # required — no default
-    redis_url:    str   # required — no default
+    database_url: str   # required - no default
+    jwt_secret:   str   # required - no default
+    redis_url:    str   # required - no default
     log_level:    str = 'INFO'
     env:          str = 'development'
 
@@ -507,7 +507,7 @@ settings = Settings()  # crashes at startup if required vars missing
 ```
 
 ### Logging
-- **structlog** with JSON renderer — structured, context-aware
+- **structlog** with JSON renderer - structured, context-aware
 - Never use `print()` in production paths
 - Bind `request_id` to every log entry within a request context
 
@@ -558,21 +558,21 @@ class User(Base):
 
 ---
 
-## PART 5 — FRONTEND STACK
+## PART 5 - FRONTEND STACK
 
 ### Framework
-- **React 18+** with TypeScript strict mode — default
-- **Next.js 14+** (App Router) — when SSR, SSG, SEO, or full-stack needed
-- **Vite 5+** — for SPAs. Fast, ESM-native.
-- Never use Create React App — unmaintained since 2022
+- **React 18+** with TypeScript strict mode - default
+- **Next.js 14+** (App Router) - when SSR, SSG, SEO, or full-stack needed
+- **Vite 5+** - for SPAs. Fast, ESM-native.
+- Never use Create React App - unmaintained since 2022
 
-### State Management — Two Categories, Never Mixed
+### State Management - Two Categories, Never Mixed
 
 **Server state** (data from APIs) → **TanStack Query v5**
 **Client state** (UI/preferences) → **Zustand**
 
 ```typescript
-// TanStack Query — always handle all three states
+// TanStack Query - always handle all three states
 function ItemList() {
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['items'],
@@ -588,7 +588,7 @@ function ItemList() {
 ```
 
 ### Forms
-- **React Hook Form** + **Zod resolver** — always
+- **React Hook Form** + **Zod resolver** - always
 
 ```typescript
 const { register, handleSubmit, formState: { errors } } = useForm<FormData>({
@@ -597,8 +597,8 @@ const { register, handleSubmit, formState: { errors } } = useForm<FormData>({
 ```
 
 ### Styling
-- **Tailwind CSS v3+** — utility-first, purge-safe, no runtime cost
-- **shadcn/ui** — accessible Radix UI components you own
+- **Tailwind CSS v3+** - utility-first, purge-safe, no runtime cost
+- **shadcn/ui** - accessible Radix UI components you own
 - Never use CSS-in-JS (styled-components, emotion) for new projects
 
 ### API Client
@@ -614,23 +614,23 @@ export const apiClient = axios.create({
 ```
 
 ### Error Handling
-- **React Error Boundary** on every route — one crash must not kill the app
-- **sonner** — toast notifications on mutation success and failure
-- Every async action has an error handler — no unhandled rejections
+- **React Error Boundary** on every route - one crash must not kill the app
+- **sonner** - toast notifications on mutation success and failure
+- Every async action has an error handler - no unhandled rejections
 
 ### Build Tooling
 - **Vite** bundler
-- **ESLint** + **Prettier** — configured, runs in CI
-- **Husky** + **lint-staged** — pre-commit hooks for lint and format
-- **TypeScript strict mode** — always
+- **ESLint** + **Prettier** - configured, runs in CI
+- **Husky** + **lint-staged** - pre-commit hooks for lint and format
+- **TypeScript strict mode** - always
 
 ---
 
-## PART 6 — INFRASTRUCTURE AND DEPLOYMENT
+## PART 6 - INFRASTRUCTURE AND DEPLOYMENT
 
 ### Docker
 - Every service has a `Dockerfile` using multi-stage builds
-- Pin exact base image versions — never `node:latest`
+- Pin exact base image versions - never `node:latest`
 - Always define `HEALTHCHECK`
 - Never run as root inside a container
 
@@ -660,50 +660,50 @@ CMD ["node", "dist/server.js"]
 ### Reverse Proxy
 - **Nginx** in front of every service in production
 - Never expose app server ports directly to the internet
-- SSL terminates at Nginx — apps speak HTTP internally
+- SSL terminates at Nginx - apps speak HTTP internally
 
 ### CI/CD
-Every pipeline runs in order — no stage skipped:
+Every pipeline runs in order - no stage skipped:
 
 ```
 lint → typecheck → test → security audit → build → deploy
 ```
 
 - Never merge to `main` without all stages passing
-- Deploy only from CI — never manual deploys to production
+- Deploy only from CI - never manual deploys to production
 
 > **Note on Guardian's own CI default.** The shipped
 > `.github/workflows/security-audit.yml` runs `npm audit` and `pip-audit`
-> as **advisory-only** (`continue-on-error: true`) — vulnerable dependencies
+> as **advisory-only** (`continue-on-error: true`) - vulnerable dependencies
 > show up in the run log but do not fail the workflow. This is the
 > "report, don't block" stance, chosen because the template ships to a
 > wide variety of project types and a hard-fail dependency gate would
 > brick PRs in the window between a CVE landing and an upstream fix
 > shipping. **For your own production projects, the standard above
-> applies — make those steps blocking by removing `continue-on-error: true`
+> applies - make those steps blocking by removing `continue-on-error: true`
 > from both dependency-scan steps in the workflow.**
 
 ---
 
-## PART 7 — DATABASE STANDARDS
+## PART 7 - DATABASE STANDARDS
 
-- **PostgreSQL 15+** — default for all new projects
-- **Redis 7+** — caching, sessions, rate limiting, queues
+- **PostgreSQL 15+** - default for all new projects
+- **Redis 7+** - caching, sessions, rate limiting, queues
 - Every table: `id` (UUID), `created_at`, `updated_at`
 - Soft deletes preferred: `deleted_at` nullable timestamp
 - Add indexes on every foreign key and every WHERE/ORDER BY column
-- Cursor-based pagination always — offset breaks past 1000 rows
-- Define data retention policies before launch — tables never grow forever
-- Test backup restores before go-live — an untested backup is not a backup
+- Cursor-based pagination always - offset breaks past 1000 rows
+- Define data retention policies before launch - tables never grow forever
+- Test backup restores before go-live - an untested backup is not a backup
 
 ---
 
-## PART 8 — API STANDARDS
+## PART 8 - API STANDARDS
 
 ### Versioning
 - All routes versioned from day one: `/api/v1/...`
 
-### Response Shape — Every Response, Every Time
+### Response Shape - Every Response, Every Time
 
 ```json
 { "success": true,  "data": {},    "requestId": "uuid" }
@@ -734,23 +734,23 @@ lint → typecheck → test → security audit → build → deploy
 
 ### Documentation
 - OpenAPI 3.0 for every API
-- FastAPI: auto-generated — every endpoint needs `summary`, `description`, `response_model`
+- FastAPI: auto-generated - every endpoint needs `summary`, `description`, `response_model`
 - Express: `swagger-jsdoc` + `swagger-ui-express`
 
 ---
 
-## PART 9 — SECURITY STANDARDS
+## PART 9 - SECURITY STANDARDS
 
 ### OWASP Top 10 Pre-Release Checklist
-- [ ] All queries parameterized — no string SQL concatenation
+- [ ] All queries parameterized - no string SQL concatenation
 - [ ] Passwords hashed with bcrypt, cost factor 12+
-- [ ] All secrets in environment variables — none in code
-- [ ] HTTPS only — HTTP redirects enforced at Nginx
+- [ ] All secrets in environment variables - none in code
+- [ ] HTTPS only - HTTP redirects enforced at Nginx
 - [ ] Security headers applied (see below)
-- [ ] CORS allowlist explicit — never `*` in production
+- [ ] CORS allowlist explicit - never `*` in production
 - [ ] All endpoints verify authorization server-side
 - [ ] Debug mode disabled in production
-- [ ] `npm audit` / `pip-audit` — no HIGH or CRITICAL findings
+- [ ] `npm audit` / `pip-audit` - no HIGH or CRITICAL findings
 - [ ] All auth events and errors logged with requestId
 
 ### Required Security Headers
@@ -781,14 +781,14 @@ A header set at the root of a shared document root (Apache `public_html/.htacces
 
 ---
 
-## PART 10 — GIT WORKFLOW AND CODE REVIEW
+## PART 10 - GIT WORKFLOW AND CODE REVIEW
 
 ### Branch Strategy
-- `main` — production. Protected. Never push directly.
-- `develop` — integration branch
-- `feature/[ticket]-description` — from develop
-- `fix/[ticket]-description` — bug fixes
-- `hotfix/description` — urgent prod fixes from main
+- `main` - production. Protected. Never push directly.
+- `develop` - integration branch
+- `feature/[ticket]-description` - from develop
+- `fix/[ticket]-description` - bug fixes
+- `hotfix/description` - urgent prod fixes from main
 
 ### Commit Conventions (Conventional Commits)
 ```
@@ -798,16 +798,16 @@ test(users): add integration tests for user creation
 chore(deps): update Prisma to 5.8.0
 ```
 
-### PR Requirements — All Must Pass Before Merge
+### PR Requirements - All Must Pass Before Merge
 - [ ] CI green (lint + typecheck + test + audit + build)
 - [ ] At least one test added or updated
 - [ ] No new ESLint or TypeScript errors
 - [ ] Guardian audit clean
 - [ ] Self-review against CLAUDE.md checklist complete
 
-### Code Review — What Reviewers Check
+### Code Review - What Reviewers Check
 - Does this follow STANDARDS.md approved stack?
-- Are all errors handled — no silent catch blocks?
+- Are all errors handled - no silent catch blocks?
 - Is logging structured with requestId?
 - Is input validated with Zod/Pydantic?
 - Are there tests covering new behavior?
@@ -815,9 +815,9 @@ chore(deps): update Prisma to 5.8.0
 
 ---
 
-## PART 11 — OBSERVABILITY STANDARDS
+## PART 11 - OBSERVABILITY STANDARDS
 
-### Health Check — Every Service
+### Health Check - Every Service
 ```json
 {
   "status": "ok",
@@ -827,7 +827,7 @@ chore(deps): update Prisma to 5.8.0
   "dependencies": { "database": "ok", "redis": "ok" }
 }
 ```
-(Example payload — the `version` field is your application's version, not Guardian's.)
+(Example payload - the `version` field is your application's version, not Guardian's.)
 
 ### Minimum Metrics (Every Production Service)
 - Request rate per endpoint
@@ -849,7 +849,7 @@ distributed tracing stack.
 
 ---
 
-## QUICK REFERENCE — APPROVED STACK
+## QUICK REFERENCE - APPROVED STACK
 
 | Need | Node / TypeScript | Python |
 |------|------------------|--------|
@@ -862,11 +862,11 @@ distributed tracing stack.
 | Auth | Passport.js + jose + bcryptjs | python-jose + passlib |
 | Testing | Vitest + Supertest | pytest + httpx |
 | Coverage | vitest --coverage (70%) | pytest --cov-fail-under=70 |
-| Frontend data | TanStack Query v5 | — |
-| Frontend forms | React Hook Form + Zod | — |
-| Frontend state | Zustand | — |
-| Frontend UI | shadcn/ui + Tailwind CSS | — |
-| Bundler | Vite 5 | — |
+| Frontend data | TanStack Query v5 | - |
+| Frontend forms | React Hook Form + Zod | - |
+| Frontend state | Zustand | - |
+| Frontend UI | shadcn/ui + Tailwind CSS | - |
+| Bundler | Vite 5 | - |
 | Error monitoring | Sentry | Sentry |
 | Process management | PM2 cluster mode | Gunicorn + uvicorn workers |
 | Task queue | BullMQ + Redis | Celery + Redis |
@@ -891,7 +891,7 @@ distributed tracing stack.
 | CSS-in-JS | Tailwind CSS | Runtime cost, larger bundles |
 | `node:latest` Docker | `node:22.11-alpine` | Reproducible, minimal attack surface |
 | Raw string SQL | ORM / parameterized queries | SQL injection vector |
-| `node-fetch` | Native `fetch` | Built-in to Node — no package needed |
+| `node-fetch` | Native `fetch` | Built-in to Node - no package needed |
 | Redux (new project) | Zustand + TanStack Query | 80% less boilerplate |
 | Promise without `.catch()` | Always handle rejections | Unhandled rejections crash Node |
 | Empty `catch (e) {}` | Log + rethrow or typed response | Silent failures hide bugs forever |

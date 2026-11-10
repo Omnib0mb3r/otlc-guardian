@@ -4,7 +4,7 @@
 
 * text=auto eol=lf
 
-# Shell scripts must always be LF — Windows CRLF in a .sh file breaks
+# Shell scripts must always be LF - Windows CRLF in a .sh file breaks
 # the interpreter on Linux runners (CI).
 *.sh        text eol=lf
 *.mjs       text eol=lf

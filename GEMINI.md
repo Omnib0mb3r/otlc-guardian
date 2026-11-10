@@ -1,4 +1,4 @@
-# OTLC Guardian — Gemini CLI Instructions
+# OTLC Guardian - Gemini CLI Instructions
 <!-- onthelevelconcepts.com · Version 1.3.1 -->
 <!-- Read by Google Gemini CLI and any agent that looks for GEMINI.md. -->
 <!-- For Codex/Cursor/Aider/Continue/Windsurf see AGENTS.md.            -->
@@ -6,7 +6,7 @@
 
 This project uses **OTLC Guardian**, a production-grade security and standards
 layer for AI-assisted development. The full rule set lives in `AGENTS.md`,
-`CLAUDE.md`, and `STANDARDS.md` — this file is the Gemini entry point into
+`CLAUDE.md`, and `STANDARDS.md` - this file is the Gemini entry point into
 that rule set.
 
 ---
@@ -17,7 +17,7 @@ that rule set.
    file and its rules apply to you regardless of which agent you are. Treat
    every section of it as in force while you work in this repository.
 2. **Read `STANDARDS.md`** in this project root. It is the approved technology
-   stack — the exact libraries and patterns this project will accept. Reach
+   stack - the exact libraries and patterns this project will accept. Reach
    for those before anything else.
 3. **Read `CLAUDE.md`** in this project root. Despite the name, the rules
    inside (no silent catches, structured logging, versioned APIs, typed
@@ -42,8 +42,8 @@ thing, stop and do the right thing.
 
 The full list lives in `AGENTS.md` and `CLAUDE.md`. The short version:
 
-- **Never hardcode secrets.** API keys, passwords, tokens, connection strings
-  — all of it lives in environment variables. `.env.example` only, never
+- **Never hardcode secrets.** API keys, passwords, tokens, connection strings:
+  all of it lives in environment variables. `.env.example` only, never
   `.env`.
 - **Never silent-catch.** Every `catch` block logs or rethrows with context.
   `catch (e) { /* silent */ }` is as forbidden as `catch (e) {}`.

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // ============================================================
-// OTLC Guardian — CLI
+// OTLC Guardian - CLI
 // // onthelevelconcepts.com
 // ============================================================
 // Note: this file is exempted from `guardian audit` via the
-// central allowlist at security/.audit-allowlist (CLI — console
+// central allowlist at security/.audit-allowlist (CLI - console
 // output is its purpose, ERR-003 false positive). The per-file
 // `otlc-guardian:audit-exempt` marker is also supported for
 // end-user projects that prefer that mechanism.
@@ -19,7 +19,7 @@
 //
 // To remove Guardian from a project, follow the manual marker-based
 // procedure in SETUP.md § Uninstalling. There is deliberately no
-// `guardian uninstall` command — automated removal is too dangerous
+// `guardian uninstall` command - automated removal is too dangerous
 // for a tool that shares marker blocks with user content.
 //
 // ============================================================
@@ -42,7 +42,7 @@ const args      = process.argv.slice(2).filter((a) => a !== "--no-color");
 const command   = args[0];
 
 // ---------------------------------------------------------------------------
-// COLORS — no dependencies
+// COLORS - no dependencies
 // ---------------------------------------------------------------------------
 //
 // 1.3.1: ANSI escape sequences are silenced when stdout/stderr is not a TTY,
@@ -115,7 +115,7 @@ const err  = (msg) => console.error(`${cErr.red}${GLYPH.err}${msg}${cErr.reset}`
 
 function showHelp() {
   log(`
-${c.bold}${c.cyan}OTLC Guardian${c.reset} — Production-grade AI security guardrails
+${c.bold}${c.cyan}OTLC Guardian${c.reset} - Production-grade AI security guardrails
 ${c.dim}onthelevelconcepts.com${c.reset}
 
 ${c.bold}COMMANDS${c.reset}
@@ -144,7 +144,7 @@ ${c.bold}COMMANDS${c.reset}
 
   ${c.cyan}guardian init${c.reset}
     Copy Guardian files into the current project directory.
-    Safe to run on existing projects — will not overwrite existing CLAUDE.md.
+    Safe to run on existing projects - will not overwrite existing CLAUDE.md.
 
   ${c.cyan}guardian update${c.reset}
     Bring an existing install up to the current Guardian version.
@@ -174,13 +174,13 @@ ${c.dim}Version 1.5.0 · MIT License${c.reset}
 }
 
 // ---------------------------------------------------------------------------
-// AUDIT — wraps 03-audit.js
+// AUDIT - wraps 03-audit.js
 // ---------------------------------------------------------------------------
 
 function runAudit() {
   // Forward any extra CLI args as an ARRAY, never a joined string. A prior
   // version spliced `args.slice(1).join(" ")` into an execSync template
-  // literal — a classic shell-injection sink. `guardian audit "; echo x"`
+  // literal - a classic shell-injection sink. `guardian audit "; echo x"`
   // would execute the echo. Replaced with spawnSync + argv array so the
   // shell never parses the arguments at all. See CHANGELOG 1.1.1 Security.
   const auditScript = path.join(ROOT, "security", "03-audit.js");
@@ -192,7 +192,7 @@ function runAudit() {
   }
 
   // `shell: false` is the default for spawnSync and is what makes this
-  // safe — each element of argv becomes its own argv[] entry in the
+  // safe - each element of argv becomes its own argv[] entry in the
   // child, no shell interpolation at any stage.
   const result = spawnSync("node", [auditScript, ...extraArgs], {
     stdio: "inherit",
@@ -210,7 +210,7 @@ function runAudit() {
 }
 
 // ---------------------------------------------------------------------------
-// SCAN — scan a string for injection
+// SCAN - scan a string for injection
 // ---------------------------------------------------------------------------
 
 // Read all of stdin into a single string. Resolves on EOF, or after a
@@ -238,7 +238,7 @@ async function runScan() {
 
   // Only consult stdin when no positional text was provided AND stdin
   // is being piped (not a TTY). If stdin IS a TTY, the user invoked
-  // `guardian scan` interactively with no args — show usage instead of
+  // `guardian scan` interactively with no args - show usage instead of
   // hanging on a blank stdin waiting for input.
   if (!text && !process.stdin.isTTY) {
     text = (await readStdinSync()).trim();
@@ -251,7 +251,7 @@ async function runScan() {
     process.exit(1);
   }
 
-  // Dynamic import() requires a `file://` URL on Windows — a raw
+  // Dynamic import() requires a `file://` URL on Windows - a raw
   // `C:\...\01-injection-guard.js` throws ERR_UNSUPPORTED_ESM_URL_SCHEME
   // and takes the whole command down on first use. Convert via
   // pathToFileURL so the same code path works on Windows, Linux, and
@@ -277,7 +277,7 @@ async function runScan() {
 }
 
 // ---------------------------------------------------------------------------
-// LIST-WATCHED — print the effective hook watch list for the current project
+// LIST-WATCHED - print the effective hook watch list for the current project
 // ---------------------------------------------------------------------------
 //
 // Useful when you've customized otlcGuardian.watchPaths in settings.json
@@ -296,10 +296,10 @@ function runListWatched() {
       const raw = readFileSync(settingsPath, "utf8");
       userConfig = JSON.parse(raw).otlcGuardian ?? {};
     } catch {
-      warn(".claude/settings.json present but unreadable — showing defaults only");
+      warn(".claude/settings.json present but unreadable - showing defaults only");
     }
   } else {
-    warn("No .claude/settings.json found — showing defaults only");
+    warn("No .claude/settings.json found - showing defaults only");
   }
 
   const extendDefaults = userConfig.extendDefaults !== false;
@@ -308,7 +308,7 @@ function runListWatched() {
 
   // These mirror the defaults in .claude/hooks/injection-guard-hook.mjs.
   // Keep this list in lockstep with DEFAULT_WATCH_DIR_PATTERNS and
-  // DEFAULT_WATCH_FILE_PATTERNS in the hook — drift produces confusing
+  // DEFAULT_WATCH_FILE_PATTERNS in the hook - drift produces confusing
   // "why isn't my file being watched" support questions.
   const DEFAULT_DIRS = [
     ".planning/", ".gsd/", ".plans/",
@@ -357,7 +357,7 @@ function runListWatched() {
 }
 
 // ---------------------------------------------------------------------------
-// CHECK — verify Guardian is set up in the current project
+// CHECK - verify Guardian is set up in the current project
 // ---------------------------------------------------------------------------
 
 // Detect whether the current project looks like a Python project.
@@ -412,7 +412,7 @@ function smokeTestHook(hookPath) {
 
 // Build a per-editor coverage summary based on which Guardian artifacts
 // exist in the current project. This is what tells a Codex / Cursor / Aider
-// user "yes, Guardian is working for you — here's what you get and what
+// user "yes, Guardian is working for you - here's what you get and what
 // you don't." Before commit 4 of the multi-agent fix, runCheck only reported
 // on Claude-Code-specific artifacts and had nothing to say to anyone else.
 //
@@ -429,7 +429,7 @@ function editorCoverage(root) {
 
   // Every non-Claude agent in the "behavior-only" tier reads AGENTS.md.
   // Codex CLI, Cursor, Aider, Continue, and Windsurf are the mainstream
-  // ones as of early 2026 — keep the list short and honest. Anything not
+  // ones as of early 2026 - keep the list short and honest. Anything not
   // in this list is not-yet-integrated, not "quietly supported."
   const behaviorOnlyEditors = ["Codex CLI", "Cursor", "Aider", "Continue", "Windsurf"];
 
@@ -452,7 +452,7 @@ function editorCoverage(root) {
     rows.push({
       editor: "Claude Code",
       status: "DISABLED",
-      detail: "CLAUDE.md not found — Claude Code will not load project rules",
+      detail: "CLAUDE.md not found - Claude Code will not load project rules",
     });
   }
 
@@ -468,18 +468,18 @@ function editorCoverage(root) {
       rows.push({
         editor,
         status: "DISABLED",
-        detail: "AGENTS.md not found — this agent will load no project rules",
+        detail: "AGENTS.md not found - this agent will load no project rules",
       });
     }
   }
 
-  // Gemini CLI — uses its own GEMINI.md entry file (created in 1.1.1) which
+  // Gemini CLI - uses its own GEMINI.md entry file (created in 1.1.1) which
   // points users at AGENTS.md for the shared rules. Reported separately so a
   // user who skipped GEMINI.md provisioning can see that the door isn't in
   // place for them yet.
   //
   // 1.3.1: Gemini's status is gated on BOTH files because GEMINI.md is a
-  // pointer file — it tells Gemini "read AGENTS.md and CLAUDE.md for the
+  // pointer file - it tells Gemini "read AGENTS.md and CLAUDE.md for the
   // full rules." If AGENTS.md is missing, the pointer dangles and the
   // Gemini agent loads no Guardian rules even though GEMINI.md exists.
   // Pre-1.3.1 the row reported BEHAVIOR-ONLY whenever GEMINI.md existed,
@@ -494,13 +494,13 @@ function editorCoverage(root) {
     rows.push({
       editor: "Gemini CLI",
       status: "PARTIAL",
-      detail: "GEMINI.md present but AGENTS.md missing — pointer dangles, no rules loaded",
+      detail: "GEMINI.md present but AGENTS.md missing - pointer dangles, no rules loaded",
     });
   } else {
     rows.push({
       editor: "Gemini CLI",
       status: "DISABLED",
-      detail: "GEMINI.md not found — Gemini CLI will not load project rules",
+      detail: "GEMINI.md not found - Gemini CLI will not load project rules",
     });
   }
 
@@ -526,7 +526,7 @@ function runCheck() {
 
   const pythonProject = isPythonProject(CWD);
 
-  // CLAUDE.md, AGENTS.md, and GEMINI.md are individually optional — but at
+  // CLAUDE.md, AGENTS.md, and GEMINI.md are individually optional - but at
   // least one must be present or the project has no behavior rules at all,
   // which is the one failure mode runCheck should refuse to let slide. The
   // "behavior file present" gate below enforces that jointly.
@@ -611,7 +611,7 @@ function runCheck() {
       label: ".env NOT committed (good)",
       path: path.join(CWD, ".env"),
       required: false,
-      invert: true, // this one should NOT exist in git — warn if found
+      invert: true, // this one should NOT exist in git - warn if found
     },
   ];
 
@@ -624,7 +624,7 @@ function runCheck() {
 
     if (check.invert) {
       if (exists) {
-        warn(`${check.label} — .env found. Make sure it is in .gitignore!`);
+        warn(`${check.label} - .env found. Make sure it is in .gitignore!`);
         warnings++;
       } else {
         ok(`No .env file found in root (secrets managed via environment)`);
@@ -647,19 +647,19 @@ function runCheck() {
 
   // ── Behavior-file gate ──────────────────────────────────────────────
   // CLAUDE.md, AGENTS.md, and GEMINI.md are individually optional, but at
-  // least one MUST be present — without any of them, Guardian has no
+  // least one MUST be present - without any of them, Guardian has no
   // behavior layer to enforce and the install is broken. This gate fails
   // the check the same way a missing "required" file would, but with a
   // targeted error that explains the multi-agent model instead of just
   // saying "file missing."
   if (!hasClaudeMd && !hasAgentsMd && !hasGeminiMd) {
-    err(`MISSING (required): behavior file — none of CLAUDE.md, AGENTS.md, GEMINI.md found`);
+    err(`MISSING (required): behavior file - none of CLAUDE.md, AGENTS.md, GEMINI.md found`);
     log(`     ${c.dim}Guardian needs at least one behavior file so your coding agent can read the rules.${c.reset}`);
     log(`     ${c.dim}Run ${c.reset}${c.cyan}guardian init${c.dim} to populate all three.${c.reset}`);
     failed++;
   }
 
-  // ── Hook smoke test — only when the hook file is present ───────────
+  // ── Hook smoke test - only when the hook file is present ───────────
   const hookPath = path.join(CWD, ".claude", "hooks", "injection-guard-hook.mjs");
   if (existsSync(hookPath)) {
     log(`\n${c.bold}Hook smoke test${c.reset}`);
@@ -673,7 +673,7 @@ function runCheck() {
     }
   }
 
-  // ── Editor coverage — what this install means for each agent ───────
+  // ── Editor coverage - what this install means for each agent ───────
   // This is the bit that was missing before commit 4 of the multi-agent
   // fix: runCheck validated Claude-only artifacts and then said "Guardian
   // is correctly installed" even if a Codex / Cursor / Aider user had no
@@ -742,18 +742,18 @@ function writeFile(p, content) {
  * function means every call site gets idempotency for free.
  *
  * The Guardian content below the marker is byte-identical across cases
- * 1 and 2 — the only difference is whether user content precedes it.
+ * 1 and 2 - the only difference is whether user content precedes it.
  * That invariant is what makes double-init safe.
  */
 function mergeMd(existingPath, guardianSrcPath, label, { refresh = false } = {}) {
-  const existing  = readFile(existingPath);  // '' if file missing — readFile swallows ENOENT
+  const existing  = readFile(existingPath);  // '' if file missing - readFile swallows ENOENT
   const incoming  = readFile(guardianSrcPath);
   const marker    = `<!-- OTLC-GUARDIAN-START -->`;
   const endMarker = `<!-- OTLC-GUARDIAN-END -->`;
 
   if (existing.includes(marker)) {
     if (!refresh) {
-      warn(`${label} — Guardian section already present, skipping`);
+      warn(`${label} - Guardian section already present, skipping`);
       return;
     }
     // `guardian update`: replace what sits between the markers with the
@@ -762,7 +762,7 @@ function mergeMd(existingPath, guardianSrcPath, label, { refresh = false } = {})
     const startIdx = existing.indexOf(marker);
     const endIdx   = existing.indexOf(endMarker, startIdx);
     if (endIdx < 0) {
-      warn(`${label} — START marker found but END marker missing, not touching the file`);
+      warn(`${label} - START marker found but END marker missing, not touching the file`);
       return;
     }
     const refreshed =
@@ -776,11 +776,11 @@ function mergeMd(existingPath, guardianSrcPath, label, { refresh = false } = {})
       `\n\n${endMarker}` +
       existing.slice(endIdx + endMarker.length);
     if (refreshed === existing) {
-      ok(`${label} — Guardian section up to date`);
+      ok(`${label} - Guardian section up to date`);
       return;
     }
     writeFile(existingPath, refreshed);
-    ok(`${label} — Guardian section refreshed (content outside the markers untouched)`);
+    ok(`${label} - Guardian section refreshed (content outside the markers untouched)`);
     return;
   }
 
@@ -804,13 +804,13 @@ function mergeMd(existingPath, guardianSrcPath, label, { refresh = false } = {})
 
   writeFile(existingPath, merged);
   ok(hasUserContent
-    ? `${label} — merged Guardian content into existing file`
-    : `${label} — created with Guardian content (new file, marker-sealed)`);
+    ? `${label} - merged Guardian content into existing file`
+    : `${label} - created with Guardian content (new file, marker-sealed)`);
 }
 
 /**
  * Normalize a matcher string into a canonical sorted token form.
- * "Write|Edit" and "Edit|Write" both become "Edit|Write" — so we can
+ * "Write|Edit" and "Edit|Write" both become "Edit|Write" - so we can
  * compare two matchers as sets without caring about order.
  */
 function canonicalMatcher(matcher) {
@@ -847,7 +847,7 @@ function findMatcherBlock(arr, targetMatcher) {
  *   - NEVER removes or modifies existing hooks.
  *   - Matcher comparison is set-based (Write|Edit == Edit|Write), so users
  *     who already have one of those don't end up with two parallel blocks.
- *   - Idempotent — running a second time is a no-op.
+ *   - Idempotent - running a second time is a no-op.
  */
 function mergeClaudeSettings(existingPath, guardianSrcPath) {
   // Hooks Guardian wants to register. Each entry: { event, matcher, command }
@@ -864,12 +864,12 @@ function mergeClaudeSettings(existingPath, guardianSrcPath) {
     },
   ];
 
-  // Parse the user's settings — refuse to touch the file if we can't.
+  // Parse the user's settings - refuse to touch the file if we can't.
   let existing;
   try {
     existing = JSON.parse(readFile(existingPath) || "{}");
   } catch (parseErr) {
-    err(`.claude/settings.json — INVALID JSON, refusing to overwrite`);
+    err(`.claude/settings.json - INVALID JSON, refusing to overwrite`);
     err(`    ${parseErr.message}`);
     err(`    Fix the JSON manually, then re-run guardian init.`);
     err(`    A reference copy is at: ${guardianSrcPath}`);
@@ -923,12 +923,12 @@ function mergeClaudeSettings(existingPath, guardianSrcPath) {
   }
 
   if (added === 0 && moved === 0) {
-    ok(`.claude/settings.json — all ${already} Guardian hook(s) already registered`);
+    ok(`.claude/settings.json - all ${already} Guardian hook(s) already registered`);
     return;
   }
 
   writeFile(existingPath, JSON.stringify(existing, null, 2) + "\n");
-  ok(`.claude/settings.json — merged ${added} Guardian hook(s) into existing config` +
+  ok(`.claude/settings.json - merged ${added} Guardian hook(s) into existing config` +
      (moved > 0 ? ` (${moved} moved to the current matcher)` : ""));
 }
 
@@ -941,7 +941,7 @@ function mergeClaudeSettings(existingPath, guardianSrcPath) {
  *   "  "                     →  ""        (blank)
  *
  * Note: gitignore syntax allows literal '#' at the start of a path only when
- * escaped as '\#'. We do not currently round-trip escaped patterns — those
+ * escaped as '\#'. We do not currently round-trip escaped patterns - those
  * are vanishingly rare. The pragmatic stripper below catches the common
  * "path then trailing comment" case that produced the duplicate-line bug.
  */
@@ -954,7 +954,7 @@ function gitignorePathToken(line) {
 }
 
 /**
- * Merge a .gitignore — appends Guardian's entries under a labelled block.
+ * Merge a .gitignore - appends Guardian's entries under a labelled block.
  * Idempotent. Never removes existing entries. Inline-comment-aware so a
  * user line like ".env # local secrets" correctly suppresses Guardian's
  * own ".env" entry.
@@ -965,11 +965,11 @@ function mergeGitignore(existingPath, guardianSrcPath) {
   const marker   = "# OTLC-GUARDIAN-START";
 
   if (existing.includes(marker)) {
-    ok(".gitignore — Guardian entries already present");
+    ok(".gitignore - Guardian entries already present");
     return;
   }
 
-  // Existing path tokens (with inline comments stripped) — used for dedupe.
+  // Existing path tokens (with inline comments stripped) - used for dedupe.
   const existingTokens = new Set(
     existing.split("\n").map(gitignorePathToken).filter(Boolean)
   );
@@ -984,22 +984,22 @@ function mergeGitignore(existingPath, guardianSrcPath) {
     });
 
   if (newLines.length === 0) {
-    ok(".gitignore — all Guardian entries already covered");
+    ok(".gitignore - all Guardian entries already covered");
     return;
   }
 
   const block =
     `\n# OTLC-GUARDIAN-START\n` +
-    `# Added by OTLC Guardian (guardian init) — safe to keep\n` +
+    `# Added by OTLC Guardian (guardian init) - safe to keep\n` +
     newLines.join("\n") +
     `\n# OTLC-GUARDIAN-END\n`;
 
   writeFile(existingPath, existing.trimEnd() + block);
-  ok(`.gitignore — ${newLines.length} Guardian entries merged`);
+  ok(`.gitignore - ${newLines.length} Guardian entries merged`);
 }
 
 /**
- * Merge a .env.example — appends Guardian's variables under a labelled block.
+ * Merge a .env.example - appends Guardian's variables under a labelled block.
  * Idempotent. Never removes existing variables.
  */
 function mergeEnvExample(existingPath, guardianSrcPath) {
@@ -1008,7 +1008,7 @@ function mergeEnvExample(existingPath, guardianSrcPath) {
   const marker   = "# OTLC-GUARDIAN-START";
 
   if (existing.includes(marker)) {
-    ok(".env.example — Guardian variables already present");
+    ok(".env.example - Guardian variables already present");
     return;
   }
 
@@ -1027,7 +1027,7 @@ function mergeEnvExample(existingPath, guardianSrcPath) {
     });
 
   if (newLines.length === 0) {
-    ok(".env.example — all Guardian variables already present");
+    ok(".env.example - all Guardian variables already present");
     return;
   }
 
@@ -1038,21 +1038,21 @@ function mergeEnvExample(existingPath, guardianSrcPath) {
     `\n# OTLC-GUARDIAN-END\n`;
 
   writeFile(existingPath, existing.trimEnd() + block);
-  ok(`.env.example — ${newLines.length} Guardian variables merged`);
+  ok(`.env.example - ${newLines.length} Guardian variables merged`);
 }
 
 /**
- * Copy a single file — only if destination does not exist.
+ * Copy a single file - only if destination does not exist.
  * Never overwrites.
  */
 function copyIfNew(srcPath, destPath, label) {
   if (existsSync(destPath)) {
-    ok(`${label} — already exists, skipped`);
+    ok(`${label} - already exists, skipped`);
     return;
   }
   mkdirSync(path.dirname(destPath), { recursive: true });
   copyFileSync(srcPath, destPath);
-  ok(`${label} — copied`);
+  ok(`${label} - copied`);
 }
 
 /**
@@ -1063,7 +1063,7 @@ function copyIfNew(srcPath, destPath, label) {
  * the end user, pollute their repo, bloat commits, and (for the cached
  * .pyc) can be version-mismatched against the user's Python interpreter.
  *
- * The list is conservative on purpose — we only skip things that are
+ * The list is conservative on purpose - we only skip things that are
  * unambiguously build artifacts or Guardian-internal tests. New entries
  * must be obviously never-ship.
  */
@@ -1078,7 +1078,7 @@ const COPY_IGNORE = new Set([
 ]);
 
 /**
- * Copy a directory of files — each file handled individually.
+ * Copy a directory of files - each file handled individually.
  * Never blindly overwrites an entire directory.
  * Skips any entry whose basename is in COPY_IGNORE.
  */
@@ -1088,7 +1088,7 @@ function copyDirSafe(srcDir, destDir, label) {
 
   for (const entry of readdirSync(srcDir)) {
     if (COPY_IGNORE.has(entry)) {
-      // Don't even announce skipped build artifacts — noise in the init
+      // Don't even announce skipped build artifacts - noise in the init
       // output. The test suite asserts this list covers the regressions
       // that shipped __pycache__ into every project pre-1.1.1.
       continue;
@@ -1101,9 +1101,9 @@ function copyDirSafe(srcDir, destDir, label) {
       copyDirSafe(srcPath, destPath, `${label}/${entry}`);
     } else if (!existsSync(destPath)) {
       copyFileSync(srcPath, destPath);
-      ok(`${label}/${entry} — copied`);
+      ok(`${label}/${entry} - copied`);
     } else {
-      ok(`${label}/${entry} — already exists, skipped`);
+      ok(`${label}/${entry} - already exists, skipped`);
     }
   }
 }
@@ -1139,17 +1139,17 @@ function refreshOwnedDir(srcDir, destDir, label, skip = new Set()) {
       totals.copied += sub.copied; totals.updated += sub.updated; totals.current += sub.current;
     } else if (!existsSync(destPath)) {
       copyFileSync(srcPath, destPath);
-      ok(`${label}/${entry} — copied`);
+      ok(`${label}/${entry} - copied`);
       totals.copied++;
     } else if (skip.has(entry)) {
-      ok(`${label}/${entry} — project-owned, left as is`);
+      ok(`${label}/${entry} - project-owned, left as is`);
       totals.current++;
     } else if (readFileSync(srcPath).equals(readFileSync(destPath))) {
-      ok(`${label}/${entry} — up to date`);
+      ok(`${label}/${entry} - up to date`);
       totals.current++;
     } else {
       copyFileSync(srcPath, destPath);
-      ok(`${label}/${entry} — UPDATED (replaced with the current Guardian version)`);
+      ok(`${label}/${entry} - UPDATED (replaced with the current Guardian version)`);
       totals.updated++;
     }
   }
@@ -1180,7 +1180,7 @@ function warnIfScannerNotEsm(pkgPath) {
 const PROJECT_OWNED_SECURITY_FILES = new Set([".audit-allowlist"]);
 
 // ---------------------------------------------------------------------------
-// INIT — merge Guardian into current project without breaking anything
+// INIT - merge Guardian into current project without breaking anything
 // ---------------------------------------------------------------------------
 //
 // `refresh: false` (guardian init)   never overwrites an existing file.
@@ -1197,7 +1197,7 @@ function runInit({ refresh = false } = {}) {
   // ── 1. CLAUDE.md ─────────────────────────────────────────────────────────
   // CLAUDE.md is the Claude-Code-specific behavior file. Claude Code reads
   // it natively on every session. AGENTS.md (below) is the universal
-  // equivalent for every other agent. Both files coexist by design — see
+  // equivalent for every other agent. Both files coexist by design - see
   // AGENTS.md's project intent note and the README value section for the
   // honest multi-agent split.
   //
@@ -1205,7 +1205,7 @@ function runInit({ refresh = false } = {}) {
   // through mergeMd unconditionally. mergeMd handles the missing-file
   // case by creating a marker-sealed fresh file, so a second init into
   // the same directory is a guaranteed no-op. Routing every write
-  // through one function is what makes double-init idempotent — the
+  // through one function is what makes double-init idempotent - the
   // prior "if existsSync then merge else copy" pattern silently broke
   // that invariant for fresh installs.
   log(`${c.bold}── CLAUDE.md${c.reset}`);
@@ -1230,7 +1230,7 @@ function runInit({ refresh = false } = {}) {
   // ── 1c. GEMINI.md ────────────────────────────────────────────────────────
   // Google Gemini CLI reads GEMINI.md at session start. Prior to 1.1.1 the
   // hook watch list already included GEMINI.md but `guardian init` never
-  // provisioned one — the template defended an ecosystem it did not seed.
+  // provisioned one - the template defended an ecosystem it did not seed.
   // Fixed by writing a minimal GEMINI.md that points users at AGENTS.md
   // for the full rule set, matching the same "one door per agent, shared
   // rules behind it" pattern Guardian already uses for Claude/CLAUDE.md.
@@ -1259,7 +1259,7 @@ function runInit({ refresh = false } = {}) {
     mergeGitignore(gitignoreDest, gitignoreSrc);
   } else {
     copyFileSync(gitignoreSrc, gitignoreDest);
-    ok(".gitignore — copied (new file)");
+    ok(".gitignore - copied (new file)");
   }
 
   // ── 4. .env.example ───────────────────────────────────────────────────────
@@ -1270,7 +1270,7 @@ function runInit({ refresh = false } = {}) {
     mergeEnvExample(envDest, envSrc);
   } else {
     copyFileSync(envSrc, envDest);
-    ok(".env.example — copied (new file)");
+    ok(".env.example - copied (new file)");
   }
 
   // ── 5. security/ ──────────────────────────────────────────────────────────
@@ -1295,9 +1295,9 @@ function runInit({ refresh = false } = {}) {
   // Prior releases shipped Guardian's own test suite into every project,
   // which put four test files into the user's repo that do nothing for
   // them (they exercise Guardian internals). Users writing their own
-  // tests should follow STANDARDS.md — Vitest colocated with source.
+  // tests should follow STANDARDS.md - Vitest colocated with source.
 
-  // ── 6. .claude/settings.json — smart JSON merge ───────────────────────────
+  // ── 6. .claude/settings.json - smart JSON merge ───────────────────────────
   log(`\n${c.bold}── .claude/settings.json${c.reset}`);
   const claudeSettingsDest = path.join(CWD, ".claude", "settings.json");
   const claudeSettingsSrc  = path.join(ROOT, ".claude", "settings.json");
@@ -1307,10 +1307,10 @@ function runInit({ refresh = false } = {}) {
     mergeClaudeSettings(claudeSettingsDest, claudeSettingsSrc);
   } else {
     copyFileSync(claudeSettingsSrc, claudeSettingsDest);
-    ok(".claude/settings.json — copied (new file)");
+    ok(".claude/settings.json - copied (new file)");
   }
 
-  // ── 7. .claude/hooks/ — copy only, never overwrite ────────────────────────
+  // ── 7. .claude/hooks/ - copy only, never overwrite ────────────────────────
   log(`\n${c.bold}── .claude/hooks/${c.reset}`);
   if (refresh) {
     refreshOwnedDir(
@@ -1326,7 +1326,7 @@ function runInit({ refresh = false } = {}) {
     );
   }
 
-  // ── 8. .github/ — copy only, never overwrite ──────────────────────────────
+  // ── 8. .github/ - copy only, never overwrite ──────────────────────────────
   log(`\n${c.bold}── .github/${c.reset}`);
   copyDirSafe(
     path.join(ROOT, ".github"),
@@ -1344,26 +1344,26 @@ function runInit({ refresh = false } = {}) {
 ${c.green}${c.bold}✅ Guardian initialized successfully.${c.reset}
 
 ${c.bold}What was merged / added:${c.reset}
-  • CLAUDE.md        — Claude Code behavior rules (your content preserved)
-  • AGENTS.md        — Universal agent rules (Codex/Cursor/Aider/Continue/Windsurf)
-  • GEMINI.md        — Gemini CLI entry point (points at AGENTS.md)
-  • STANDARDS.md     — Approved technology stack (your content preserved above)
-  • .gitignore       — Guardian entries appended (your entries untouched)
-  • .env.example     — Guardian variables appended (yours untouched)
-  • security/        — Runtime guard, audit CLI, Python parity module
-  • .claude/         — Claude Code hooks merged into settings.json (Claude-only)
-  • .github/         — Workflow files added (existing files skipped)
+  • CLAUDE.md - Claude Code behavior rules (your content preserved)
+  • AGENTS.md - Universal agent rules (Codex/Cursor/Aider/Continue/Windsurf)
+  • GEMINI.md - Gemini CLI entry point (points at AGENTS.md)
+  • STANDARDS.md - Approved technology stack (your content preserved above)
+  • .gitignore - Guardian entries appended (your entries untouched)
+  • .env.example - Guardian variables appended (yours untouched)
+  • security/ - Runtime guard, audit CLI, Python parity module
+  • .claude/ - Claude Code hooks merged into settings.json (Claude-only)
+  • .github/ - Workflow files added (existing files skipped)
 
 ${c.bold}Next steps:${c.reset}
 
   1. ${c.cyan}cp .env.example .env${c.reset}  then fill in your secrets
-     Never commit .env — it is in .gitignore
+     Never commit .env - it is in .gitignore
 
   2. Wrap every AI call with the input guard:
      ${c.cyan}import { guardInput } from './security/01-injection-guard.js';${c.reset}
      ${c.cyan}const clean = guardInput(userMessage);${c.reset}
 
-  3. ${c.cyan}guardian audit${c.reset}  — scan your project for existing issues
+  3. ${c.cyan}guardian audit${c.reset} - scan your project for existing issues
 
   4. Start (or restart) your coding agent session. Behavior files are
      re-read at session start:
@@ -1376,7 +1376,7 @@ ${c.dim}Run ${c.reset}${c.cyan}guardian check${c.dim} at any time to verify your
 }
 
 // ---------------------------------------------------------------------------
-// NOTE — there is deliberately no `guardian uninstall` command.
+// NOTE - there is deliberately no `guardian uninstall` command.
 // ---------------------------------------------------------------------------
 //
 // An earlier 1.2.0 branch shipped an automated `guardian uninstall`
@@ -1384,18 +1384,18 @@ ${c.dim}Run ${c.reset}${c.cyan}guardian check${c.dim} at any time to verify your
 // `.claude/settings.json`, and byte-compared pure-Guardian files
 // before deleting them. The command passed a full test suite
 // (symmetry, idempotency, invalid-JSON refusal, customized-file
-// skip, dry-run) — but the blast radius of any bug in an automated
+// skip, dry-run) - but the blast radius of any bug in an automated
 // file mutation command that touches user content is too wide for
 // a security-forward template. We reverted the command in 1.2.1 and
 // went back to manual, step-by-step instructions in
 // `SETUP.md § Uninstalling` that put the user in full control of
 // every delete, every edit, and every marker-block removal.
 //
-// If you are looking for "how do I uninstall?", read that section —
+// If you are looking for "how do I uninstall?", read that section - 
 // it is the authoritative path and is deliberately not automated.
 
 // ---------------------------------------------------------------------------
-// EXPORTS — helpers exposed for unit testing.
+// EXPORTS - helpers exposed for unit testing.
 // The CLI router below only runs when this file is invoked as a script,
 // so importing the module from a test does not trigger any commands.
 // ---------------------------------------------------------------------------
@@ -1415,7 +1415,7 @@ export {
 };
 
 // ---------------------------------------------------------------------------
-// ROUTER — only when invoked as a script (node bin/guardian.js …)
+// ROUTER - only when invoked as a script (node bin/guardian.js …)
 // Standard ESM "is this the main module?" check.
 // ---------------------------------------------------------------------------
 

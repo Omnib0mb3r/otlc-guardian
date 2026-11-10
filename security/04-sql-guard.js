@@ -1,5 +1,5 @@
 // ============================================================
-// OTLC Guardian — SQL injection defense (tagged-template helper)
+// OTLC Guardian - SQL injection defense (tagged-template helper)
 // // onthelevelconcepts.com
 // Version: 1.5.0
 // ============================================================
@@ -21,7 +21,7 @@
 //
 //   • It is NOT a runtime blocklist or keyword scanner. OWASP
 //     explicitly warns that input filtering is not a primary
-//     defense against SQL injection — it is bypassable by encoding,
+//     defense against SQL injection - it is bypassable by encoding,
 //     second-order injection, and comment tricks. The audit at
 //     security/03-audit.js catches the bad concatenation pattern
 //     statically; this helper makes the safe pattern easy.
@@ -34,13 +34,13 @@
 //   • It does NOT validate identifiers against a live schema. The
 //     caller provides an explicit allow-list via sql.identifier().
 //
-// Dialect support — both first-class:
+// Dialect support - both first-class:
 //
-//   • postgres (pg, node-postgres)  — uses $1, $2, $3 placeholders
-//   • mysql    (mysql2)              — uses ? placeholders
-//   • sqlite   (better-sqlite3)      — uses ? placeholders
+//   • postgres (pg, node-postgres) - uses $1, $2, $3 placeholders
+//   • mysql    (mysql2) - uses ? placeholders
+//   • sqlite   (better-sqlite3) - uses ? placeholders
 //
-// Two APIs — pick whichever is cleanest for your code:
+// Two APIs - pick whichever is cleanest for your code:
 //
 //   1. Default `sql` (postgres) with conversion methods:
 //        import { sql } from './security/04-sql-guard.js';
@@ -56,13 +56,13 @@
 //        const q = sql`SELECT * FROM users WHERE id = ${id}`;
 //        await mysql.query(q.text, q.values);
 //
-// Nested composition is supported — `sql\`WHERE ${sql\`id = ${id}\`}\``
+// Nested composition is supported - `sql\`WHERE ${sql\`id = ${id}\`}\``
 // inlines the inner parts into the outer query and renumbers
 // placeholders automatically. Values from nested blocks are
 // concatenated in document order.
 //
 // Dynamic identifiers (ORDER BY ${col}, FROM ${table}) must go
-// through sql.identifier(name, allowList) — a bare string in ${}
+// through sql.identifier(name, allowList) - a bare string in ${}
 // is always treated as a VALUE, never as an identifier. This is
 // the one case where OWASP allows non-parameterized interpolation,
 // and only with strict allow-list validation.
@@ -72,7 +72,7 @@
 // Brand symbols let us distinguish a nested sql`` result and an
 // identifier marker from an arbitrary string or object the caller
 // might pass. Module-level Symbols are unique per module load,
-// which is enough — the only code that creates these objects lives
+// which is enough - the only code that creates these objects lives
 // here.
 const QUERY_BRAND = Symbol("otlc-guardian:sql-query");
 const IDENT_BRAND = Symbol("otlc-guardian:sql-identifier");
@@ -81,23 +81,23 @@ const IDENT_BRAND = Symbol("otlc-guardian:sql-identifier");
 // Keep this set in lockstep with placeholderFor / quoteIdentifier.
 const SUPPORTED_DRIVERS = new Set(["postgres", "mysql", "sqlite"]);
 
-// Safe identifier shape — letters, digits, underscores, optional
+// Safe identifier shape - letters, digits, underscores, optional
 // schema prefix (one dot). Matches standard ANSI unquoted-identifier
 // rules and is strict enough to exclude every known injection
 // metacharacter (', ", ;, space, --, /*, parentheses, etc.).
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/;
 
 // ---------------------------------------------------------------------------
-// INTERNAL — render a compiled parts array into text + values for a dialect
+// INTERNAL - render a compiled parts array into text + values for a dialect
 // ---------------------------------------------------------------------------
 
 /**
  * Compiled query parts:
- *   { type: "text",       value: string }  — literal SQL text
- *   { type: "value",      value: any    }  — becomes a placeholder
- *   { type: "identifier", name:  string }  — becomes a quoted identifier
+ *   { type: "text",       value: string } - literal SQL text
+ *   { type: "value",      value: any    } - becomes a placeholder
+ *   { type: "identifier", name:  string } - becomes a quoted identifier
  *
- * The parts array is the single source of truth — `text` and `values`
+ * The parts array is the single source of truth - `text` and `values`
  * are derived from it at render time. That's what makes `.toMysql()`,
  * `.toSqlite()`, and `.toPostgres()` pure: they re-render the same
  * parts in a different dialect without mutating anything.
@@ -117,7 +117,7 @@ function render(parts, driver) {
     } else if (part.type === "identifier") {
       text += quoteIdentifier(part.name, driver);
     }
-    // No default — unknown part types are impossible because only
+    // No default - unknown part types are impossible because only
     // compile() creates parts, and compile() is exhaustive.
   }
 
@@ -126,7 +126,7 @@ function render(parts, driver) {
 
 function placeholderFor(driver, n) {
   if (driver === "postgres") return `$${n}`;
-  // mysql2 and better-sqlite3 both use ? — no numbered form.
+  // mysql2 and better-sqlite3 both use ? - no numbered form.
   return "?";
 }
 
@@ -137,7 +137,7 @@ function quoteIdentifier(name, driver) {
 }
 
 // ---------------------------------------------------------------------------
-// INTERNAL — compile a template strings array into a parts array
+// INTERNAL - compile a template strings array into a parts array
 // ---------------------------------------------------------------------------
 
 /**
@@ -161,14 +161,14 @@ function compile(strings, values, driver) {
       if (isQueryResult(v)) {
         // Inline the nested result's compiled parts verbatim. The
         // outer render() pass will renumber placeholders and quote
-        // identifiers in the OUTER dialect, which is correct — a
+        // identifiers in the OUTER dialect, which is correct - a
         // single query goes to a single database.
         for (const p of v[QUERY_BRAND]) parts.push(p);
       } else if (isIdentifier(v)) {
         parts.push({ type: "identifier", name: v.name });
       } else {
-        // Everything else — including null, undefined, 0, "", false,
-        // objects, buffers — passes through as a VALUE. The driver
+        // Everything else - including null, undefined, 0, "", false,
+        // objects, buffers - passes through as a VALUE. The driver
         // handles encoding; the helper does not filter or sanitize.
         parts.push({ type: "value", value: v });
       }
@@ -233,7 +233,7 @@ function isIdentifier(v) {
 }
 
 // ---------------------------------------------------------------------------
-// PUBLIC — sql.identifier(name, allowList)
+// PUBLIC - sql.identifier(name, allowList)
 // ---------------------------------------------------------------------------
 
 /**
@@ -249,7 +249,7 @@ function isIdentifier(v) {
  *   3. name is a member of allowList
  *
  * All three checks throw loudly on failure. There is no soft-fail
- * or silent fallback — a failed identifier check MUST abort the
+ * or silent fallback - a failed identifier check MUST abort the
  * query, not substitute a default.
  *
  * The safe-shape check runs before the membership check so that even
@@ -280,7 +280,7 @@ function identifier(name, allowList) {
 }
 
 // ---------------------------------------------------------------------------
-// PUBLIC — createSqlHelper({ driver })
+// PUBLIC - createSqlHelper({ driver })
 // ---------------------------------------------------------------------------
 
 /**
@@ -311,7 +311,7 @@ export function createSqlHelper({ driver } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// PUBLIC — default `sql` export (postgres dialect)
+// PUBLIC - default `sql` export (postgres dialect)
 // ---------------------------------------------------------------------------
 
 /**

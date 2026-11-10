@@ -256,7 +256,7 @@ project (each project picks it up when `guardian update` is run there).
 
 ---
 
-## [1.4.1] — 2026-07-20
+## [1.4.1] - 2026-07-20
 
 `INJ-005b` precision. The rule was reporting ordinary UI strings as CRITICAL
 SQL injection, which is the worst failure mode a security tool has: the fix
@@ -298,7 +298,7 @@ users reach for is switching it off.
   after the clause pair, because `` `SELECT ${columns} FROM users` `` is a
   genuinely unparameterized query whose only interpolation sits between the
   verb and its clause. And a `(?<!\bsql)` lookbehind clears the sql-guard
-  tagged template from `security/04-sql-guard.js` — that tag is the
+  tagged template from `security/04-sql-guard.js` - that tag is the
   auto-parameterizing remediation for this bug class, and flagging the fix
   is how you teach people to stop applying it. The exclusion is narrow
   enough that `mysql\`` and an untagged sibling on the next line both still
@@ -306,12 +306,12 @@ users reach for is switching it off.
 
   No secondary lower-severity hint was added for near-misses. A MEDIUM
   noise channel would reinstate the exact problem this fix removes, and the
-  clause-pair test is orthogonal to the call site — a custom DB wrapper is
+  clause-pair test is orthogonal to the call site - a custom DB wrapper is
   still caught as long as the SQL it builds is really SQL.
 
 - **Rule id collision in the audit-improvements plan (BUG-004).** The
   internal handoff specified `DEP-001` for a planned npm-version-drift rule.
-  That id already belongs to `DEP-001 — No health check endpoint found`,
+  That id already belongs to `DEP-001 - No health check endpoint found`,
   shipped since 1.2.4 and covered by tests. Implementing as written would
   have put two rules under one id and broken per-id filtering for JSON
   consumers and CI gates. Reassigned to `DEP-003` with a correction note in
@@ -320,7 +320,7 @@ users reach for is switching it off.
 
 ### Added
 
-- **`BUGS.md`** — persistent bug tracker, seeded with a consolidated sweep
+- **`BUGS.md`** - persistent bug tracker, seeded with a consolidated sweep
   of 20 known bugs (4 OPEN, 3 DEFERRED, 13 RESOLVED) drawn from the git
   log, CHANGELOG, code comments, and the audit-improvements handoff.
 
@@ -334,7 +334,7 @@ that keeps the variable-indirection bypass closed.
 
 ---
 
-## [1.4.0] — 2026-07-20
+## [1.4.0] - 2026-07-20
 
 Authorization and validation coverage. Guardian could already find a
 leaked key, a silent catch, and a concatenated SQL string. It could not
@@ -343,8 +343,8 @@ authentication, and an endpoint that authenticates but never checks
 whether the caller may touch the object they named.
 
 Neither is expressible as a regular expression. Both are *absence*
-conditions scoped to a block — "nowhere inside these braces is there an
-auth check" — and negative matching across an arbitrarily nested block is
+conditions scoped to a block - "nowhere inside these braces is there an
+auth check" - and negative matching across an arbitrarily nested block is
 not something a regular language can do. So the audit engine gained a
 third rule kind rather than shipping a regex approximation that would fire
 on unrelated files.
@@ -371,11 +371,11 @@ on unrelated files.
   |---|---|---|---|
   | `AUTHZ-001` | CRITICAL | analyzer | Handler performs a side effect with no authentication check |
   | `AUTHZ-002` | CRITICAL | pattern | Identity read from request body/query instead of a verified session |
-  | `AUTHZ-003` | CRITICAL | analyzer | IDOR — authenticated handler acts on a caller-supplied object ID with no ownership check |
+  | `AUTHZ-003` | CRITICAL | analyzer | IDOR - authenticated handler acts on a caller-supplied object ID with no ownership check |
   | `AUTHZ-004` | HIGH | pattern | Secret compared with `===` rather than `crypto.timingSafeEqual` |
   | `AUTHZ-005` | HIGH | pattern | Cache key not scoped to the requesting user, so a cache hit bypasses authorization |
   | `VAL-001` | HIGH | analyzer | Request body reaches a side effect without a schema parse |
-  | `VAL-002` | CRITICAL | pattern | Raw email header built by interpolation — CRLF injection makes it an open relay |
+  | `VAL-002` | CRITICAL | pattern | Raw email header built by interpolation - CRLF injection makes it an open relay |
 
   Detection is deliberately conservative. `AUTHZ-001` only fires when the
   handler contains a real side effect, so a read-only or computational
@@ -383,7 +383,7 @@ on unrelated files.
   authenticate, so an unauthenticated route is reported once by
   `AUTHZ-001` rather than twice under two rule IDs.
 
-- **`guides/` — three field guides, stored verbatim.**
+- **`guides/` - three field guides, stored verbatim.**
   `securing-endpoints.md`, `authorization-idor.md`, and
   `form-validation.md`, sourced from
   [The Lazy Developer](https://www.thelazydeveloper.org/resources).
@@ -391,7 +391,7 @@ on unrelated files.
   was written against, and `guides/INDEX.md` maps each finding to the
   guide that explains the fix.
 
-- **`skill/SKILL.md` — Guardian as an invocable skill.** Any project can
+- **`skill/SKILL.md` - Guardian as an invocable skill.** Any project can
   now reach the standards without installing the package, via a junction
   at `~/.claude/skills/OTLC-Guardian`. The skill runs the audit, maps
   findings to guides, and enforces the self-audit checklist.
@@ -402,7 +402,7 @@ on unrelated files.
 ### Testing
 
 24 new tests in `tests/audit.test.js` (70 total, up from 46). Every new
-rule has both a firing fixture and a silent fixture — a security rule that
+rule has both a firing fixture and a silent fixture - a security rule that
 cannot be quieted by writing correct code is a rule people switch off.
 Additional coverage for brace-matching inside string literals (a `}` in a
 string must not truncate a handler body) and for exemption handling on
@@ -412,7 +412,7 @@ the correct lines).
 
 ---
 
-## [1.3.1] — 2026-04-08
+## [1.3.1] - 2026-04-08
 
 Comprehensive pre-release adversarial review pass. Codex CLI was tasked
 with a hostile audit of the entire 1.3.0 release covering README clarity,
@@ -421,7 +421,7 @@ documentation consistency, and npm publish readiness. This release ships
 fixes for **every actionable finding** Codex returned that was safe to
 apply without changing the project's product positioning.
 
-The most important fix is the README uninstall data-loss bug — the
+The most important fix is the README uninstall data-loss bug - the
 README at line 380 was telling users to `rm -f CLAUDE.md AGENTS.md
 GEMINI.md STANDARDS.md`, which would destroy any project-specific rules
 the user wrote before running `guardian init`. This was the same bug
@@ -431,7 +431,7 @@ procedure that links to the full SETUP instructions.
 
 This is a patch release. No breaking API changes for the runtime guard,
 the audit CLI, or the SQL helper. **One soft-breaking change** for
-Python FastAPI users — see SECURITY FIX #2 below.
+Python FastAPI users - see SECURITY FIX #2 below.
 
 ### Security fixes
 
@@ -457,7 +457,7 @@ Python FastAPI users — see SECURITY FIX #2 below.
    correctly writes the sanitized value back into `req.body[field]`,
    but the Python helper just relied on the side effect of raising on
    critical violations. That meant non-blocking but sanitizable input
-   — for example a string with a zero-width-space bypass — would reach
+   (for example a string with a zero-width-space bypass) would reach
    the endpoint UNCHANGED in Python while being correctly sanitized in
    Node. Fixed by capturing the `guard_input()` return value and
    returning it from the dependency, so the endpoint receives the
@@ -513,12 +513,12 @@ Python FastAPI users — see SECURITY FIX #2 below.
    Fixed by introducing four centralized extension constants at the
    top of `security/03-audit.js`:
 
-   - `JS_TS_EXTS` — every JS/TS module extension we scan (`.js`,
+   - `JS_TS_EXTS` - every JS/TS module extension we scan (`.js`,
      `.ts`, `.jsx`, `.tsx`, `.mjs`, `.cjs`, `.mts`, `.cts`)
-   - `JS_TS_PY_EXTS` — same plus `.py`
-   - `SECRET_FILE_EXTS` — JS/TS/Python plus the data-format extensions
+   - `JS_TS_PY_EXTS` - same plus `.py`
+   - `SECRET_FILE_EXTS` - JS/TS/Python plus the data-format extensions
      where credentials commonly leak (`.env`, `.json`, `.yaml`, `.yml`)
-   - `TS_EXTS` — TypeScript-only (`.ts`, `.tsx`, `.mts`, `.cts`) for
+   - `TS_EXTS` - TypeScript-only (`.ts`, `.tsx`, `.mts`, `.cts`) for
      `TS-001` (`any` type detection)
 
    Every rule's `fileTypes` array now references one of these
@@ -531,7 +531,7 @@ Python FastAPI users — see SECURITY FIX #2 below.
    (Codex CRITICAL #1).** The README at line 380 told users to
    `rm -f CLAUDE.md AGENTS.md GEMINI.md STANDARDS.md` and
    `rm -rf security/`. Both contradict Guardian's merge-safety
-   contract — `guardian init` appends Guardian content below
+   contract - `guardian init` appends Guardian content below
    `<!-- OTLC-GUARDIAN-START -->` markers inside those files, and a
    blanket `rm -f` would destroy every line the user wrote above the
    marker. The same bug was already fixed in `SETUP.md` back in PR #4
@@ -560,7 +560,7 @@ Python FastAPI users — see SECURITY FIX #2 below.
    - Adding a footnote to `STANDARDS.md § CI/CD` that says: the
      standard is "block on HIGH/CRITICAL," but Guardian's own template
      ships with "advisory only" as the default because it serves a
-     wide variety of project types — projects that want hard-fail
+     wide variety of project types - projects that want hard-fail
      should remove `continue-on-error: true` from their fork.
 
 7. **Python parity overstated (Codex HIGH #7).** README was claiming
@@ -572,15 +572,15 @@ Python FastAPI users — see SECURITY FIX #2 below.
    `security/injection_guard.py`) and instructed them to install
    `structlog` even though the Python module uses stdlib `logging`.
 
-   Fixed by rewriting the "Layer 2 — The Runtime Security Layer"
+   Fixed by rewriting the "Layer 2 - The Runtime Security Layer"
    section in README to label each component's language support
    honestly:
-   - `01-injection-guard.js` / `injection_guard.py` — both Node and
+   - `01-injection-guard.js` / `injection_guard.py` - both Node and
      Python at parity
-   - `02-code-security.js` — Node only
-   - `03-audit.js` — Node script that scans both Node AND Python
+   - `02-code-security.js` - Node only
+   - `03-audit.js` - Node script that scans both Node AND Python
      source
-   - `04-sql-guard.js` — Node only (Python equivalent on the roadmap)
+   - `04-sql-guard.js` - Node only (Python equivalent on the roadmap)
 
    The FAQ entry was rewritten to use the correct path
    (`security/injection_guard.py`), explicitly say "do NOT install
@@ -621,7 +621,7 @@ Python FastAPI users — see SECURITY FIX #2 below.
     set is now declared as a top-level `WATCHED_TOOLS` constant with
     a clear comment explaining that adding a new tool requires
     fork-and-edit. Configurability via `.claude/settings.json` is on
-    the roadmap but explicitly not in this release — the surface
+    the roadmap but explicitly not in this release - the surface
     needs careful thought to avoid users accidentally disabling the
     security default.
 
@@ -633,7 +633,7 @@ Python FastAPI users — see SECURITY FIX #2 below.
     `AGENTS.md` means the pointer dangles and Gemini loads no
     Guardian rules even though `GEMINI.md` exists. Now reports
     `PARTIAL` with the message "GEMINI.md present but AGENTS.md
-    missing — pointer dangles, no rules loaded" in that case.
+    missing - pointer dangles, no rules loaded" in that case.
 
 13. **CLI color/emoji output is TTY-gated (Codex MEDIUM #5).** Pre-1.3.1
     every `guardian` command emitted unconditional ANSI escape
@@ -673,7 +673,7 @@ Python FastAPI users — see SECURITY FIX #2 below.
     (Codex LOW #2).** Updated description to "Production-grade AI
     security guardrails for any AI coding agent (Claude Code, Codex,
     Cursor, Aider, Continue, Windsurf, Gemini)..." and expanded
-    keywords from 9 to 22 entries — added agent names (`claude-code`,
+    keywords from 9 to 22 entries - added agent names (`claude-code`,
     `codex`, `cursor`, `aider`, `continue`, `windsurf`, `gemini`,
     `agents-md`) and feature names (`audit`, `audit-cli`,
     `sql-injection`, `parameterized-queries`, `secrets-detection`).
@@ -689,17 +689,17 @@ Python FastAPI users — see SECURITY FIX #2 below.
 
 ### Verification
 
-- `npm test` — all 6 test files green: injection-guard, init, hook,
-  agents-md, **audit 52/52** (up from 48/48 in 1.3.0 — added 4 new
+- `npm test` - all 6 test files green: injection-guard, init, hook,
+  agents-md, **audit 52/52** (up from 48/48 in 1.3.0 - added 4 new
   tests for the projectRoot/scanRoot fix), sql-guard 40/40
-- `node security/03-audit.js .` — `No issues found` on the Guardian
-  repo. **24 rules** (unchanged — no new rules in 1.3.1, only fixes
+- `node security/03-audit.js .` - `No issues found` on the Guardian
+  repo. **24 rules** (unchanged - no new rules in 1.3.1, only fixes
   to existing rules' file-type coverage).
-- `node bin/guardian.js check` — 15 passed, 0 warnings, 0 missing
-- `node bin/guardian.js help` — footer shows `Version 1.3.1`
+- `node bin/guardian.js check` - 15 passed, 0 warnings, 0 missing
+- `node bin/guardian.js help` - footer shows `Version 1.3.1`
 - `guardian audit` and `guardian scan` exercised in TTY, piped, and
   `--no-color` modes; output adapts correctly in all three.
-- 12-project real-world re-audit — no false positives from any of the
+- 12-project real-world re-audit - no false positives from any of the
   rule changes. Same finding totals as 1.3.0.
 
 ### Things explicitly NOT changed in this release
@@ -720,7 +720,7 @@ the roadmap but requires a product decision the user has not made yet.
   "a product/positioning call." The README still documents the
   source-clone path as primary because the package isn't on npm yet.
   When the user actually runs `npm publish`, the install instructions
-  in README and SETUP should flip — that's a separate commit.
+  in README and SETUP should flip - that's a separate commit.
 - **Hook configurability via `.claude/settings.json`.** Codex
   flagged the four hardcoded web tools as a place to add user
   configurability. The honesty fix (item 11 above) is in this release;
@@ -730,14 +730,14 @@ the roadmap but requires a product decision the user has not made yet.
   surface. They currently do, because `guardian init` copies them
   into target projects. Changing that would require redesigning the
   init flow.
-- **Python equivalent of `04-sql-guard.js`.** Still deferred — Python
+- **Python equivalent of `04-sql-guard.js`.** Still deferred - Python
   has no tagged template literals, so the design needs to be a
   context manager or `?` placeholder wrapper. ~4-8 hours of work and
   a separate Python test suite.
 
 ---
 
-## [1.3.0] — 2026-04-08
+## [1.3.0] - 2026-04-08
 
 Audit blind-spot fixes plus release-readiness improvements. Two new
 audit tests cover bypass patterns the pre-1.3.0 ruleset silently
@@ -748,30 +748,30 @@ quoted literals (the most common case). Plus npm publish hygiene and
 a GitHub Actions Node 20 deprecation fix.
 
 Minor version bump (`1.2.4` → `1.3.0`) because rule additions and
-behavior changes are not patches under semver — adding a new rule
+behavior changes are not patches under semver - adding a new rule
 that fires on previously-clean code is a feature, not a bugfix.
 
 ### Added
 
-- **`INJ-005b`** — new CRITICAL rule that catches template-literal
+- **`INJ-005b`** - new CRITICAL rule that catches template-literal
   SQL with `${}` interpolation **regardless of how the variable is
   used**. The pre-1.3.0 `INJ-005` rule required the backtick template
   to be the first argument of `query|execute|exec|raw|prepare`, so a
   trivial two-line refactor bypassed it:
     ```js
     const sql = `SELECT * FROM users WHERE id = ${userId}`;
-    db.query(sql);   // INJ-005 misses this — no backtick at the call site
+    db.query(sql);   // INJ-005 misses this - no backtick at the call site
     ```
   Writing the dangerous template literal anywhere in source is
   independently a bug, whether the variable is then passed directly
   to `db.query(sql)` or through ten more levels of indirection.
   `INJ-005b` catches the **declaration site** instead of the call
   site. Both rules are kept; they're complementary. A direct call
-  fires both — slightly redundant but harmless.
+  fires both - slightly redundant but harmless.
 
-- **`package.json` `files` field** — explicit allowlist of what
+- **`package.json` `files` field** - explicit allowlist of what
   `npm publish` actually ships. Pre-1.3.0 the package fell back to
-  `.gitignore` (which is the wrong tool for the job — `.gitignore`
+  `.gitignore` (which is the wrong tool for the job - `.gitignore`
   excludes things from git, not from npm). The new field ships:
   `bin/`, `security/`, `.claude/`, `.github/`, all the markdown
   docs, the LICENSE, the `.env.example`, and `.gitleaks.toml`.
@@ -784,7 +784,7 @@ that fires on previously-clean code is a feature, not a bugfix.
 - **`INJ-006` (Python f-string SQL) regex rewritten to handle inner
   quoted literals.** The pre-1.3.0 character class `[^"']*` excluded
   BOTH quote styles, so an f-string containing a literal like
-  `WHERE name = 'admin'` — which is most real-world SQL — broke
+  `WHERE name = 'admin'` - which is most real-world SQL - broke
   the match and the rule silently did nothing. Real-world Python
   code is full of these patterns and the audit was missing every
   one of them. New regex splits into quote-specific alternation
@@ -806,7 +806,7 @@ that fires on previously-clean code is a feature, not a bugfix.
   -f` guards for the others, which silently skipped any test file
   the workflow author forgot to add. The 1.2.4 release accidentally
   left `tests/audit.test.js` and `tests/sql-guard.test.js` out of
-  the CI invocation list — both were running locally and via `npm
+  the CI invocation list - both were running locally and via `npm
   test`, but CI was only running 4 of the 6 test files. Switching
   to `npm test` makes the CI invocation match what every developer
   runs locally, eliminating an entire class of "I forgot to add
@@ -820,22 +820,22 @@ that fires on previously-clean code is a feature, not a bugfix.
   JSDoc examples and test fixtures (38 findings on the helper alone)
   because they all demonstrate the unsafe `\`SELECT ... ${id}\`` form
   the helper exists to replace. Allowlist entries include the full
-  reason field per the `.audit-allowlist` format contract — silent
+  reason field per the `.audit-allowlist` format contract - silent
   exemptions are forbidden.
 
 ### Verification
 
-- `npm test` — all 6 test files green: injection-guard, init, hook,
+- `npm test` - all 6 test files green: injection-guard, init, hook,
   agents-md, **audit 48/48 (was 40/40 in 1.2.4)**, sql-guard 40/40
-- `node security/03-audit.js .` — `No issues found` on the Guardian
-  repo. **24 rules** (up from 23 in 1.2.4 — INJ-005b added).
+- `node security/03-audit.js .` - `No issues found` on the Guardian
+  repo. **24 rules** (up from 23 in 1.2.4 - INJ-005b added).
   **7 allowlisted files** (up from 5).
-- `node bin/guardian.js check` — 15 passed, 0 warnings, 0 missing
+- `node bin/guardian.js check` - 15 passed, 0 warnings, 0 missing
 - 12-project real-world re-audit (DevNeural, NLT, omnibomber, autolisp,
   blkbom, Claude-Setup, conveyor-designer, conveyornum, devneural-projects,
   dev-template, Landmark40, skill-connections) shows **zero false
   positives from INJ-005b or the rewritten INJ-006**. The new rules
-  are correctly scoped — they catch the dangerous patterns without
+  are correctly scoped - they catch the dangerous patterns without
   flooding real codebases. Same finding totals as 1.2.4 across all
   12 projects.
 
@@ -850,7 +850,7 @@ that fires on previously-clean code is a feature, not a bugfix.
   itself is unchanged; only its allowlist entry changed because the
   new INJ-005b rule would otherwise flag the helper's own JSDoc
   examples as dangerous.
-- The Python equivalent of `04-sql-guard.js`. Still deferred — Python
+- The Python equivalent of `04-sql-guard.js`. Still deferred - Python
   has no tagged template literals so the design needs to be different
   (context manager or parameterized wrapper). On the roadmap for a
   future release.
@@ -877,9 +877,9 @@ your declaration sites. Two options:
 
 ---
 
-## [1.2.4] — 2026-04-08
+## [1.2.4] - 2026-04-08
 
-`DEP-001` false-positive fix. The pre-1.2.4 `DEP-001 — No health check
+`DEP-001` false-positive fix. The pre-1.2.4 `DEP-001 - No health check
 endpoint found` rule fired on every project that didn't contain the
 substring `health` in any file. It was designed for HTTP services but
 had no project-shape detection, so every CLI tool, static site, library,
@@ -888,7 +888,7 @@ a spurious `MEDIUM` finding telling the user to add a `/health`
 endpoint to a project that should never have one.
 
 Real-world audit testing across 12 projects on a developer machine
-showed 9 of them hitting exactly this false positive — they are not
+showed 9 of them hitting exactly this false positive - they are not
 servers, so they do not have health endpoints, and that is correct.
 The 9 projects involved were CLIs, static sites, AutoLISP skill
 modules, and code-generation tools. None of them needed a health
@@ -929,13 +929,13 @@ users about features their project type doesn't need.
 
 ### Changed
 
-- **`security/03-audit.js`** — added `looksLikeHttpServer(rootDir, files)`
+- **`security/03-audit.js`** - added `looksLikeHttpServer(rootDir, files)`
   helper as a hoisted function declaration above `AUDIT_RULES`. Updated
   `DEP-001`'s `checkFn` to gate on it. Updated the function-rule
   invocation loop in `runAudit` to pass `rootDir` as the second
   argument so future project-shape rules can use the same hook.
 
-- **`tests/audit.test.js`** — added 6 TDD tests for the new behavior:
+- **`tests/audit.test.js`** - added 6 TDD tests for the new behavior:
   positive (express + no health → fires), positive (fastapi + no
   health → fires), negative (CLI project → does NOT fire), negative
   (static site → does NOT fire), control (server WITH /health → does
@@ -948,7 +948,7 @@ Re-audit of the same 12 projects from the 1.2.2 / 1.2.3 testing run:
 
 ```
 Project                  pre-1.2.4      post-1.2.4    DEP-001 dropped
-DevNeural                14 findings    14 findings   (was already 0 — has /health)
+DevNeural                14 findings    14 findings   (was already 0 - has /health)
 New-Letter-and-TikToks    1 finding      0 findings   yes
 omnibomber-site           1 finding      0 findings   yes
 autolisp-skill            1 finding      0 findings   yes
@@ -962,7 +962,7 @@ Landmark40                1 finding      0 findings   yes
 skill-connections         1 finding      0 findings   yes
 ```
 
-11 of 12 projects dropped from `MEDIUM: 1` to `MEDIUM: 0` — the exact
+11 of 12 projects dropped from `MEDIUM: 1` to `MEDIUM: 0` - the exact
 predicted outcome. The 12th (DevNeural) was already at 0 because it
 has both a real server (`02-api-server/src/server.ts`) AND a real
 `/health` endpoint at `02-api-server/src/routes/graph.ts:9`, which is
@@ -984,7 +984,7 @@ HTTP server, so the rule doesn't apply at all).
   needs no changes.
 - Any other rule. Only `DEP-001`'s gating changed; the underlying
   "look for `health` substring" check is the same.
-- The two known auditor gaps deferred since 1.2.2 — `INJ-005` template
+- The two known auditor gaps deferred since 1.2.2 - `INJ-005` template
   literal SQL with variable indirection, and `INJ-006` Python f-string
   SQL with inner quoted literals. Still on the deferred list. See the
   1.2.2 / 1.2.3 testing notes for the isolated test fixtures at
@@ -992,7 +992,7 @@ HTTP server, so the rule doesn't apply at all).
 
 ### Fixed
 
-- **Stale `Version 1.2.3` strings across the repo** — bumped to 1.2.4
+- **Stale `Version 1.2.3` strings across the repo** - bumped to 1.2.4
   in `package.json`, `bin/guardian.js` help footer, `README.md` badge,
   `AGENTS.md`, `CLAUDE.md`, `STANDARDS.md`, `SETUP.md`, `FAQ.md`, and
   `GEMINI.md`. This is the same lockstep-version-bump checklist used
@@ -1000,7 +1000,7 @@ HTTP server, so the rule doesn't apply at all).
 
 ---
 
-## [1.2.3] — 2026-04-07
+## [1.2.3] - 2026-04-07
 
 Audit reporter readability rewrite. The pre-1.2.3 human-readable
 output of `guardian audit` repeated the rule header and full absolute
@@ -1011,7 +1011,7 @@ looked the same. After 1.2.2 the same audit dropped to 14 findings,
 but the report still had 14 standalone blocks because the reporter
 hadn't been updated.
 
-This release rewrites the human reporter only — no rule changes, no
+This release rewrites the human reporter only - no rule changes, no
 detection changes, no JSON shape changes. The `--json` output that
 tooling and `tests/audit.test.js` consume is byte-identical to 1.2.2.
 Only the human-readable terminal output changed.
@@ -1045,7 +1045,7 @@ Only the human-readable terminal output changed.
   earlier in the report. Replaced with a single line directly under
   the AUDIT COMPLETE banner:
     ```
-    ⚠️  [OTLC GUARDIAN] AUDIT COMPLETE — 56 issue(s) found
+    ⚠️  [OTLC GUARDIAN] AUDIT COMPLETE - 56 issue(s) found
         0 CRITICAL · 36 HIGH · 11 MEDIUM · 9 LOW
     ```
 
@@ -1058,7 +1058,7 @@ The 4 rule headers correspond exactly to the 4 distinct rules that
 fired (`CFG-001`, `INJ-002`, `ERR-003`, `TS-001`). The reader sees
 "three categories of finding: a hardcoded URL, two innerHTML uses,
 seven console.log calls in CLI/server code, four `any` types in
-browser code" — at a glance, instead of having to mentally
+browser code" - at a glance, instead of having to mentally
 deduplicate 14 nearly-identical blocks.
 
 ### Not changed
@@ -1073,18 +1073,18 @@ deduplicate 14 nearly-identical blocks.
 
 ### Fixed
 
-- **Stale `Version 1.2.2` in `bin/guardian.js:121`** — bumped to
+- **Stale `Version 1.2.2` in `bin/guardian.js:121`** - bumped to
   `1.2.3` alongside all the other version strings.
 
 ---
 
-## [1.2.2] — 2026-04-07
+## [1.2.2] - 2026-04-07
 
 Audit signal-to-noise improvements. Three real-world rule fixes that
 came out of running `guardian audit` against 12 projects on a developer
 machine and finding that ~95% of the HIGH/MEDIUM findings on three of
 those projects were false positives caused by scope and heuristic
-gaps in the audit rules — not bugs in the user's code.
+gaps in the audit rules - not bugs in the user's code.
 
 Concrete impact, measured by re-auditing the same three projects
 before and after this release:
@@ -1096,7 +1096,7 @@ before and after this release:
   Total                   77 → 16 findings  (-61, 79% drop)
 
 Signal-to-noise on the DevNeural project went from 3 real findings out
-of 56 (5%) to 3 real findings out of 14 (21%) — a ~4x improvement.
+of 56 (5%) to 3 real findings out of 14 (21%) - a ~4x improvement.
 The 3 real findings are the same in both runs, which is what makes
 this a noise-reduction release: every fix below is a correctness
 improvement to the rule, not a way to silence real warnings.
@@ -1106,7 +1106,7 @@ improvement to the rule, not a way to silence real warnings.
 - **`SKIP_DIRS` expanded to include all major dependency and build
   directories.** Pre-1.2.2 the audit walked `vendor/` (PHP composer),
   `target/` (Rust / Maven build outputs), `bower_components/` (legacy
-  JS), and various Python cache directories — producing dozens of
+  JS), and various Python cache directories - producing dozens of
   false positives on minified jQuery, Popper, D3, and PHPUnit's own
   bundled JS that real users had inside their own projects. The
   audit's job is to scan **your** code for **your** bugs; dependency
@@ -1148,15 +1148,15 @@ improvement to the rule, not a way to silence real warnings.
   at-localhost.** The pre-1.2.2 rule pattern was a bare
   `/["'`]\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}["'`]/` that fired on any
   quoted IP address. That conflated two opposite things:
-    1. **URL pointing at a hardcoded IP** — real bug. Production
+    1. **URL pointing at a hardcoded IP** - real bug. Production
        config leak. `fetch('http://192.168.1.10:8080/api')`.
-    2. **Server binding to `127.0.0.1`** — security best practice.
+    2. **Server binding to `127.0.0.1`** - security best practice.
        The server refuses connections from any IP other than
        loopback. `fastify.listen({ host: '127.0.0.1' })`,
        `server.listen(0, '127.0.0.1', cb)`, `socket.bind('127.0.0.1', port)`.
   The pre-1.2.2 rule fired on the safe form and called it a config
   leak, which is actively wrong security advice. The fix introduces a
-  new `excludeLinePatterns` rule field — a list of regexes that
+  new `excludeLinePatterns` rule field - a list of regexes that
   suppresses a finding when its surrounding line matches one of the
   "this is the safe form" patterns. `CFG-003` now skips findings
   where the IP appears immediately after `host:`, inside a `.listen(`
@@ -1177,9 +1177,9 @@ improvement to the rule, not a way to silence real warnings.
 
 ### Tests
 
-- **`tests/audit.test.js`** — 14 new tests across three describe
-  blocks (`v1.2.2 — dependency directories`, `v1.2.2 — test-file
-  detection`, `v1.2.2 — CFG-003 bind vs URL`). Each fix has positive
+- **`tests/audit.test.js`** - 14 new tests across three describe
+  blocks (`v1.2.2 - dependency directories`, `v1.2.2 - test-file
+  detection`, `v1.2.2 - CFG-003 bind vs URL`). Each fix has positive
   tests (the rule must NOT fire on the new safe forms) AND control
   tests (the rule must STILL fire in legitimate contexts so we
   haven't accidentally turned the rule off entirely). Total audit
@@ -1191,8 +1191,8 @@ improvement to the rule, not a way to silence real warnings.
 Each of the three changes corrects an **actual flaw in the rule**, not
 the visibility of a real warning:
 
-  1. **Dependency dirs.** Every serious security scanner — Semgrep,
-     SonarQube, ESLint, Ruff, Bandit, Snyk — skips dependency
+  1. **Dependency dirs.** Every serious security scanner - Semgrep,
+     SonarQube, ESLint, Ruff, Bandit, Snyk - skips dependency
      directories by default. The audit already skipped `node_modules/`
      for exactly this reason. Adding the equivalents for other
      ecosystems is closing a parity gap.
@@ -1201,11 +1201,11 @@ the visibility of a real warning:
      rules to test code" was already in the audit (`ERR-003` had
      `excludePatterns`). The implementation just didn't recognize 6+
      conventions used in the wild. The intent of the rule didn't
-     change — only the recognition heuristic was completed.
+     change - only the recognition heuristic was completed.
 
   3. **CFG-003 bind vs URL.** The pre-1.2.2 rule was actively wrong:
      it called a security best practice (binding to loopback) a
-     security bug. The fix doesn't silence a warning — it makes the
+     security bug. The fix doesn't silence a warning - it makes the
      rule **correct**. Guardian's whole pitch is "production-grade
      security," and the previous rule contradicted the pitch.
 
@@ -1238,21 +1238,21 @@ on every project that uses it.
 
 ### Fixed
 
-- **Stale `Version 1.2.1` in `bin/guardian.js:121`** — bumped to
+- **Stale `Version 1.2.1` in `bin/guardian.js:121`** - bumped to
   `1.2.2` alongside all the other version strings.
 
 ---
 
-## [1.2.1] — 2026-04-07
+## [1.2.1] - 2026-04-07
 
 Hotfix that reverts one of the two features shipped in 1.2.0. The SQL
-injection defense helper (`security/04-sql-guard.js`) stays — it does
+injection defense helper (`security/04-sql-guard.js`) stays - it does
 not touch user files. The automated `guardian uninstall` command is
-removed — it does.
+removed - it does.
 
 ### Removed
 
-- **`guardian uninstall` command** — reverted in full. Removed
+- **`guardian uninstall` command** - reverted in full. Removed
   `runUninstall()` and its helpers (`unmergeMarkerFile`,
   `unmergeClaudeSettings`, `deleteCopiedTree`, `HTML_MARKER_RE`,
   `HASH_MARKER_RE`) from `bin/guardian.js`, dropped the
@@ -1283,7 +1283,7 @@ mutates user files has a blast radius that is proportional to the
 install base, not to the size of its test suite. A single bug in a
 marker regex, a single Windows line-ending edge case, a single
 interaction with a user-configured matcher block that is equivalent
-but not textually identical to the canonical form — any one of these
+but not textually identical to the canonical form - any one of these
 could silently destroy a user's `CLAUDE.md` or `STANDARDS.md` after
 they have poured hours of project-specific rules into it. The tests
 prove the happy paths; they cannot prove the absence of corner cases.
@@ -1300,7 +1300,7 @@ authoritative uninstall path.
 
 ### What is kept from 1.2.0
 
-- **`security/04-sql-guard.js`** — stays. The OWASP-aligned tagged
+- **`security/04-sql-guard.js`** - stays. The OWASP-aligned tagged
   template helper does not touch user files; it returns a
   `{ text, values }` object for the caller to pass to a database
   driver. The 40-test suite remains, the `./sql` subpath export in
@@ -1309,23 +1309,23 @@ authoritative uninstall path.
 
 ### Fixed
 
-- **Stale `Version 1.2.0` in `bin/guardian.js:121`** — bumped to
+- **Stale `Version 1.2.0` in `bin/guardian.js:121`** - bumped to
   1.2.1 alongside all the other version strings (package.json badge,
   doc headers/footers for README, CLAUDE.md, STANDARDS.md, AGENTS.md,
   GEMINI.md, FAQ.md, SETUP.md).
 
 ---
 
-## [1.2.0] — 2026-04-07
+## [1.2.0] - 2026-04-07
 
-Two new features land in this minor release — an OWASP-aligned SQL injection
+Two new features land in this minor release - an OWASP-aligned SQL injection
 defense helper and a surgical `guardian uninstall` command that closes the
 merge-safety loop left open in 1.1.1. Both are net-new surface area with their
 own test suites; no behavior changes to the 1.1.1 code.
 
 ### Added
 
-- **`security/04-sql-guard.js`** — a zero-dep `sql\`\`` tagged template literal
+- **`security/04-sql-guard.js`** - a zero-dep `sql\`\`` tagged template literal
   that makes parameterized queries the path of least resistance. Auto-expands
   `${}` interpolations into placeholders and returns a `{ text, values, driver }`
   object compatible with `pg`, `mysql2`, and `better-sqlite3`. Both dialects
@@ -1333,7 +1333,7 @@ own test suites; no behavior changes to the 1.1.1 code.
   `.toMysql()` / `.toSqlite()` / `.toPostgres()` conversion methods, and
   `createSqlHelper({ driver })` returns a natively-bound tag for projects
   that prefer the factory pattern. Nested `sql\`\`` composition is supported
-  end-to-end — interpolating one query into another inlines its compiled
+  end-to-end - interpolating one query into another inlines its compiled
   parts and renumbers placeholders automatically. Dynamic table/column
   interpolation goes through `sql.identifier(name, allowList)` with three
   layers of validation: the allow-list must be a non-empty array, the
@@ -1342,19 +1342,19 @@ own test suites; no behavior changes to the 1.1.1 code.
   list. The regex check runs even when the name is on the allow-list, so a
   caller who accidentally adds a malicious string to the list still has the
   query aborted (defense in depth). No runtime blocklist scanner, no keyword
-  detection, no input filtering — OWASP's SQL Injection Prevention Cheat
+  detection, no input filtering - OWASP's SQL Injection Prevention Cheat
   Sheet explicitly warns that input filtering is not a primary defense
   against SQL injection, and Guardian's static audit rules
   (`INJ-004` / `INJ-005` / `INJ-006` in `security/03-audit.js`) already catch
   the bad concatenation pattern statically. Wired into
   `package.json` exports as `./sql` and mentioned in `STANDARDS.md` as the
   zero-dep fallback for projects that cannot adopt Prisma. Coverage lives
-  in `tests/sql-guard.test.js` — 40 tests across seven security properties
+  in `tests/sql-guard.test.js` - 40 tests across seven security properties
   (parameterization, literal-text preservation, injection-payload
   pass-through, identifier escape hatch, nested composition, zero-scanning,
   dialect-conversion purity).
 
-- **`guardian uninstall` command** — the surgical inverse of `guardian init`
+- **`guardian uninstall` command** - the surgical inverse of `guardian init`
   that closes the merge-safety loop on the uninstall side. The symmetry
   contract is `init && uninstall == no-op` on a well-formed project: a
   project with custom content in every managed file (`CLAUDE.md`, `AGENTS.md`,
@@ -1368,7 +1368,7 @@ own test suites; no behavior changes to the 1.1.1 code.
   `.claude/settings.json` (using the same set-based matcher comparison
   that `mergeClaudeSettings` uses on the init side), and byte-compares
   pure-Guardian copied files in `security/`, `.claude/hooks/`, and `.github/`
-  against the source-of-truth at `ROOT` — deleting only files that are
+  against the source-of-truth at `ROOT` - deleting only files that are
   byte-identical to the shipped template, and keeping user-modified copies
   with a "customized" note. Never deletes a file whose marker is absent
   (provenance can no longer be verified), never touches a file Guardian
@@ -1378,14 +1378,14 @@ own test suites; no behavior changes to the 1.1.1 code.
   used by `mergeClaudeSettings`. A `--dry-run` flag previews the actions
   without touching disk. Wired into `bin/guardian.js` as the `case "uninstall":`
   router branch with a try/catch that converts the invalid-JSON throw into
-  a clean non-zero exit. Coverage lives in `tests/uninstall.test.js` —
+  a clean non-zero exit. Coverage lives in `tests/uninstall.test.js` - 
   11 tests covering the full contract: symmetry, idempotency, partial
   state (manual marker removal), pre-existing AGENTS.md (Codex user
   survival), custom hooks alongside Guardian's, invalid JSON refusal,
   custom security files, customized Guardian files, dry-run, CLI wiring,
   and the empty-project no-op. This fixes the known data-loss foot-gun
   shipped in 1.1.1 where `SETUP.md` told users to
-  `rm -f CLAUDE.md AGENTS.md GEMINI.md STANDARDS.md` — an instruction that
+  `rm -f CLAUDE.md AGENTS.md GEMINI.md STANDARDS.md` - an instruction that
   would destroy any content the user wrote above Guardian's marker block.
   PR #4 already shipped the merge-safe manual documentation in
   `SETUP.md § Uninstalling`; 1.2.0 ships the automated command the docs
@@ -1393,37 +1393,37 @@ own test suites; no behavior changes to the 1.1.1 code.
 
 ### Changed
 
-- **README.md** — "The Six Commands" → "The Seven Commands" with a full
+- **README.md** - "The Six Commands" → "The Seven Commands" with a full
   block for `guardian uninstall` including the `--dry-run` flag, the
   marker-strip / byte-compare strategy, and the symmetry contract
   reference. One-line mention of the SQL helper added to the
   "What You Get" audit CLI section.
-- **`SETUP.md § Uninstalling`** — replaces the "command is on the roadmap"
-  line with "run `guardian uninstall` — it does every step below
+- **`SETUP.md § Uninstalling`** - replaces the "command is on the roadmap"
+  line with "run `guardian uninstall` - it does every step below
   automatically." The manual marker-based procedure is preserved as a
   fallback for users who want to see exactly what the command does.
-- **`STANDARDS.md § Database (SQL)`** — adds a one-paragraph mention of
+- **`STANDARDS.md § Database (SQL)`** - adds a one-paragraph mention of
   the `sql\`\`` helper as the zero-dep fallback for projects that cannot
   adopt Prisma.
-- **`FAQ.md`** — adds "How do I uninstall Guardian from a project?" under
+- **`FAQ.md`** - adds "How do I uninstall Guardian from a project?" under
   Installation, updates the "three security files" answer to "four"
   with `04-sql-guard.js` in the list, and adds a new "Why doesn't
   Guardian include a SQL injection runtime scanner?" Q explaining the
   OWASP-aligned design decision.
-- **`package.json`** — `"./sql": "./security/04-sql-guard.js"` added to
+- **`package.json`** - `"./sql": "./security/04-sql-guard.js"` added to
   `exports`. `npm test` script extended to include `tests/sql-guard.test.js`
   and `tests/uninstall.test.js`. New `test:sql` and `test:uninstall`
   shortcuts for running each suite in isolation.
 
 ### Fixed
 
-- **Stale version string in `bin/guardian.js:121`** — the `showHelp()`
+- **Stale version string in `bin/guardian.js:121`** - the `showHelp()`
   footer was still printing `Version 1.1.0` after the 1.1.1 bump.
   Bumped to 1.2.0 as part of this release.
 
 ---
 
-## [1.1.1] — 2026-04-06
+## [1.1.1] - 2026-04-06
 
 Pre-ship security and correctness pass. Every item below was surfaced by an
 adversarial review of the 1.1.0 code and docs on 2026-04-06, verified with live
@@ -1432,14 +1432,14 @@ regression so it cannot slip back.
 
 ### Security
 
-- **Shell-injection fix in `guardian audit`** — `bin/guardian.js:128` (pre-1.1.1)
+- **Shell-injection fix in `guardian audit`** - `bin/guardian.js:128` (pre-1.1.1)
   spliced `args.slice(1).join(" ")` into an `execSync` template literal. Any
   argument containing `;`, `&&`, `|`, backticks, or `$()` was executed by the
   shell. Live PoC: `guardian audit ". && echo INJECTED > pwned.txt"` created
   the file. **Replaced** with `spawnSync("node", [auditScript, ...args.slice(1)], { shell: false })`
   so the shell never parses arguments at all. The same fix was applied to
   `smokeTestHook()`, which used the same anti-pattern.
-- **Outdated OpenAI / Anthropic key regex across all three modules** — the
+- **Outdated OpenAI / Anthropic key regex across all three modules** - the
   pre-1.1.1 SEC-001 pattern was `/sk-[a-zA-Z0-9]{20,}/`, which silently missed
   both current-format OpenAI project keys (`sk-proj-...`) and Anthropic Claude
   keys (`sk-ant-api03-...`) because the hyphen after the provider tag is
@@ -1450,32 +1450,32 @@ regression so it cannot slip back.
   legacy fallback). Mirrored across `security/01-injection-guard.js`,
   `security/03-audit.js`, and `security/injection_guard.py`. Regression tests
   live in `tests/injection-guard.test.js` and `tests/audit.test.js`.
-- **Missing raw SQL detection rule** — README claimed "raw SQL" detection in
+- **Missing raw SQL detection rule** - README claimed "raw SQL" detection in
   two places but `security/03-audit.js` had no SQL rule at all. **Added**
   `INJ-004` (string-concat SQL), `INJ-005` (template-literal SQL with `${}`
   interpolation), and `INJ-006` (Python f-string and `%` formatting SQL).
   Scanner extended with a `wholeFile: true` flag because multi-line SQL
   queries don't fit the line-by-line scanner. Tests in `tests/audit.test.js`.
-- **`ERR-001` silent-catch false negatives** — the pre-1.1.1 regex required
+- **`ERR-001` silent-catch false negatives** - the pre-1.1.1 regex required
   literal empty braces, so `catch (e) { /* silent */ }` and multi-line
   comment-only catch bodies passed the audit clean. **Rewritten** to accept
   any sequence of whitespace, `//` line comments, and `/* ... */` block
   comments inside the catch body, running in `wholeFile` mode so multi-line
   cases match.
-- **`SEC-011` — new rule for connection strings with embedded credentials**
-  — `postgres://user:pass@host`, `mongodb+srv://...`, `redis://:pw@...`,
-  `amqp://...`. The pre-1.1.1 audit ignored these even though they are
+- **`SEC-011` - new rule for connection strings with embedded credentials**
+  (`postgres://user:pass@host`, `mongodb+srv://...`, `redis://:pw@...`,
+  `amqp://...`). The pre-1.1.1 audit ignored these even though they are
   hardcoded secrets in every meaningful sense. Mirrored across all three
   modules. User part is `*` so the redis "password-only, no user" variant
   matches.
-- **ReDoS hardening on `INJ-027` / `INJ-028`** — the pre-1.1.1 patterns
+- **ReDoS hardening on `INJ-027` / `INJ-028`** - the pre-1.1.1 patterns
   (`<!--.*(?:ignore|override|system).*-->` and the block-comment equivalent)
-  used greedy `.*` before and after the alternation — the classic
+  used greedy `.*` before and after the alternation - the classic
   catastrophic-backtracking shape. Long inputs without a closing delimiter
   could burn seconds of CPU. **Rewritten** with `[\s\S]*?` (lazy, line-
   spanning) so the engine fails fast. Regression test asserts a 20 KB
   pathological payload completes in under 1 second.
-- **`scan()` input length cap** — `guardInput()` has always enforced its own
+- **`scan()` input length cap** - `guardInput()` has always enforced its own
   `maxLength` (default 4000), but `scan()` is exported and used directly by
   the audit CLI, the hooks, and third-party callers. Without a cap, a huge
   string passed to any direct caller could burn CPU inside the normalizer
@@ -1487,13 +1487,13 @@ regression so it cannot slip back.
 ### Fixed
 
 - **`guardian scan` crashed on Windows with `ERR_UNSUPPORTED_ESM_URL_SCHEME`**
-  — `bin/guardian.js:148` passed a raw Windows path (`C:\...`) to dynamic
+  because `bin/guardian.js:148` passed a raw Windows path (`C:\...`) to dynamic
   `import()`, which requires a `file://` URL on Windows. Ironically
   `pathToFileURL` was already imported at the top of the file but never used
   here. **Fixed** by wrapping the path with `pathToFileURL(...).href`. This
   was a 100% reproducible crash on every `guardian scan` invocation on
-  Windows — the single most customer-visible bug of the 1.1.0 release.
-- **`guardian init` shipped Guardian's internal files into user projects** —
+  Windows - the single most customer-visible bug of the 1.1.0 release.
+- **`guardian init` shipped Guardian's internal files into user projects** - 
   prior releases copied `security/__pycache__/injection_guard.cpython-*.pyc`
   (Python bytecode cache, version-mismatched against any interpreter other
   than the one used to build the cache) and the entire Guardian-internal
@@ -1502,56 +1502,56 @@ regression so it cannot slip back.
   `copyDirSafe()` for `__pycache__`, `.pytest_cache`, `.mypy_cache`,
   `.ruff_cache`, `.DS_Store`, `Thumbs.db`, and `node_modules`, and (b)
   removing the `runInit()` call that copied `tests/` at all.
-- **`STANDARDS.md` advertised the wrong version** — the file header claimed
+- **`STANDARDS.md` advertised the wrong version** - the file header claimed
   `Version: 1.2.0` while every other file in the repo agreed on `1.1.0`. The
   JSON health-check example at line 778 also used `1.2.0`. **Fixed** by
   updating the header to `1.1.1` and replacing the JSON example version with
   a generic `1.0.0` placeholder plus a note clarifying the field is the
   reader's application version, not Guardian's.
-- **Windows path normalization bug in PreToolUse hook** — the hook normalized
+- **Windows path normalization bug in PreToolUse hook** - the hook normalized
   `\` to `/` at the top of `isWatchedPath()` and then checked
-  `normP.endsWith("\\")` a few lines later — dead code that could never be
+  `normP.endsWith("\\")` a few lines later - dead code that could never be
   true after normalization. On Windows, a user who set
   `watchPaths: [".myplanning\\"]` in `.claude/settings.json` would have the
   trailing slash silently stripped and fall into the file-basename branch
   instead of the directory-prefix branch. **Fixed** by detecting the user's
   intent from the raw (pre-normalization) string and always stripping
   trailing separators consistently.
-- **`GEMINI.md` was watched but never provisioned** — the hook watch list
+- **`GEMINI.md` was watched but never provisioned** - the hook watch list
   (and the old `list-watched` command) included `GEMINI.md`, but
   `guardian init` never created one. The template defended an ecosystem it
   did not seed. **Fixed** by adding `GEMINI.md` to the repo root, wiring it
   into `runInit()` as a `mergeMd` call (same idempotent marker-sealed merge
   pattern as `CLAUDE.md` and `AGENTS.md`), and reporting it in the
   `editorCoverage` table and `guardian check` output.
-- **README underplayed `STANDARDS.md`** — the approved technology stack file
+- **README underplayed `STANDARDS.md`** - the approved technology stack file
   is 80% of Guardian's day-to-day value but was mentioned only in passing.
   **Rewrote** README to give `STANDARDS.md` a dedicated section with a
   one-screen preview of the stack table (Node/TS + Python, frontend + auth
   + testing + observability), and expanded the "What Guardian Actually Is"
-  section to cover every file in the package — the four behavior files and
-  the four runtime-security files — not just the audit CLI.
+  section to cover every file in the package - the four behavior files and
+  the four runtime-security files - not just the audit CLI.
 
 ### Added
 
-- **`tests/audit.test.js`** — 16 new subprocess-based tests for the audit
+- **`tests/audit.test.js`** - 16 new subprocess-based tests for the audit
   rule set. Verifies every new rule fires on the fixtures it should fire on,
   does not fire on legitimate code, and that the end-to-end regression
   fixture from the 1.1.1 pre-ship review (hardcoded key + connection string
   + SQL concat + silent catch + console.log) now produces five findings
   instead of the one it produced before the fixes.
-- **Scanner `wholeFile: true` flag** — extends `scanFile()` in
+- **Scanner `wholeFile: true` flag** - extends `scanFile()` in
   `03-audit.js` to run a rule against the entire file content as one string
   rather than line-by-line. Required for any pattern that legitimately spans
   multiple lines (the new silent-catch rule, the new SQL rules). Match line
   numbers are computed from the match offset so reports still point at a
   specific line.
-- **Uninstall documentation** in `SETUP.md` and `README.md` — previously
+- **Uninstall documentation** in `SETUP.md` and `README.md` - previously
   nothing in the docs told users how to remove Guardian from a project.
-- **Privacy statement** in `README.md` — explicit confirmation that Guardian
+- **Privacy statement** in `README.md` - explicit confirmation that Guardian
   does not collect data, does not phone home, and has zero runtime
   dependencies. Users can verify by grepping the source tree.
-- **Defense-in-depth disclaimer** at the top of `README.md` — honest framing
+- **Defense-in-depth disclaimer** at the top of `README.md` - honest framing
   of what Guardian is (a strong baseline) and what it is not (a comprehensive
   security solution). Points at `SECURITY.md` for the full threat model.
 
@@ -1561,14 +1561,14 @@ regression so it cannot slip back.
   badge, `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `STANDARDS.md`, `FAQ.md`,
   `SETUP.md`, `security/01-injection-guard.js`, `security/03-audit.js`, and
   `security/injection_guard.py`. This is a security patch release.
-- **`editorCoverage()` reports Gemini CLI** — the table now has a row for
+- **`editorCoverage()` reports Gemini CLI** - the table now has a row for
   Gemini CLI keyed off the presence of `GEMINI.md`, mirroring the
   `AGENTS.md`-keyed rows for the other non-Claude agents.
-- **`copyDirSafe()` skip list** — see "Fixed" above for the `COPY_IGNORE` set.
+- **`copyDirSafe()` skip list** - see "Fixed" above for the `COPY_IGNORE` set.
 
 ---
 
-## [1.1.0] — initial public release
+## [1.1.0] - initial public release
 
 First public release. Core capabilities:
 
@@ -1580,24 +1580,24 @@ First public release. Core capabilities:
 - Python parity module
 - GitHub Actions CI workflow
 - **Centralized audit allowlist** at `security/.audit-allowlist` with required reason field. Per-file `otlc-guardian:audit-exempt` marker still supported as an end-user opt-in. Allowlist is checked first so it takes precedence.
-- **Audit exemption visibility** — every `guardian audit` run prints the count and full list of exempted files. CI writes the exemption count to the GitHub Actions step summary.
-- **`guardian list-watched`** — debug command that prints the effective hook watch list for the current project, including custom paths and ignores from `.claude/settings.json`.
-- **`guardian update`** — alias for `guardian init`. Both are merge-safe and idempotent; `update` is the natural verb after pulling a new Guardian release.
-- **`web-content-guard.mjs`** — PostToolUse hook on `WebFetch`/`WebSearch` that scans fetched content before Claude reasons about it. Catches indirect prompt injection at the entry point.
+- **Audit exemption visibility** - every `guardian audit` run prints the count and full list of exempted files. CI writes the exemption count to the GitHub Actions step summary.
+- **`guardian list-watched`** - debug command that prints the effective hook watch list for the current project, including custom paths and ignores from `.claude/settings.json`.
+- **`guardian update`** - alias for `guardian init`. Both are merge-safe and idempotent; `update` is the natural verb after pulling a new Guardian release.
+- **`web-content-guard.mjs`** - PostToolUse hook on `WebFetch`/`WebSearch` that scans fetched content before Claude reasons about it. Catches indirect prompt injection at the entry point.
 - **Configurable hook watch list** via `otlcGuardian.watchPaths` / `ignorePaths` / `extendDefaults` block in `.claude/settings.json`.
 - **Doc-exempt marker** (`otlc-guardian:doc`) for security spec files that legitimately discuss injection patterns.
 - **Python parity**: `SECRET_PATTERNS` (9 entries), v1.0.1 normalizer (NFKC + invisible-strip + URL/base64 decode), and `guard_output()` added to `security/injection_guard.py`.
-- **`GuardianConfigError`** — error class thrown by `validateEnv()` when required env vars are missing.
+- **`GuardianConfigError`** - error class thrown by `validateEnv()` when required env vars are missing.
 - **Restructured source tree** from a flat root layout into `bin/`, `security/`, `tests/`, `.claude/hooks/`, `.github/workflows/`.
-- **Hook patterns sourced from main module** — `.claude/hooks/injection-guard-hook.mjs` imports `INJECTION_PATTERNS` directly from `security/01-injection-guard.js` instead of inlining a stale subset. Drift is now impossible.
-- **`mergeClaudeSettings` no longer overwrites invalid JSON** — aborts with a clear error and points the user to the reference copy.
-- **`mergeClaudeSettings` matcher comparison is set-based** — `Edit|Write` and `Write|Edit` are recognized as the same block.
-- **`mergeClaudeSettings` handles multiple events** — registers PreToolUse and PostToolUse hooks in one pass.
-- **`mergeGitignore` strips inline comments** before deduping — a user line like `.env # local secrets` correctly suppresses Guardian's own `.env` entry.
-- **`validateEnv` throws instead of `process.exit(1)`** — library code never terminates the process. Callers catch `GuardianConfigError` and decide how to fail.
-- **`guardian check` smoke-tests the hook** — pipes a known-bad payload through and asserts it fires. Detects Python projects and conditionally requires `security/injection_guard.py`.
-- **Audit `--json` mode no longer contaminates stdout** — status lines go to stderr in `--json` mode (standard Unix convention). CI now produces clean parseable JSON.
-- **`make_fastapi_guard` in `injection_guard.py`** — fixed a bug where the dependency's `request` parameter had no type hint so FastAPI couldn't provide it.
-- **Audit script self-detection false positives** — the audit's own pattern definitions matched themselves. Resolved via the exemption mechanisms.
+- **Hook patterns sourced from main module** - `.claude/hooks/injection-guard-hook.mjs` imports `INJECTION_PATTERNS` directly from `security/01-injection-guard.js` instead of inlining a stale subset. Drift is now impossible.
+- **`mergeClaudeSettings` no longer overwrites invalid JSON** - aborts with a clear error and points the user to the reference copy.
+- **`mergeClaudeSettings` matcher comparison is set-based** - `Edit|Write` and `Write|Edit` are recognized as the same block.
+- **`mergeClaudeSettings` handles multiple events** - registers PreToolUse and PostToolUse hooks in one pass.
+- **`mergeGitignore` strips inline comments** before deduping - a user line like `.env # local secrets` correctly suppresses Guardian's own `.env` entry.
+- **`validateEnv` throws instead of `process.exit(1)`** - library code never terminates the process. Callers catch `GuardianConfigError` and decide how to fail.
+- **`guardian check` smoke-tests the hook** - pipes a known-bad payload through and asserts it fires. Detects Python projects and conditionally requires `security/injection_guard.py`.
+- **Audit `--json` mode no longer contaminates stdout** - status lines go to stderr in `--json` mode (standard Unix convention). CI now produces clean parseable JSON.
+- **`make_fastapi_guard` in `injection_guard.py`** - fixed a bug where the dependency's `request` parameter had no type hint so FastAPI couldn't provide it.
+- **Audit script self-detection false positives** - the audit's own pattern definitions matched themselves. Resolved via the exemption mechanisms.
 - **CI workflow runs the full test suite** before the audit.
 - **CONTRIBUTING.md, SECURITY.md, CHANGELOG.md, CODEOWNERS, .github/ISSUE_TEMPLATE, PULL_REQUEST_TEMPLATE.md, .editorconfig, .gitattributes** added.

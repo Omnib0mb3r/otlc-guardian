@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * ============================================================
- * OTLC GUARDIAN — Safety Audit Tool
+ * OTLC GUARDIAN - Safety Audit Tool
  * // security · onthelevelconcepts.com
  * Version: 1.5.0
  * ============================================================
@@ -35,7 +35,7 @@ import path from "path";
 // CFG-001 / CFG-002 / CFG-003 hardcoded URL/IP, INJ-002 innerHTML,
 // TS-001 any-type, SEC-006 API-key assignment) should not fire on test
 // code that legitimately uses these patterns. The pre-1.2.2 list only
-// knew about *.test.* and *.spec.* and the substring "test/" — it
+// knew about *.test.* and *.spec.* and the substring "test/" - it
 // missed pytest's test_*.py and *_test.py, custom test runners like
 // test-site.js, the standard /tests/ directory on Windows where the
 // path separator is backslash, etc. The expanded list below recognizes
@@ -46,7 +46,7 @@ import path from "path";
 // Defined at module top so AUDIT_RULES below can reference it. Hoisted
 // `const` declarations are OK in modern V8 but a forward reference
 // from a `const` initializer to another `const` declaration further
-// down the same module trips the temporal dead zone — keep this above
+// down the same module trips the temporal dead zone - keep this above
 // the rules array.
 const TEST_FILE_EXCLUDES = [
   /\.test\./i,                       // *.test.{js,ts,...}  Jest / Vitest
@@ -64,20 +64,20 @@ const TEST_FILE_EXCLUDES = [
 //
 // Pre-1.3.1 each rule hardcoded its own fileTypes list. Most rules
 // said `[".js", ".ts", ".jsx", ".tsx"]` and silently missed
-// `.mjs/.cjs/.mts/.cts` — modern ESM/CommonJS module extensions that
+// `.mjs/.cjs/.mts/.cts` - modern ESM/CommonJS module extensions that
 // any post-2020 Node project uses. The 1.3.0 release fixed this for
 // INJ-005b only; this release applies the same fix consistently.
 //
-// JS_TS_EXTS  — every JavaScript/TypeScript module extension we want
+// JS_TS_EXTS - every JavaScript/TypeScript module extension we want
 //               to scan. Use this for any rule whose pattern looks
 //               for JS/TS source-level constructs (eval, console.log,
 //               innerHTML, dangerouslySetInnerHTML, raw SQL, any-type).
-// JS_TS_PY_EXTS — same plus Python. Use this for cross-language rules
+// JS_TS_PY_EXTS - same plus Python. Use this for cross-language rules
 //                 (secrets, credentials, hardcoded URLs/IPs).
-// SECRET_FILE_EXTS — JS/TS/Python plus the data-format extensions
+// SECRET_FILE_EXTS - JS/TS/Python plus the data-format extensions
 //                    where credentials commonly leak: .env, .json,
 //                    .yaml, .yml. Use this for any SEC-* rule.
-// TS_EXTS — TypeScript-only extensions for rules like TS-001
+// TS_EXTS - TypeScript-only extensions for rules like TS-001
 //           (`any` type detection) that are not relevant in plain JS.
 //
 // Defining these as `const` arrays at module top means a future rule
@@ -90,7 +90,7 @@ const SECRET_FILE_EXTS = [...JS_TS_PY_EXTS, ".env", ".json", ".yaml", ".yml"];
 const TS_EXTS       = [".ts", ".tsx", ".mts", ".cts"];
 
 // ---------------------------------------------------------------------------
-// PROJECT SHAPE DETECTION — "does this project look like an HTTP server?"
+// PROJECT SHAPE DETECTION - "does this project look like an HTTP server?"
 // ---------------------------------------------------------------------------
 //
 // Gate for DEP-001 (and any future deploy-shaped rules). Returns true only
@@ -101,18 +101,18 @@ const TS_EXTS       = [".ts", ".tsx", ".mts", ".cts"];
 // substring "health" anywhere. That's correct for real HTTP services but
 // produces a spurious MEDIUM finding on every CLI tool, static site,
 // library, npm package, code-generation skill, desktop app, and notebook
-// — none of which should have a /health endpoint. Audit testing across 12
+// - none of which should have a /health endpoint. Audit testing across 12
 // real projects on the user's machine showed 9 of them hitting exactly
 // this false positive.
 //
 // The detector runs in two stages so it's cheap on the common case:
 //
-//   1. MANIFEST CHECK — the fast path. Looks at package.json /
+//   1. MANIFEST CHECK - the fast path. Looks at package.json /
 //      requirements.txt / pyproject.toml / Pipfile in the project root
 //      for any known HTTP server framework dependency. 95% of real server
 //      projects are detectable this way with a few tens of bytes of I/O.
 //
-//   2. SOURCE-PATTERN CHECK — the fallback. Only runs when the manifest
+//   2. SOURCE-PATTERN CHECK - the fallback. Only runs when the manifest
 //      check comes back empty. Scans a capped sample of .js/.ts/.py
 //      source files for `.listen(`, `createServer(`, `fastify(`, etc.
 //      The source check exists because some projects (typically single-
@@ -124,7 +124,7 @@ const TS_EXTS       = [".ts", ".tsx", ".mts", ".cts"];
 // AUDIT_RULES below can reference it without tripping the temporal dead
 // zone. Same pattern as the TEST_FILE_EXCLUDES hoisting note above.
 
-// Known HTTP server frameworks. Conservative list — only frameworks whose
+// Known HTTP server frameworks. Conservative list - only frameworks whose
 // presence in a manifest unambiguously means the project listens on a
 // port. Client libraries (axios, got, undici) are deliberately NOT here.
 const HTTP_SERVER_FRAMEWORKS_JS = [
@@ -143,7 +143,7 @@ const HTTP_SERVER_FRAMEWORKS_PY = [
 // Source-file listen / createServer patterns. Anchored on a word boundary
 // so substrings inside comments / identifiers don't trigger, and wrapped
 // with `\s*\(` so we only match call sites. Kept tight so this is a
-// SECOND-chance signal — if a project has one of these, it's a server.
+// SECOND-chance signal - if a project has one of these, it's a server.
 const LISTEN_PATTERNS = [
   /\b(?:app|server|fastify|instance)\.listen\s*\(/,
   /\bhttp\.createServer\s*\(/,
@@ -160,15 +160,15 @@ const LISTEN_PATTERNS = [
 // fallback check. 150 files is enough to catch any realistic "single-file
 // server" while keeping worst-case cost bounded for repos with thousands
 // of source files. We sort by filename length so shallow paths are
-// examined first — the bootstrap is almost always at the project root or
+// examined first - the bootstrap is almost always at the project root or
 // one level deep.
 const LISTEN_SCAN_FILE_CAP = 150;
 
 function looksLikeHttpServer(rootDir, files) {
-  // Stage 1 — manifest check (fast path)
+  // Stage 1 - manifest check (fast path)
 
   // package.json: express, fastify, koa, etc. Check both `dependencies`
-  // and `devDependencies` — some projects put their web framework under
+  // and `devDependencies` - some projects put their web framework under
   // devDependencies when it's only used during tests or tooling. Either
   // way, if express is in the manifest it's a server shape.
   const pkgPath = path.join(rootDir, "package.json");
@@ -184,7 +184,7 @@ function looksLikeHttpServer(rootDir, files) {
         if (deps[name]) return true;
       }
     } catch {
-      // Malformed package.json — fall through to source check. Not our
+      // Malformed package.json - fall through to source check. Not our
       // job to surface JSON parse errors here; other tooling will.
     }
   }
@@ -209,7 +209,7 @@ function looksLikeHttpServer(rootDir, files) {
   }
 
   // pyproject.toml: substring-scan for each framework name. We don't pull
-  // in a TOML parser for a dependency-free project — a substring match on
+  // in a TOML parser for a dependency-free project - a substring match on
   // `"fastapi"` / `"flask"` etc. inside the dependencies table is reliable
   // enough in practice. False positives would require someone to mention
   // a framework name in a pure string context, which is rare.
@@ -239,7 +239,7 @@ function looksLikeHttpServer(rootDir, files) {
     }
   }
 
-  // Stage 2 — source-pattern fallback (slow path, capped)
+  // Stage 2 - source-pattern fallback (slow path, capped)
   //
   // Only runs when the manifest check came back empty. Handles the single-
   // file-server / no-manifest case without paying for file I/O on every
@@ -276,16 +276,16 @@ function looksLikeHttpServer(rootDir, files) {
 //               may touch THAT object"
 //
 // A regex can see a handler, and a regex can see an auth call. It cannot
-// see that the auth call is missing from within the handler's braces —
+// see that the auth call is missing from within the handler's braces - 
 // negative lookahead across an arbitrarily nested block is not something a
 // regular language can do. Shipping a regex approximation would mean
 // findings that fire on unrelated files, and a security tool that cries
 // wolf gets switched off. So the engine grows a third rule kind.
 //
 // Rule kinds, after this change:
-//   pattern      — regex, line-by-line or wholeFile. Cheap, most rules.
-//   checkFn      — project-level predicate, one finding, no line number.
-//   fileCheckFn  — per-file analyzer, returns [{ line, content }]. This one.
+//   pattern - regex, line-by-line or wholeFile. Cheap, most rules.
+//   checkFn - project-level predicate, one finding, no line number.
+//   fileCheckFn - per-file analyzer, returns [{ line, content }]. This one.
 //
 // Detection is deliberately CONSERVATIVE. Every gate below narrows the
 // candidate set, because a false positive on a security rule costs more
@@ -293,7 +293,7 @@ function looksLikeHttpServer(rootDir, files) {
 //
 //   * only files whose content contains a recognised handler signature
 //   * AUTHZ-001 only fires when the handler contains a real SIDE EFFECT
-//     (db write, email send, outbound fetch, payment call) — a read-only
+//     (db write, email send, outbound fetch, payment call) - a read-only
 //     or purely computational handler is not flagged
 //   * AUTHZ-003 only fires when the handler DOES authenticate (so it is
 //     clearly a protected route, not a public one) AND touches a
@@ -309,7 +309,7 @@ function looksLikeHttpServer(rootDir, files) {
 // `skipParams` says where the handler BODY starts relative to the `(` the
 // signature ends on:
 //
-//   skipParams: true  — the `(` opens a PARAMETER LIST, so the body is the
+//   skipParams: true - the `(` opens a PARAMETER LIST, so the body is the
 //                       first block after the matching `)`. Required for
 //                       function declarations, because a destructured
 //                       parameter (`function DELETE(req, { params })`) puts
@@ -318,17 +318,17 @@ function looksLikeHttpServer(rootDir, files) {
 //                       every content check would come back empty, and the
 //                       rule would silently never fire.
 //
-//   skipParams: false — the `(` opens an ARGUMENT LIST and the body is a
+//   skipParams: false - the `(` opens an ARGUMENT LIST and the body is a
 //                       callback inside it (`app.post('/x', async (req, res) => {`),
 //                       so the first block after the `(` is the right one.
 const HANDLER_SIGNATURES = [
   // app.post('/x', ...) / router.delete('/x', ...) / server.patch(...)
   { re: /\b(?:app|router|server|api)\.(?:get|post|put|patch|delete|all)\s*\(/g, skipParams: false },
-  // export async function POST(req) — Next.js App Router
+  // export async function POST(req) - Next.js App Router
   { re: /\bexport\s+(?:async\s+)?function\s+(?:GET|POST|PUT|PATCH|DELETE)\s*\(/g, skipParams: true },
-  // export const POST = async (req) => — App Router, arrow form
+  // export const POST = async (req) => - App Router, arrow form
   { re: /\bexport\s+const\s+(?:GET|POST|PUT|PATCH|DELETE)\s*=\s*(?:async\s*)?\(/g, skipParams: true },
-  // export default async function handler(req, res) — Pages Router / Vercel
+  // export default async function handler(req, res) - Pages Router / Vercel
   { re: /\bexport\s+default\s+(?:async\s+)?function\s+\w*\s*\(/g, skipParams: true },
 ];
 
@@ -351,7 +351,7 @@ const AUTH_PATTERNS = [
 ];
 
 // Evidence the handler CHANGES something or spends money/reputation.
-// AUTHZ-001 requires one of these — an unauthenticated handler that only
+// AUTHZ-001 requires one of these - an unauthenticated handler that only
 // computes or returns a constant is not a finding worth raising.
 const SIDE_EFFECT_PATTERNS = [
   /\.(?:create|createMany|update|updateMany|upsert|delete|deleteMany|destroy|insert|save|remove)\s*\(/,
@@ -503,7 +503,7 @@ function findRouteHandlers(content) {
       let bodyFrom = match.index;
       if (signature.skipParams) {
         const afterParams = skipParenGroup(content, openParen);
-        if (afterParams === -1) continue; // unbalanced — not a handler we can read
+        if (afterParams === -1) continue; // unbalanced - not a handler we can read
         bodyFrom = afterParams;
       }
 
@@ -521,7 +521,7 @@ function findRouteHandlers(content) {
   }
 
   // Sort by position, then drop any handler fully contained in an earlier
-  // one — that is an inner callback, not a distinct route.
+  // one - that is an inner callback, not a distinct route.
   handlers.sort((a, b) => a.start - b.start);
   const top = [];
   for (const h of handlers) {
@@ -534,7 +534,7 @@ function findRouteHandlers(content) {
 const matchesAny = (patterns, text) => patterns.some((p) => p.test(text));
 
 /**
- * AUTHZ-001 — handler performs a side effect with no authentication check
+ * AUTHZ-001 - handler performs a side effect with no authentication check
  * anywhere in its body.
  */
 function checkMissingAuth(content) {
@@ -551,13 +551,13 @@ function checkMissingAuth(content) {
 }
 
 /**
- * AUTHZ-003 — handler authenticates, then acts on a caller-supplied object
+ * AUTHZ-003 - handler authenticates, then acts on a caller-supplied object
  * ID with no ownership, assignment, or role check. Classic IDOR.
  */
 function checkMissingObjectAuthz(content) {
   const findings = [];
   for (const handler of findRouteHandlers(content)) {
-    // Must be a protected route — an unauthenticated route is AUTHZ-001's
+    // Must be a protected route - an unauthenticated route is AUTHZ-001's
     // problem, and reporting both on the same handler is just noise.
     if (!matchesAny(AUTH_PATTERNS, handler.body)) continue;
     // Must actually take an object ID from the caller.
@@ -576,7 +576,7 @@ function checkMissingObjectAuthz(content) {
 }
 
 /**
- * VAL-001 — handler reads the request body and passes it onward without
+ * VAL-001 - handler reads the request body and passes it onward without
  * running it through a schema parser first. Guardian's standard is Zod
  * (Node) / Pydantic (Python); hand-rolled `if (!x) return 400` chains do
  * not count, and neither does client-side validation.
@@ -598,7 +598,7 @@ function checkUnvalidatedBody(content) {
     if (!matchesAny(BODY_READ_PATTERNS, handler.body)) continue;
     if (matchesAny(SCHEMA_PARSE_PATTERNS, handler.body)) continue;
     // Reading the body and only echoing it back is not a validation bug
-    // worth raising — require the value to reach a side effect.
+    // worth raising - require the value to reach a side effect.
     if (!matchesAny(SIDE_EFFECT_PATTERNS, handler.body)) continue;
     findings.push({
       line: handler.line,
@@ -824,8 +824,8 @@ const AUDIT_RULES = [
   // `/sk-[a-zA-Z0-9]{20,}/` which silently missed both current-format
   // OpenAI project keys (`sk-proj-...`) and Anthropic Claude keys
   // (`sk-ant-api03-...`) because the hyphen after the provider tag is
-  // outside [a-zA-Z0-9]. The regex stopped matching at 4 chars — far
-  // below the {20,} threshold — and reported files as clean. A leaked
+  // outside [a-zA-Z0-9]. The regex stopped matching at 4 chars - far
+  // below the {20,} threshold - and reported files as clean. A leaked
   // current-format key would pass the audit with no finding.
   //
   // Fix: split into provider-labelled rules so the violation report
@@ -918,7 +918,7 @@ const AUDIT_RULES = [
   // CFG-003: hardcoded IP address. Excludes test files via the
   // standard TEST_FILE_EXCLUDES list. The excludeLinePatterns list
   // below distinguishes "binding to localhost" (security best
-  // practice — refuses external connections) from "URL pointing at a
+  // practice - refuses external connections) from "URL pointing at a
   // hardcoded IP" (real config leak). Pre-1.2.2 the rule conflated
   // those two opposite things and flagged the safe form as a bug,
   // which is actively misleading security advice. The bind-context
@@ -940,8 +940,8 @@ const AUDIT_RULES = [
   // --- ERROR HANDLING ---
   //
   // ERR-001: a catch block whose body contains only whitespace and/or
-  // comments. The pre-1.1.1 pattern was `catch (...) { }` — literal empty
-  // braces only — which missed the most common lazy-dev variant:
+  // comments. The pre-1.1.1 pattern was `catch (...) { }` - literal empty
+  // braces only - which missed the most common lazy-dev variant:
   //   try { ... } catch (e) { /* silent failure */ }
   // The comment makes the body non-empty to a character counter but
   // identically harmful to error handling: exceptions are swallowed,
@@ -955,20 +955,20 @@ const AUDIT_RULES = [
   // end-to-end.
   {
     id: "ERR-001", category: "Error Handling", severity: "HIGH",
-    description: "Silent catch block — swallows errors (empty or comments-only body)",
+    description: "Silent catch block - swallows errors (empty or comments-only body)",
     pattern: /catch\s*\([^)]*\)\s*\{\s*(?:\/\/[^\n]*\n\s*|\/\*[\s\S]*?\*\/\s*)*\}/,
     fileTypes: JS_TS_EXTS,
     wholeFile: true,
   },
   {
     id: "ERR-002", category: "Error Handling", severity: "HIGH",
-    description: "catch block with only console.log — not structured logging",
+    description: "catch block with only console.log - not structured logging",
     pattern: /catch\s*\([^)]*\)\s*\{\s*console\.log/,
     fileTypes: JS_TS_EXTS,
   },
   {
     id: "ERR-003", category: "Error Handling", severity: "MEDIUM",
-    description: "console.log() in non-test code — use structured logger",
+    description: "console.log() in non-test code - use structured logger",
     pattern: /console\.log\(/,
     fileTypes: JS_TS_EXTS,
     excludePatterns: TEST_FILE_EXCLUDES,
@@ -991,14 +991,14 @@ const AUDIT_RULES = [
   },
   {
     id: "INJ-002", category: "Injection Risk", severity: "HIGH",
-    description: "innerHTML assignment — potential XSS",
+    description: "innerHTML assignment - potential XSS",
     pattern: /\.innerHTML\s*=/,
     excludePatterns: TEST_FILE_EXCLUDES,
     fileTypes: JS_TS_EXTS,
   },
   {
     id: "INJ-003", category: "Injection Risk", severity: "HIGH",
-    description: "dangerouslySetInnerHTML — potential XSS (ensure sanitized)",
+    description: "dangerouslySetInnerHTML - potential XSS (ensure sanitized)",
     pattern: /dangerouslySetInnerHTML/,
     fileTypes: JS_TS_EXTS,
   },
@@ -1014,7 +1014,7 @@ const AUDIT_RULES = [
   // common DB driver entry points (query, execute, raw, run, all).
   //
   // INJ-005 catches interpolation inside a template literal containing
-  // SQL — `db.query(\`SELECT * FROM users WHERE id = ${userId}\`)`.
+  // SQL - `db.query(\`SELECT * FROM users WHERE id = ${userId}\`)`.
   // Template strings with ${} are just as dangerous as + concatenation;
   // many junior devs think the backticks make them "different" but the
   // value still lands in the query string unescaped.
@@ -1024,11 +1024,11 @@ const AUDIT_RULES = [
   // on the same physical line as the query verb.
   {
     id: "INJ-004", category: "Injection Risk", severity: "CRITICAL",
-    description: "Raw SQL built with string concatenation — SQL injection risk",
+    description: "Raw SQL built with string concatenation - SQL injection risk",
     // Verbs deliberately limited to the ones that are unambiguously
     // "pass this string to the database": `query`, `execute`, `exec`,
     // `raw`, `prepare`. Looser verbs like `get`/`run`/`all` are common
-    // in HTTP clients (axios.get), array methods, and build tools —
+    // in HTTP clients (axios.get), array methods, and build tools - 
     // including them would produce too many false positives to be
     // worth it. If your ORM uses one of those verbs, add a custom rule
     // in your own fork rather than loosening the default.
@@ -1039,7 +1039,7 @@ const AUDIT_RULES = [
     // still match. A prior [^`'"]* form tried to skip the inner quote
     // and either matched at the wrong boundary or not at all. The
     // quantifier bound prevents catastrophic backtracking on pathological
-    // inputs — 300 chars is long enough for a realistic query and short
+    // inputs - 300 chars is long enough for a realistic query and short
     // enough that worst-case work is millisecond-scale.
     pattern: /\b(?:query|execute|exec|raw|prepare)\s*\(\s*['"`][\s\S]{0,300}?(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[\s\S]{0,300}?['"`]\s*\+/i,
     fileTypes: JS_TS_PY_EXTS,
@@ -1047,13 +1047,13 @@ const AUDIT_RULES = [
   },
   {
     id: "INJ-005", category: "Injection Risk", severity: "CRITICAL",
-    description: "Raw SQL in template literal with ${} interpolation — SQL injection risk",
+    description: "Raw SQL in template literal with ${} interpolation - SQL injection risk",
     pattern: /\b(?:query|execute|exec|raw|prepare)\s*\(\s*`[^`]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[^`]*\$\{[^`]*`/i,
     fileTypes: JS_TS_EXTS,
     wholeFile: true,
   },
   //
-  // INJ-005b (new in 1.3.0) — variable-indirection companion to INJ-005.
+  // INJ-005b (new in 1.3.0) - variable-indirection companion to INJ-005.
   //
   // The pre-1.3.0 INJ-005 required the backtick template to be the first
   // argument of `query|execute|exec|raw|prepare`. A simple two-line refactor
@@ -1063,7 +1063,7 @@ const AUDIT_RULES = [
   //   db.query(sql);
   //
   // The SQL is still unparameterized; the user input is still spliced into
-  // the query text; the injection surface is identical — but the old regex
+  // the query text; the injection surface is identical - but the old regex
   // only saw `db.query(sql)` (no backtick, no match) and the bug sailed
   // through the audit.
   //
@@ -1075,7 +1075,7 @@ const AUDIT_RULES = [
   //
   // Both rules are kept. A single vulnerable line like
   //   db.query(`SELECT * FROM u WHERE id = ${id}`)
-  // fires both INJ-005 and INJ-005b — slightly redundant but harmless,
+  // fires both INJ-005 and INJ-005b - slightly redundant but harmless,
   // and splitting them lets the two match independently so a project
   // using only one form still gets caught. Running INJ-005b as a
   // `wholeFile` rule means a multi-line template literal split across
@@ -1117,14 +1117,14 @@ const AUDIT_RULES = [
   // No secondary lower-severity hint is emitted for near-misses. The
   // handoff suggested one, but a MEDIUM noise channel reinstates the
   // exact problem this fix exists to remove, and the clause-pair test
-  // is orthogonal to the call site — a custom DB wrapper is still
+  // is orthogonal to the call site - a custom DB wrapper is still
   // caught as long as the SQL it builds is really SQL.
   {
     id: "INJ-005b", category: "Injection Risk", severity: "CRITICAL",
-    description: "Template-literal SQL with ${} interpolation — SQL injection risk (variable form)",
+    description: "Template-literal SQL with ${} interpolation - SQL injection risk (variable form)",
     // The leading `(?<!\bsql)` clears the sql-guard tagged template
     // (`sql\`SELECT * FROM users WHERE id = ${id}\``). That tag is
-    // security/04-sql-guard.js's auto-parameterizing helper — it is the
+    // security/04-sql-guard.js's auto-parameterizing helper - it is the
     // remediation for this bug class, not an instance of it, and
     // flagging the fix is how you teach people to stop applying it.
     //
@@ -1147,7 +1147,7 @@ const AUDIT_RULES = [
   },
   {
     id: "INJ-006", category: "Injection Risk", severity: "CRITICAL",
-    description: "Python SQL with f-string or % formatting — SQL injection risk",
+    description: "Python SQL with f-string or % formatting - SQL injection risk",
     // Python equivalents: f"SELECT ... {user}" and "SELECT ... %s" % (user,).
     // cursor.execute is the standard entry point; sqlalchemy's
     // session.execute(text(...)) with f-strings is also caught here.
@@ -1160,13 +1160,13 @@ const AUDIT_RULES = [
     // Fix (1.3.0): split into quote-specific alternation branches so each
     // outer quote style allows the opposite inner quote style through.
     //
-    //   Branch 1: f"..."  — inner class is `[^"]` (allows `'`)
-    //   Branch 2: f'...'  — inner class is `[^']` (allows `"`)
-    //   Branch 3: "..." % (user,) / '...' % (user,)  — legacy % formatting
+    //   Branch 1: f"..." - inner class is `[^"]` (allows `'`)
+    //   Branch 2: f'...' - inner class is `[^']` (allows `"`)
+    //   Branch 3: "..." % (user,) / '...' % (user,) - legacy % formatting
     //             (same two inner classes for the same reason)
     //
     // The third branch also catches `.execute("SELECT ... %s" % user)` via
-    // the trailing `%` operator — the old regex had this branch as well,
+    // the trailing `%` operator - the old regex had this branch as well,
     // now split into two quote-specific sub-branches.
     pattern: /\bexecute\s*\(\s*(?:f"[^"]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[^"]*\{[^"]*"|f'[^']*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[^']*\{[^']*'|"[^"]*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[^"]*%[sd][^"]*"\s*%|'[^']*(?:SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b[^']*%[sd][^']*'\s*%)/i,
     fileTypes: [".py"],
@@ -1180,7 +1180,7 @@ const AUDIT_RULES = [
   // fastapi, flask, ...) or clearly calls `.listen(` / `createServer(` in
   // source. Pre-1.2.4 the rule fired on every project without a "health"
   // substring, which produced spurious findings on CLI tools, static
-  // sites, libraries, notebooks, and desktop apps — none of which should
+  // sites, libraries, notebooks, and desktop apps - none of which should
   // have a /health endpoint. The gate mirrors how `isPythonProject()` in
   // bin/guardian.js only requires the Python injection module when the
   // project actually looks Python-shaped. See 1.2.4 CHANGELOG entry.
@@ -1206,7 +1206,7 @@ const AUDIT_RULES = [
   },
   {
     id: "DEP-002", category: "Deployment", severity: "LOW",
-    description: ".env file present — should not be committed",
+    description: ".env file present - should not be committed",
     pattern: null,
     fileTypes: [],
     checkFn: (files) => files.some((f) => path.basename(f) === ".env"),
@@ -1215,8 +1215,8 @@ const AUDIT_RULES = [
   // --- AUTHORIZATION (1.4.0) ---
   //
   // Sourced from two field guides stored verbatim in guides/:
-  //   guides/securing-endpoints.md  — unauthenticated + under-authenticated routes
-  //   guides/authorization-idor.md  — "authenticated" is not "authorized"
+  //   guides/securing-endpoints.md - unauthenticated + under-authenticated routes
+  //   guides/authorization-idor.md - "authenticated" is not "authorized"
   //
   // AUTHZ-001 and AUTHZ-003 use the per-file analyzer above rather than a
   // regex, because both describe the ABSENCE of a check inside a block.
@@ -1232,20 +1232,20 @@ const AUDIT_RULES = [
   {
     // The impersonation bug: identity read from the request instead of
     // derived from a verified session. `req.body.userId` is attacker-
-    // controlled by definition — anyone can send any value.
+    // controlled by definition - anyone can send any value.
     //
     // Excludes the assignment direction (`req.body.userId = user.id`),
     // which is code WRITING a verified identity into the payload before
     // forwarding it, not code trusting an inbound one.
     id: "AUTHZ-002", category: "Authorization", severity: "CRITICAL",
-    description: "User identity read from request body/query — derive it from the verified session instead",
+    description: "User identity read from request body/query - derive it from the verified session instead",
     pattern: /\b(?:req|request)\.(?:body|query)\.(?:userId|user_id|email|role|isAdmin|is_admin|accountId|tenantId)\b(?!\s*=[^=])/,
     fileTypes: JS_TS_EXTS,
     excludePatterns: TEST_FILE_EXCLUDES,
   },
   {
     id: "AUTHZ-003", category: "Authorization", severity: "CRITICAL",
-    description: "IDOR — authenticated handler acts on a caller-supplied object ID with no ownership check",
+    description: "IDOR - authenticated handler acts on a caller-supplied object ID with no ownership check",
     pattern: null,
     fileTypes: JS_TS_EXTS,
     excludePatterns: TEST_FILE_EXCLUDES,
@@ -1258,9 +1258,9 @@ const AUDIT_RULES = [
     // response. The correct primitive is crypto.timingSafeEqual.
     //
     // excludeLinePatterns clears the line when timingSafeEqual is
-    // already present — that is the length pre-check the correct
+    // already present - that is the length pre-check the correct
     // implementation performs before the constant-time compare.
-    // The secret can sit on EITHER side of the operator — both
+    // The secret can sit on EITHER side of the operator - both
     //   provided === process.env.INTERNAL_API_SECRET
     //   process.env.INTERNAL_API_SECRET === provided
     // are the same bug, and real code writes it both ways. A
@@ -1269,7 +1269,7 @@ const AUDIT_RULES = [
     // (`req.headers["x-internal-secret"]`), which is how header
     // secrets are almost always read.
     id: "AUTHZ-004", category: "Authorization", severity: "HIGH",
-    description: "Secret compared with === — not constant time, use crypto.timingSafeEqual",
+    description: "Secret compared with === - not constant time, use crypto.timingSafeEqual",
     pattern: /(?:process\.env\.\w*(?:SECRET|TOKEN|KEY|PASSWORD)\w*|\[\s*["'`][^"'`]*(?:secret|token|api[_-]?key|password)[^"'`]*["'`]\s*\]|\b\w*(?:[sS]ecret|[tT]oken|[aA]pi[_-]?[kK]ey|PASSWORD)\w*)\s*[!=]==?\s*(?!undefined|null|""|''|`)\S|[!=]==?\s*(?:process\.env\.\w*(?:SECRET|TOKEN|KEY|PASSWORD)\w*|\b\w*(?:[sS]ecret|[tT]oken|[aA]pi[_-]?[kK]ey|PASSWORD)\w*)\b/,
     fileTypes: JS_TS_EXTS,
     excludePatterns: TEST_FILE_EXCLUDES,
@@ -1291,7 +1291,7 @@ const AUDIT_RULES = [
     // lookahead now sits immediately after the opening backtick and
     // asserts that no user-scoping token appears anywhere in the key.
     id: "AUTHZ-005", category: "Authorization", severity: "HIGH",
-    description: "Cache key not scoped to the requesting user — a cache hit bypasses authorization",
+    description: "Cache key not scoped to the requesting user - a cache hit bypasses authorization",
     pattern: /\b(?:redis|cache|kv|memcached)\.(?:get|set|setex)\s*\(\s*`(?![^`]*(?:userId|user_id|user\.id|session\.user|currentUser|tenantId|orgId))[^`]*\$\{/,
     fileTypes: JS_TS_EXTS,
     excludePatterns: TEST_FILE_EXCLUDES,
@@ -1301,7 +1301,7 @@ const AUDIT_RULES = [
   //
   // Sourced from guides/form-validation.md. The standard is a schema
   // parser at the trust boundary (Zod in Node, Pydantic in Python), not
-  // hand-rolled if-chains and not client-side validation — the client is
+  // hand-rolled if-chains and not client-side validation - the client is
   // not a trust boundary at all.
   {
     id: "VAL-001", category: "Validation", severity: "HIGH",
@@ -1320,7 +1320,7 @@ const AUDIT_RULES = [
     // by an interpolation. The strip helper (`replace(/[\r\n]/g, "")`)
     // on the same line clears it.
     id: "VAL-002", category: "Validation", severity: "CRITICAL",
-    description: "Raw email header built by interpolation — CRLF injection turns this into an open relay",
+    description: "Raw email header built by interpolation - CRLF injection turns this into an open relay",
     pattern: /`[^`]*\b(?:From|To|Cc|Bcc|Subject|Reply-To)\s*:[^`]*\$\{/i,
     fileTypes: JS_TS_EXTS,
     excludePatterns: TEST_FILE_EXCLUDES,
@@ -1380,7 +1380,7 @@ const AUDIT_RULES = [
   // --- TYPESCRIPT ---
   {
     id: "TS-001", category: "TypeScript", severity: "LOW",
-    description: "Use of 'any' type — reduces type safety",
+    description: "Use of 'any' type - reduces type safety",
     pattern: /:\s*any(?:\s|;|,|\)|\[)/,
     fileTypes: TS_EXTS,
     excludePatterns: TEST_FILE_EXCLUDES,
@@ -1398,33 +1398,33 @@ const AUDIT_RULES = [
   // thresholds mirror academy/tools/test_inline_js.py in that project.
   {
     id: "REP-001", category: "Reputation", severity: "HIGH",
-    description: "Large inline <script> blob in HTML (20KB+) — reads as an injected payload to AV reputation engines; ship JS as external hash-versioned files",
+    description: "Large inline <script> blob in HTML (20KB+) - reads as an injected payload to AV reputation engines; ship JS as external hash-versioned files",
     pattern: /<script(?![^>]*\bsrc=)[^>]*>[\s\S]{20000,}?<\/script>/,
     fileTypes: [".html", ".htm"],
     wholeFile: true,
   },
   {
     id: "REP-002", category: "Reputation", severity: "HIGH",
-    description: "Single-line packed payload — a JS line over 24K chars reads as obfuscated/packed to scanners; emit data files with newlines",
+    description: "Single-line packed payload - a JS line over 24K chars reads as obfuscated/packed to scanners; emit data files with newlines",
     pattern: /^.{24001,}$/m,
     fileTypes: [".js", ".mjs", ".cjs"],
     wholeFile: true,
   },
   {
     id: "REP-003", category: "Reputation", severity: "MEDIUM",
-    description: "Static inline event handler (on*=) in shipped HTML — wire listeners from external JS instead",
+    description: "Static inline event handler (on*=) in shipped HTML - wire listeners from external JS instead",
     pattern: /<[^>]{0,300}\son(?:click|load|error|mouseover|submit|focus|input|change)\s*=/i,
     fileTypes: [".html", ".htm"],
   },
   {
     id: "REP-004", category: "Reputation", severity: "MEDIUM",
-    description: "javascript: URL in markup — classic injected-redirect shape; use a real element with a listener",
+    description: "javascript: URL in markup - classic injected-redirect shape; use a real element with a listener",
     pattern: /(?:href|src)\s*=\s*["']\s*javascript:/i,
     fileTypes: [".html", ".htm", ".js"],
   },
   {
     id: "REP-005", category: "Reputation", severity: "MEDIUM",
-    description: "Large base64 payload embedded in JS (4KB+ data URI) — reads as a packed resource; ship the asset as a real file",
+    description: "Large base64 payload embedded in JS (4KB+ data URI) - reads as a packed resource; ship the asset as a real file",
     pattern: /data:[a-z0-9\/+.-]+;base64,[A-Za-z0-9+\/=]{4000,}/i,
     fileTypes: JS_TS_EXTS,
   },
@@ -1436,18 +1436,18 @@ const AUDIT_RULES = [
 
 // Directories the audit walker refuses to enter. Two categories:
 //
-//   1. Dependency / vendored code — `node_modules` (npm), `vendor`
+//   1. Dependency / vendored code - `node_modules` (npm), `vendor`
 //      (PHP composer), `bower_components` (legacy JS), `target` (Rust /
 //      Maven build outputs that bundle dependencies), `site-packages` /
 //      `dist-packages` (Python install dirs). The auditor's job is to
 //      scan YOUR code for YOUR bugs. Dependency code is not your code,
 //      you can't fix it, and security scanning of dependencies is a
-//      different tool's job (npm audit, pip-audit, composer audit) —
+//      different tool's job (npm audit, pip-audit, composer audit) - 
 //      all of which are already in Guardian's CI workflow as separate
 //      steps. Walking these dirs produces 100% noise that drowns real
 //      findings.
 //
-//   2. Caches and build artifacts — `__pycache__`, `.pytest_cache`,
+//   2. Caches and build artifacts - `__pycache__`, `.pytest_cache`,
 //      `.mypy_cache`, `.ruff_cache`, `.turbo`, `.cache`, `coverage`,
 //      `dist`, `build`, `.next`, `out`, `.git`. Generated content,
 //      not source. The auditor would re-flag the same issues as the
@@ -1456,7 +1456,7 @@ const AUDIT_RULES = [
 //
 // Python venvs (`venv`, `.venv`) are kept on the list because most
 // projects also store their venv inside the project root. `env` is
-// deliberately NOT on this list — too many real projects have a
+// deliberately NOT on this list - too many real projects have a
 // legitimate `env/` source directory and we'd rather have false
 // positives than false negatives for source code.
 const SKIP_DIRS = new Set([
@@ -1517,7 +1517,7 @@ function collectFiles(rootDir, extensions) {
 //
 //   1. PER-FILE MARKER (otlc-guardian:audit-exempt)
 //      A file containing this string in its first 4 KB is skipped. Easy
-//      for end users — drop the marker into a file header comment and
+//      for end users - drop the marker into a file header comment and
 //      you're done. Greppable in any code review.
 //
 //   2. CENTRAL ALLOWLIST (security/.audit-allowlist)
@@ -1556,7 +1556,7 @@ function loadAllowlist(rootDir) {
     // Format:  <path>  # reason: <text>
     const hashIdx = line.indexOf("#");
     if (hashIdx === -1) {
-      console.warn(`⚠️  [OTLC GUARDIAN] .audit-allowlist:${idx + 1} — missing reason, line ignored`);
+      console.warn(`⚠️  [OTLC GUARDIAN] .audit-allowlist:${idx + 1} - missing reason, line ignored`);
       return;
     }
 
@@ -1565,7 +1565,7 @@ function loadAllowlist(rootDir) {
 
     if (!filePart) return;
     if (!/^reason:/i.test(reasonPart)) {
-      console.warn(`⚠️  [OTLC GUARDIAN] .audit-allowlist:${idx + 1} — reason must start with "reason:", line ignored`);
+      console.warn(`⚠️  [OTLC GUARDIAN] .audit-allowlist:${idx + 1} - reason must start with "reason:", line ignored`);
       return;
     }
 
@@ -1588,11 +1588,11 @@ function loadAllowlist(rootDir) {
  * via the more-reviewable mechanism.
  */
 function exemptionMechanism(filePath, content, allowlist, rootDir) {
-  // Allowlist check first — more reviewable, takes precedence
+  // Allowlist check first - more reviewable, takes precedence
   const rel = path.relative(rootDir, filePath).replace(/\\/g, "/");
   if (allowlist.has(rel)) return "allowlist";
 
-  // Marker fallback — for end-user projects that prefer per-file headers
+  // Marker fallback - for end-user projects that prefer per-file headers
   if (content.slice(0, 4096).includes(AUDIT_EXEMPT_MARKER)) return "marker";
 
   return null;
@@ -1605,7 +1605,7 @@ function scanFile(filePath, rule, exemptionState) {
   try { content = fs.readFileSync(filePath, "utf8"); }
   catch { return []; }
 
-  // Whole-file exemption — handled outside per-rule logic so the same
+  // Whole-file exemption - handled outside per-rule logic so the same
   // file isn't checked once per rule. State is precomputed in runAudit.
   if (exemptionState?.exemptPaths?.has(filePath)) return [];
 
@@ -1657,8 +1657,8 @@ function scanFile(filePath, rule, exemptionState) {
       // excludeLinePatterns lets a rule suppress findings whose
       // surrounding line matches one of a list of "this is the safe
       // form" patterns. Used by CFG-003 to distinguish a server bind
-      // call (host: '127.0.0.1', listen(port, '127.0.0.1', ...)) —
-      // which is a security best practice — from a hardcoded IP in a
+      // call (host: '127.0.0.1', listen(port, '127.0.0.1', ...)) - 
+      // which is a security best practice - from a hardcoded IP in a
       // URL or config string, which is the real bug. Pre-1.2.2 the
       // rule conflated those two opposite things and flagged the safe
       // form as a config leak.
@@ -1689,8 +1689,8 @@ function scanFile(filePath, rule, exemptionState) {
 // allowlist at `<root>/security/.audit-allowlist` was ignored.
 //
 // Markers, in priority order:
-//   1. `.git/` directory — the strongest signal a project root exists
-//   2. `security/.audit-allowlist` — Guardian's own central allowlist
+//   1. `.git/` directory - the strongest signal a project root exists
+//   2. `security/.audit-allowlist` - Guardian's own central allowlist
 //   3. `package.json` (Node), `requirements.txt`/`pyproject.toml`/`Pipfile` (Python)
 //
 // Walk caps at 8 levels deep or the filesystem root, whichever comes
@@ -1710,7 +1710,7 @@ const PROJECT_ROOT_MARKERS = [
 
 function findProjectRoot(scanDir) {
   let current = path.resolve(scanDir);
-  // Cap depth at 8 — most real projects sit no more than a few levels
+  // Cap depth at 8 - most real projects sit no more than a few levels
   // below the filesystem root, and an attacker-controlled symlink
   // farm shouldn't be able to make us walk forever.
   for (let depth = 0; depth < 8; depth++) {
@@ -1721,7 +1721,7 @@ function findProjectRoot(scanDir) {
     if (parent === current) break; // hit filesystem root
     current = parent;
   }
-  // No markers found anywhere up the tree — fall back to the original
+  // No markers found anywhere up the tree - fall back to the original
   // scan target. This matches pre-1.3.1 behavior for orphan dirs and
   // avoids surprising users who run audits in /tmp scratch directories.
   return path.resolve(scanDir);
@@ -1744,7 +1744,7 @@ function runAudit(targetDir, options = {}) {
   // the consumer of stdout (e.g. `node ... --json > out.json` in CI)
   // gets clean parseable JSON. In human mode, status lines go to stdout
   // alongside the human-readable report. This is the standard Unix
-  // convention — diagnostic stream vs result stream — and it fixes the
+  // convention - diagnostic stream vs result stream - and it fixes the
   // CI bug where the JSON file was getting "🔍 SAFETY AUDIT STARTING"
   // text prepended to the actual JSON object.
   const status = outputJson
@@ -1754,7 +1754,7 @@ function runAudit(targetDir, options = {}) {
   status(`\n🔍 [OTLC GUARDIAN] SAFETY AUDIT STARTING`);
   status(`    Target  : ${scanRoot}`);
   if (projectRoot !== scanRoot) {
-    // Visibility — surfacing the project root makes it obvious why a
+    // Visibility - surfacing the project root makes it obvious why a
     // root-level allowlist is being honored on a subdirectory scan,
     // and helps debug "wrong project root" detection issues.
     status(`    Project : ${projectRoot}`);
@@ -1772,7 +1772,7 @@ function runAudit(targetDir, options = {}) {
   const allowlist = loadAllowlist(projectRoot);
 
   // Collect all relevant files. Walker scans the user's requested
-  // target, NOT the upward-walked project root — the user said "audit
+  // target, NOT the upward-walked project root - the user said "audit
   // ./src" and they meant "audit ./src", not "audit my whole repo".
   const allExtensions = [...new Set(AUDIT_RULES.flatMap((r) => r.fileTypes))];
   const files         = collectFiles(scanRoot, allExtensions);
@@ -1842,7 +1842,7 @@ function runAudit(targetDir, options = {}) {
   // Per-file analyzer rules (1.4.0). Signature:
   //   fileCheckFn(content, filePath) -> [{ line, content }]
   //
-  // These exist for findings that are an ABSENCE inside a block — a
+  // These exist for findings that are an ABSENCE inside a block - a
   // handler with no auth check, an authenticated handler with no
   // ownership check, a body that never meets a schema parser. A regex
   // cannot express "X is missing from within these braces", so the
@@ -1873,7 +1873,7 @@ function runAudit(targetDir, options = {}) {
       try {
         hits = rule.fileCheckFn(content, file);
       } catch (err) {
-        // A malformed source file must never abort the whole audit —
+        // A malformed source file must never abort the whole audit - 
         // report the analyzer failure and keep scanning. Silently
         // swallowing it would mean a file that crashes the parser is
         // indistinguishable from a file that is clean.
@@ -1895,7 +1895,7 @@ function runAudit(targetDir, options = {}) {
   // DEP-001's looksLikeHttpServer check) can read root-level
   // manifests. In 1.3.1 it was renamed from `rootDir` to
   // `projectRoot` because the auditor now distinguishes the upward-
-  // walked project root from the scan target — manifest checks must
+  // walked project root from the scan target - manifest checks must
   // see the project root, not the subdirectory the user happened to
   // scan. Existing rules that only need the file list (e.g. DEP-002)
   // can still ignore the second argument.
@@ -1941,7 +1941,7 @@ function runAudit(targetDir, options = {}) {
     };
 
     if (allFindings.length === 0) {
-      console.info(`✅ [OTLC GUARDIAN] AUDIT COMPLETE — No issues found.\n`);
+      console.info(`✅ [OTLC GUARDIAN] AUDIT COMPLETE - No issues found.\n`);
     } else {
       // Compact one-line severity summary instead of the trailing
       // four-line "Summary:" block the pre-1.2.3 reporter printed
@@ -1953,7 +1953,7 @@ function runAudit(targetDir, options = {}) {
         `${bySeverity.MEDIUM.length} MEDIUM · ` +
         `${bySeverity.LOW.length} LOW`;
 
-      console.warn(`⚠️  [OTLC GUARDIAN] AUDIT COMPLETE — ${allFindings.length} issue(s) found`);
+      console.warn(`⚠️  [OTLC GUARDIAN] AUDIT COMPLETE - ${allFindings.length} issue(s) found`);
       console.warn(`    ${summaryLine}\n`);
 
       // Layout per severity bucket:
@@ -2000,7 +2000,7 @@ function runAudit(targetDir, options = {}) {
           // Multiple line numbers on the same file collapse to a
           // single comma-separated list (`file.ts:7, 12, 34`) with
           // the first finding's snippet shown once underneath as
-          // context — repeating the snippet for every line was the
+          // context - repeating the snippet for every line was the
           // visual mush the pre-1.2.3 reporter produced.
           const byFile = new Map();
           for (const f of items) {

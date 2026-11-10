@@ -1,6 +1,6 @@
 """
 ============================================================
-OTLC GUARDIAN — Prompt Injection Guard (Python)
+OTLC GUARDIAN - Prompt Injection Guard (Python)
 // security · onthelevelconcepts.com
 Version: 1.5.0
 ============================================================
@@ -111,7 +111,7 @@ INJECTION_PATTERNS: list[InjectionPattern] = [
     InjectionPattern("GUARD-INJ-024", re.compile(r"jailbreak",                                  re.I), "HIGH",     "Jailbreak keyword"),
     InjectionPattern("GUARD-INJ-025", re.compile(r"without\s+(?:any\s+)?restrictions",          re.I), "HIGH",     "Restriction bypass"),
     InjectionPattern("GUARD-INJ-026", re.compile(r"bypass\s+(?:your\s+)?(?:safety|filter|guideline)", re.I), "HIGH", "Safety bypass"),
-    # Context poisoning via markup — lazy quantifiers + DOTALL so the
+    # Context poisoning via markup - lazy quantifiers + DOTALL so the
     # pattern can span lines and does not ReDoS on long inputs without
     # a closing delimiter. Mirrors the JS module's GUARD-INJ-027 / GUARD-INJ-028.
     InjectionPattern("GUARD-INJ-027", re.compile(r"<!--"), "MEDIUM", "HTML-comment context poisoning",  _comment_matcher("<!--", "-->")),
@@ -162,7 +162,7 @@ PRINTABLE_PATTERN     = re.compile(r"^[\x20-\x7E\s]{10,}$")
 MAX_SCAN_LENGTH = 1_000_000
 
 # ---------------------------------------------------------------------------
-# SECRET LEAK PATTERNS — Python parity with security/01-injection-guard.js
+# SECRET LEAK PATTERNS - Python parity with security/01-injection-guard.js
 # Catches secrets that leak into AI input or output.
 # ---------------------------------------------------------------------------
 
@@ -184,7 +184,7 @@ class SecretPattern:
 # Fix: split into provider-specific rules so the label names the provider
 # (operationally useful when triaging an incident), plus a legacy fallback
 # for historical `sk-...` keys still in circulation. GUARD-SEC-011 adds coverage
-# for connection strings with embedded credentials — the common protocol
+# for connection strings with embedded credentials - the common protocol
 # schemes (postgres, mysql, mongodb, redis, amqp) whose URLs pin a
 # user:pass@host authority into source. See tests/audit.test.js for the
 # full matrix of examples the rule must and must not fire on.
@@ -230,7 +230,7 @@ class Violation:
 
 
 # ---------------------------------------------------------------------------
-# PRE-SCAN NORMALIZER — Python parity with JS version (v1.0.1 patches)
+# PRE-SCAN NORMALIZER - Python parity with JS version (v1.0.1 patches)
 # - NFKC: fullwidth/homoglyph Unicode → ASCII (defeats ｉｇｎｏｒｅ bypass)
 # - Strip invisible Unicode (defeats zero-width-space bypass)
 # - URL-decode and base64-decode candidates so encoded payloads are scanned
@@ -352,7 +352,7 @@ def scan(text: str, mode: str = "all") -> list[Violation]:
                 id="GUARD-INJ-UNICODE",
                 severity="HIGH",
                 matched="invisible unicode characters",
-                description="Invisible Unicode detected — potential steganographic injection",
+                description="Invisible Unicode detected - potential steganographic injection",
             ))
 
     if mode in ("secrets", "all"):
@@ -362,7 +362,7 @@ def scan(text: str, mode: str = "all") -> list[Violation]:
                     type="secret",
                     id=rule.id,
                     severity="CRITICAL",
-                    matched=f"[REDACTED — {rule.label}]",
+                    matched=f"[REDACTED - {rule.label}]",
                     description=rule.label,
                 ))
 
@@ -387,13 +387,13 @@ def report_violations(violations: list[Violation], context: str = "input") -> No
         logger.warning(f"    Context : {context}")
         logger.warning(f"    Count   : {len(injections)} pattern(s) matched")
         for v in injections:
-            logger.warning(f"    [{v.severity}] {v.id} — {v.description} — matched: \"{v.matched}\"")
+            logger.warning(f"    [{v.severity}] {v.id} - {v.description} - matched: \"{v.matched}\"")
 
     if secrets:
         logger.error(f"\n🚨 [OTLC GUARDIAN] SECRET LEAK DETECTED")
         logger.error(f"    Context : {context}")
         for v in secrets:
-            logger.error(f"    [CRITICAL] {v.id} — {v.description}")
+            logger.error(f"    [CRITICAL] {v.id} - {v.description}")
         logger.error(f"    → Remove secrets from code. Use environment variables.")
 
 
@@ -429,7 +429,7 @@ class GuardianError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# COMBINED GUARD — PRIMARY ENTRY POINT
+# COMBINED GUARD - PRIMARY ENTRY POINT
 # ---------------------------------------------------------------------------
 
 def guard_input(
@@ -489,7 +489,7 @@ def guard_input(
 
     sanitized = sanitize(text)
 
-    # Post-sanitize re-scan — catches payloads that only appear after stripping
+    # Post-sanitize re-scan - catches payloads that only appear after stripping
     # delimiters (e.g. zero-width space between i​g leaves "ignore" behind).
     post = scan(sanitized, mode="injection")
     if post:
@@ -501,7 +501,7 @@ def guard_input(
 
 
 # ---------------------------------------------------------------------------
-# OUTPUT GUARD — Python parity with security/01-injection-guard.js
+# OUTPUT GUARD - Python parity with security/01-injection-guard.js
 # Scan AI responses before they reach the user or get stored.
 # Catches: leaked secrets in AI output, reflected injection (model echoing back).
 # ---------------------------------------------------------------------------
@@ -530,7 +530,7 @@ def guard_output(
     if not isinstance(output, str):
         raise TypeError("guard_output requires a string.")
 
-    # Scan for both — secrets always block-eligible, injection patterns are
+    # Scan for both - secrets always block-eligible, injection patterns are
     # informational only on output (the AI is just echoing them back).
     secret_violations    = scan(output, mode="secrets")
     injection_violations = scan(output, mode="injection")
@@ -562,8 +562,8 @@ def make_fastapi_guard(field: str = "message", **guard_kwargs):
 
     Pre-1.3.1 the dependency called `guard_input()` for its side effect
     (raising on critical violations) but discarded the sanitized return
-    value entirely. That meant non-blocking but sanitizable input — for
-    example a string with a zero-width-space bypass — would reach the
+    value entirely. That meant non-blocking but sanitizable input - for
+    example a string with a zero-width-space bypass - would reach the
     endpoint UNCHANGED. The Node middleware (`injectionMiddleware()` in
     01-injection-guard.js) writes the sanitized value back into
     `req.body[field]`; the Python dependency now mirrors that behavior
@@ -579,7 +579,7 @@ def make_fastapi_guard(field: str = "message", **guard_kwargs):
         @app.post("/api/v1/chat")
         async def chat(clean_message: str = Depends(guard)):
             # clean_message is the SANITIZED version of body["message"].
-            # Use it directly — do NOT re-read body["message"], that would
+            # Use it directly - do NOT re-read body["message"], that would
             # be the unsanitized original.
             reply = await call_your_ai(clean_message)
             ...
@@ -587,7 +587,7 @@ def make_fastapi_guard(field: str = "message", **guard_kwargs):
     The endpoint receives the dependency's return value, not the raw
     request body field. If your endpoint needs other fields from the
     body in addition to the guarded one, take them from a separate
-    Pydantic model parameter — Pydantic models and Depends() coexist
+    Pydantic model parameter - Pydantic models and Depends() coexist
     cleanly.
 
     Note: FastAPI is imported lazily so this module remains importable
@@ -632,7 +632,7 @@ def make_fastapi_guard(field: str = "message", **guard_kwargs):
 
 
 # ---------------------------------------------------------------------------
-# CLI — scan a string from the command line
+# CLI - scan a string from the command line
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":

@@ -45,6 +45,8 @@ if (!cover) throw new Error('chapters/00-cover.html is missing');
 // ---- checks ----
 const problems = [];
 const allIds = new Map();
+// En dash U+2013 and em dash U+2014, written as escapes so this file never holds one.
+const DASH = /[\u2013\u2014]/;
 for (const c of [{ id: 'cover', html: cover, page: 'index.html' }, ...chapters]) {
   for (const m of c.html.matchAll(/\sid="([^"]+)"/g)) {
     if (allIds.has(m[1]) && allIds.get(m[1]) !== c.page) problems.push(`duplicate id "${m[1]}" in ${c.page} and ${allIds.get(m[1])}`);
@@ -53,12 +55,12 @@ for (const c of [{ id: 'cover', html: cover, page: 'index.html' }, ...chapters])
 }
 for (const c of [{ file: '00-cover.html', html: cover }, ...chapters]) {
   const lines = c.html.split('\n');
-  lines.forEach((line, i) => { if (/[–—]/.test(line)) problems.push(`${c.file}:${i + 1}: em or en dash`); });
+  lines.forEach((line, i) => { if (DASH.test(line)) problems.push(`${c.file}:${i + 1}: em or en dash`); });
   for (const m of c.html.matchAll(/href="#([^"]+)"/g)) if (!allIds.has(m[1])) problems.push(`${c.file}: link to missing #${m[1]}`);
   // SVG markers are per figure; a marker id must be defined in the same file.
   for (const m of c.html.matchAll(/url\(#([^)]+)\)/g)) if (!c.html.includes(`id="${m[1]}"`)) problems.push(`${c.file}: url(#${m[1]}) has no definition`);
 }
-if (/[–—]/.test(css)) problems.push('manual.css: em or en dash');
+if (DASH.test(css)) problems.push('manual.css: em or en dash');
 if (problems.length) { console.error(problems.join('\n')); process.exit(1); }
 
 // ---- shared pieces ----

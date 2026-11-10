@@ -27,13 +27,13 @@ Both are in effect at all times. Read them before writing code in the target pro
 
 | File | Answers |
 |---|---|
-| `C:\dev\Projects\otlc-guardian\CLAUDE.md` | HOW to build — behavior rules, error handling, logging, secrets, self-audit checklist |
-| `C:\dev\Projects\otlc-guardian\STANDARDS.md` | WHAT to build with — the approved stack, per language and layer |
+| `C:\dev\Projects\otlc-guardian\CLAUDE.md` | HOW to build - behavior rules, error handling, logging, secrets, self-audit checklist |
+| `C:\dev\Projects\otlc-guardian\STANDARDS.md` | WHAT to build with - the approved stack, per language and layer |
 
 If the target project has its own `CLAUDE.md`, that file wins on conflict. Guardian
 is a floor, not a ceiling.
 
-## Step 1 — Run the audit, do not eyeball it
+## Step 1 - Run the audit, do not eyeball it
 
 Never substitute reading the diff for running the scanner. The whole point is that
 these bugs are invisible to a quick read.
@@ -47,14 +47,14 @@ CRITICAL or HIGH findings (use this in CI).
 
 The audit runs three kinds of rule:
 
-- **pattern** — regex, line or whole-file. Secrets, hardcoded config, `console.log`,
+- **pattern** - regex, line or whole-file. Secrets, hardcoded config, `console.log`,
   silent catch, raw SQL, `any` types.
-- **analyzer** — per-file route-handler analysis. Missing auth, IDOR, unvalidated
+- **analyzer** - per-file route-handler analysis. Missing auth, IDOR, unvalidated
   request bodies. These are *absence* conditions inside a block, which no regex can
   express, so the analyzer walks handler bodies directly.
-- **project** — whole-project shape. Missing `/health` endpoint, committed `.env`.
+- **project** - whole-project shape. Missing `/health` endpoint, committed `.env`.
 
-## Step 2 — Read the guide for whatever fired
+## Step 2 - Read the guide for whatever fired
 
 Each guide in `guides/` covers one bug class: what it looks like, why AI tools
 generate it, why it is dangerous, how to check, and the fix. Stored verbatim from
@@ -70,7 +70,7 @@ generate it, why it is dangerous, how to check, and the fix. Stored verbatim fro
 Do not paraphrase a fix from memory when the guide has the exact pattern. The guides
 carry the reasoning that makes a fix stick.
 
-## Step 3 — Fix at the root, never suppress
+## Step 3 - Fix at the root, never suppress
 
 A finding is suppressed only when it is genuinely wrong, and only in a way a
 reviewer can see:
@@ -81,10 +81,10 @@ reviewer can see:
 Both are reported in every audit run. If the exempt count grows, that is visible
 immediately. Never suppress a finding because the fix is inconvenient.
 
-## Step 4 — Self-audit before claiming done
+## Step 4 - Self-audit before claiming done
 
 Run the checklist at the end of `CLAUDE.md`. Every box must be checked. If any item
-is unchecked, the task is not complete — say so plainly rather than shipping.
+is unchecked, the task is not complete - say so plainly rather than shipping.
 
 ## The three bugs that matter most
 
@@ -107,7 +107,7 @@ copy-pasted per route.
 **Input trusted at the boundary.** Request bodies reaching a write without a schema
 parse. The standard is Zod (`safeParse`) in Node and Pydantic in Python. Hand-rolled
 `if (!x) return 400` chains do not count. Client-side validation does not count at
-all — the client is not a trust boundary.
+all - the client is not a trust boundary.
 
 ## Output
 

@@ -1,4 +1,4 @@
-# OTLC Guardian — Setup Guide
+# OTLC Guardian - Setup Guide
 <!-- onthelevelconcepts.com · Version 1.3.1 -->
 
 Step-by-step setup from zero to a fully protected, standards-enforced project.  
@@ -15,7 +15,7 @@ Confirm these are installed before starting:
 | Node.js | 22 LTS or higher | `node --version` |
 | Git | Any recent version | `git --version` |
 | Python | 3.11+ (Python projects only) | `python --version` |
-| **A coding agent — at least one of:** | (any recent version) | |
+| **A coding agent - at least one of:** | (any recent version) | |
 | &nbsp;&nbsp;• Claude Code | Latest | `claude --version` |
 | &nbsp;&nbsp;• Codex CLI | Latest | `codex --version` |
 | &nbsp;&nbsp;• Cursor | Latest | in-app `About` |
@@ -31,7 +31,7 @@ Confirm these are installed before starting:
 
 Before you start, it helps to understand the two distinct parts of Guardian:
 
-**The CLI — global, installed once**
+**The CLI - global, installed once**
 
 ```bash
 npm install -g .
@@ -39,7 +39,7 @@ npm install -g .
 
 This installs the `guardian` command on your machine so it works from any folder, any project, forever. You only do this once per machine.
 
-**The project files — per project**
+**The project files - per project**
 
 ```bash
 guardian init
@@ -47,11 +47,11 @@ guardian init
 
 This copies `CLAUDE.md`, `STANDARDS.md`, `security/`, and the supporting files into a specific project. Each project you work on gets its own copy of these files. Claude Code reads them automatically because they live in that project's root.
 
-**This repo is both things at once** — it's the source you clone to get the CLI, and it's the template that `guardian init` copies from.
+**This repo is both things at once** - it's the source you clone to get the CLI, and it's the template that `guardian init` copies from.
 
 ---
 
-## Step 1 — Clone Guardian
+## Step 1 - Clone Guardian
 
 ```bash
 git clone https://github.com/Omnib0mb3r/otlc-guardian.git
@@ -60,7 +60,7 @@ cd otlc-guardian
 
 ---
 
-## Step 2 — Install the CLI
+## Step 2 - Install the CLI
 
 ```bash
 npm install -g .
@@ -77,7 +77,7 @@ You should see the list of available commands. If you see a "command not found" 
 
 ---
 
-## Step 3 — Add Guardian to Your Project
+## Step 3 - Add Guardian to Your Project
 
 ### New project (starting fresh)
 
@@ -99,14 +99,14 @@ guardian init
 | `CLAUDE.md` | Guardian rules **appended** below your existing content (Claude Code behavior file) |
 | `AGENTS.md` | Guardian rules **appended** below your existing content (universal behavior file for Codex CLI / Cursor / Aider / Continue / Windsurf) |
 | `STANDARDS.md` | Guardian stack **appended** below your existing content |
-| `.gitignore` | Guardian entries **appended** — only ones you don't already have |
-| `.env.example` | Guardian variables **appended** — only ones you don't already have |
+| `.gitignore` | Guardian entries **appended** - only ones you don't already have |
+| `.env.example` | Guardian variables **appended** - only ones you don't already have |
 | `.claude/settings.json` | Guardian hooks **merged** into your existing hooks config (Claude Code only) |
 | `security/` files | **Copied only if not already present** |
 | `.claude/hooks/` files | **Copied only if not already present** (Claude Code only) |
 | `.github/` files | **Copied only if not already present** |
 
-Running `guardian init` a second time is safe — it detects everything already in place and skips it. No duplicates, no broken config.
+Running `guardian init` a second time is safe - it detects everything already in place and skips it. No duplicates, no broken config.
 
 ### Verify the result
 
@@ -118,7 +118,7 @@ You should see all green checkmarks. Any missing files will be flagged with inst
 
 ---
 
-## Step 4 — Set Up Environment Variables
+## Step 4 - Set Up Environment Variables
 
 Guardian enforces that secrets never live in code. All sensitive values must be in environment variables.
 
@@ -129,25 +129,25 @@ cd your-project
 cp .env.example .env
 ```
 
-Open `.env` and fill in your actual values. This file is already in `.gitignore` — it will never be committed to git.
+Open `.env` and fill in your actual values. This file is already in `.gitignore` - it will never be committed to git.
 
 ### Register variables permanently (so they survive restarts)
 
-**Windows — PowerShell (permanent):**
+**Windows - PowerShell (permanent):**
 ```powershell
 [System.Environment]::SetEnvironmentVariable("OPENAI_API_KEY", "sk-your-key", "User")
 [System.Environment]::SetEnvironmentVariable("DATABASE_URL",   "postgresql://user:pass@host:5432/db", "User")
 [System.Environment]::SetEnvironmentVariable("JWT_SECRET",     "your-secret-minimum-32-chars", "User")
 ```
 
-**Windows — GUI (no PowerShell needed):**
+**Windows - GUI (no PowerShell needed):**
 1. Press `Win + R`, type `sysdm.cpl`, press Enter
 2. Click **Advanced** tab
 3. Click **Environment Variables**
 4. Under **User variables**, click **New**
 5. Add each key and value
 
-**Windows — current session only (lost on restart):**
+**Windows - current session only (lost on restart):**
 ```powershell
 $env:OPENAI_API_KEY = "sk-your-key"
 $env:DATABASE_URL   = "postgresql://..."
@@ -172,11 +172,11 @@ Reference them in workflows as `${{ secrets.VARIABLE_NAME }}`.
 
 ---
 
-## Step 5 — Wire Up the Runtime Guard
+## Step 5 - Wire Up the Runtime Guard
 
 This is the code that protects your live app. Add it to any route that passes user input to an AI model.
 
-### Minimum integration — one line
+### Minimum integration - one line
 
 ```javascript
 import { guardInput } from './security/01-injection-guard.js';
@@ -201,7 +201,7 @@ import {
   healthCheck,
 } from './security/02-code-security.js';
 
-// Fail fast at startup — never start with missing secrets
+// Fail fast at startup - never start with missing secrets
 validateEnv(['OPENAI_API_KEY', 'DATABASE_URL', 'JWT_SECRET']);
 
 const app = express();
@@ -267,11 +267,11 @@ async def chat(body: ChatRequest, request: Request):
 
 ---
 
-## Step 6 — Understand the Two Hooks (Claude Code only)
+## Step 6 - Understand the Two Hooks (Claude Code only)
 
 > **Skip this step if you're not using Claude Code.** The two hooks below
 > are Claude-specific integrations that rely on Claude Code's `PreToolUse`
-> and `PostToolUse` tool-call lifecycle — there is no equivalent in Codex
+> and `PostToolUse` tool-call lifecycle - there is no equivalent in Codex
 > CLI, Cursor, Aider, Continue, or Windsurf today. If you're on one of
 > those agents, you still get the full runtime guard and the audit CLI
 > (Tier 1 in the README). Jump to Step 7.
@@ -290,25 +290,25 @@ automatically by `guardian init` and registered in `.claude/settings.json`.
 Fires every time Claude writes or edits a file in a watched location, or
 runs a Bash command that names or writes one, and scans the content for
 the same 28 injection patterns the runtime guard
-uses (single source of truth — the hook imports them directly from
+uses (single source of truth - the hook imports them directly from
 `security/01-injection-guard.js`, so they cannot drift).
 
-**Default watched paths** — anything that ends up loaded into a future
+**Default watched paths** - anything that ends up loaded into a future
 Claude session as instructions, memory, or research:
 
-- `.planning/`, `.gsd/`, `.plans/` — phase plans, research, roadmaps
-- `.claude/`, `.cursor/`, `.continue/`, `.aider/`, `.windsurf/` — coding-agent state
-- Any `*/memory/` directory — auto-memory and persistent context stores
-- `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` — cross-agent instruction files
+- `.planning/`, `.gsd/`, `.plans/` - phase plans, research, roadmaps
+- `.claude/`, `.cursor/`, `.continue/`, `.aider/`, `.windsurf/` - coding-agent state
+- Any `*/memory/` directory - auto-memory and persistent context stores
+- `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` - cross-agent instruction files
 - `.cursorrules`, `.windsurfrules`, `.aider.conf.yml`, `copilot-instructions.md`
-- `MEMORY.md` — auto-memory index
-- `.env*` — environment files (sometimes contain embedded payloads)
+- `MEMORY.md` - auto-memory index
+- `.env*` - environment files (sometimes contain embedded payloads)
 
 ### Hook 2: `web-content-guard.mjs` (PostToolUse on WebFetch, WebSearch, `mcp__firecrawl__crawl`, `mcp__exa__search`)
 
 Fires every time Claude fetches a URL or runs a web search, and scans the
 returned content **before Claude reasons about it**. This is the entry
-point for indirect prompt injection — hostile instructions hidden in a
+point for indirect prompt injection - hostile instructions hidden in a
 web page or search result. Catching it here is dramatically higher
 leverage than waiting until Claude has laundered the content into a plan
 file.
@@ -332,9 +332,9 @@ guard does not read it; its tool list is fixed in the script.
 }
 ```
 
-- `watchPaths` — extra paths to scan (added to defaults)
-- `ignorePaths` — paths to exclude from scanning
-- `extendDefaults: false` — replace the default list entirely with your own
+- `watchPaths` - extra paths to scan (added to defaults)
+- `ignorePaths` - paths to exclude from scanning
+- `extendDefaults: false` - replace the default list entirely with your own
 
 ### Hook exemptions
 
@@ -386,7 +386,7 @@ it during a real Claude session.
 
 ---
 
-## Step 7 — Run Your First Audit
+## Step 7 - Run Your First Audit
 
 Scan your project for existing security and quality issues:
 
@@ -398,7 +398,7 @@ Or using the direct script:
 ```bash
 node security/03-audit.js
 node security/03-audit.js ./src              # scan a specific folder
-node security/03-audit.js . --fail-on-error  # exit code 1 on HIGH/CRITICAL — use in CI
+node security/03-audit.js . --fail-on-error  # exit code 1 on HIGH/CRITICAL - use in CI
 node security/03-audit.js . --json           # machine-readable output
 ```
 
@@ -418,7 +418,7 @@ Fix all **CRITICAL** and **HIGH** findings before pushing to production.
 
 ---
 
-## Step 8 — Verify Your Agent is Reading the Standards
+## Step 8 - Verify Your Agent is Reading the Standards
 
 The verification procedure depends on which agent you use. The goal in every
 case is the same: confirm the agent has read the behavior file at session
@@ -435,7 +435,7 @@ Ask Claude:
 What standards are you following for this project?
 ```
 
-Claude should describe the rules from `CLAUDE.md` and the stack from `STANDARDS.md`. If it doesn't reference either file, verify both files are in the **project root** — not a subdirectory.
+Claude should describe the rules from `CLAUDE.md` and the stack from `STANDARDS.md`. If it doesn't reference either file, verify both files are in the **project root** - not a subdirectory.
 
 ### If you use Codex CLI
 
@@ -448,7 +448,7 @@ Ask:
 What standards are you following for this project?
 ```
 
-Codex should describe the rules from `AGENTS.md` (which points at `STANDARDS.md` and `CLAUDE.md`). If it doesn't, confirm `AGENTS.md` is in the **project root**. Run `guardian check` — the "Editor coverage" section will show whether `AGENTS.md` was found.
+Codex should describe the rules from `AGENTS.md` (which points at `STANDARDS.md` and `CLAUDE.md`). If it doesn't, confirm `AGENTS.md` is in the **project root**. Run `guardian check` - the "Editor coverage" section will show whether `AGENTS.md` was found.
 
 ### If you use Cursor, Aider, Continue, or Windsurf
 
@@ -457,9 +457,9 @@ Open your agent's chat in the project and ask:
 What project rules from AGENTS.md are you following?
 ```
 
-The agent should cite rules from `AGENTS.md` — the no-silent-catch rule, the no-hardcoded-secrets rule, the self-audit checklist. Each agent reads `AGENTS.md` slightly differently (some at session start, some on-demand); if the answer is vague, paste the first paragraph of `AGENTS.md` into the chat once to prime it.
+The agent should cite rules from `AGENTS.md` - the no-silent-catch rule, the no-hardcoded-secrets rule, the self-audit checklist. Each agent reads `AGENTS.md` slightly differently (some at session start, some on-demand); if the answer is vague, paste the first paragraph of `AGENTS.md` into the chat once to prime it.
 
-### Behavioral enforcement — works the same in every agent
+### Behavioral enforcement - works the same in every agent
 
 Once you've confirmed the behavior file is loaded, test enforcement with
 these prompts. Every Guardian-aware agent should give the same answers:
@@ -472,7 +472,7 @@ Show me how to fetch data in a React component.
 ```
 Add a catch block to this function.
 ```
-→ The agent should write a structured, logged error handler — not `catch (e) {}`.
+→ The agent should write a structured, logged error handler - not `catch (e) {}`.
 
 ```
 I need to store the user's auth token.
@@ -485,7 +485,7 @@ everything is in place.
 
 ---
 
-## Step 9 — Confirm CI/CD is Active
+## Step 9 - Confirm CI/CD is Active
 
 The workflow at `.github/workflows/security-audit.yml` activates automatically when you push to GitHub. No configuration needed.
 
@@ -493,7 +493,7 @@ To verify it's working:
 1. Push a commit to your repo
 2. Go to your repo on GitHub
 3. Click the **Actions** tab
-4. You should see the **OTLC Guardian — Security Audit** workflow running
+4. You should see the **OTLC Guardian - Security Audit** workflow running
 
 What it runs on every push and PR:
 1. OTLC Guardian safety audit (`--fail-on-error`)
@@ -583,9 +583,9 @@ Add `"type": "module"` to your `package.json` to use ESM imports throughout.
 
 **`guardian scan` crashes with `ERR_UNSUPPORTED_ESM_URL_SCHEME` on Windows**
 
-This was a real bug in 1.1.0 — a raw Windows path (`C:\...`) was passed to
+This was a real bug in 1.1.0 - a raw Windows path (`C:\...`) was passed to
 dynamic `import()`, which requires a `file://` URL on Windows. **Fixed in
-1.1.1.** If you're seeing this, you're on an older build — update with:
+1.1.1.** If you're seeing this, you're on an older build - update with:
 ```bash
 cd /path/to/otlc-guardian
 git pull
@@ -594,7 +594,7 @@ npm install -g .
 
 **`guardian audit "something with spaces or ; or &&"` runs extra shell commands**
 
-This was a real shell-injection vulnerability in 1.1.0 — arguments to
+This was a real shell-injection vulnerability in 1.1.0 - arguments to
 `guardian audit` were spliced into an `execSync` template string. **Fixed
 in 1.1.1** by switching to `spawnSync` with an argv array so the shell
 never parses the arguments at all. Again, if you see this on your machine,
@@ -606,7 +606,7 @@ update your global CLI install to 1.1.1 or newer.
 
 > **Read this entire section before running any commands.** Uninstalling
 > Guardian is deliberately a manual, step-by-step process. There is no
-> `guardian uninstall` command — the blast radius of any bug in an
+> `guardian uninstall` command - the blast radius of any bug in an
 > automated file-mutation command that touches user content is too wide
 > for a security-forward template. You are in full control of every
 > delete and every edit.
@@ -615,13 +615,13 @@ update your global CLI install to 1.1.1 or newer.
 > existing files (CLAUDE.md, STANDARDS.md, .gitignore, .env.example,
 > .claude/settings.json) **below** an `<!-- OTLC-GUARDIAN-START -->`
 > marker, preserving every line you wrote above it. Uninstalling cleanly
-> therefore requires the inverse — surgically remove only the content
+> therefore requires the inverse - surgically remove only the content
 > **between the markers**, never blanket-delete a merged file.
 > **A blanket `rm -f CLAUDE.md` would destroy any project-specific rules
 > you wrote before running `guardian init`.** This section walks you
 > through the safe manual process.
 
-### Step 1 — Un-merge the files Guardian appended into (manual)
+### Step 1 - Un-merge the files Guardian appended into (manual)
 
 These files contain **your content above** Guardian's markers. Open each one
 in your editor and delete only the marker-delimited block. **Do not delete
@@ -638,7 +638,7 @@ The marker syntax to look for in Markdown files (`CLAUDE.md`, `STANDARDS.md`):
 <!-- The section below was added by OTLC Guardian (guardian init)     -->
 <!-- ... -->
 
-<everything between the markers — delete this whole block and the markers themselves>
+<everything between the markers - delete this whole block and the markers themselves>
 
 <!-- OTLC-GUARDIAN-END -->
 ```
@@ -649,19 +649,19 @@ The marker syntax for `.gitignore` and `.env.example`:
 <your original content stays above, untouched>
 
 # OTLC-GUARDIAN-START
-# Added by OTLC Guardian (guardian init) — safe to keep
-<entries between the markers — delete this whole block and the markers themselves>
+# Added by OTLC Guardian (guardian init) - safe to keep
+<entries between the markers - delete this whole block and the markers themselves>
 # OTLC-GUARDIAN-END
 ```
 
 Files to un-merge this way:
 
-- `CLAUDE.md` — remove the `<!-- OTLC-GUARDIAN-START -->` ... `<!-- OTLC-GUARDIAN-END -->` block
-- `AGENTS.md` — same marker pair (Guardian merges this in 1.1.1+)
-- `GEMINI.md` — same marker pair (Guardian merges this in 1.1.1+)
-- `STANDARDS.md` — same marker pair
-- `.gitignore` — remove the `# OTLC-GUARDIAN-START` ... `# OTLC-GUARDIAN-END` block
-- `.env.example` — same marker pair
+- `CLAUDE.md` - remove the `<!-- OTLC-GUARDIAN-START -->` ... `<!-- OTLC-GUARDIAN-END -->` block
+- `AGENTS.md` - same marker pair (Guardian merges this in 1.1.1+)
+- `GEMINI.md` - same marker pair (Guardian merges this in 1.1.1+)
+- `STANDARDS.md` - same marker pair
+- `.gitignore` - remove the `# OTLC-GUARDIAN-START` ... `# OTLC-GUARDIAN-END` block
+- `.env.example` - same marker pair
 
 A Markdown file Guardian created from scratch (you had no version of your
 own) also carries the markers, with nothing above the START marker. Only in
@@ -674,7 +674,7 @@ deleted:
 # If you're not sure, open it in your editor first and look for the marker.
 ```
 
-### Step 2 — Clean `.claude/settings.json` (manual)
+### Step 2 - Clean `.claude/settings.json` (manual)
 
 Open `.claude/settings.json` in your editor and remove only the two hook
 entries Guardian added. Leave every other hook alone.
@@ -710,7 +710,7 @@ in it, **leave those other hooks in place** and remove only Guardian's
 command entry from the `hooks` array. If the matcher block becomes empty after
 removing Guardian's entry, you can drop the empty block.
 
-### Step 3 — Delete the pure-Guardian files (safe)
+### Step 3 - Delete the pure-Guardian files (safe)
 
 These files are copied whole by `guardian init` and are never merged into.
 They contain only Guardian content and are always safe to delete:
@@ -727,7 +727,7 @@ rm -f .claude/hooks/injection-guard-hook.mjs
 rm -f .claude/hooks/web-content-guard.mjs
 ```
 
-**Do NOT use `rm -rf security/` or `rm -rf .claude/hooks/`** — those commands
+**Do NOT use `rm -rf security/` or `rm -rf .claude/hooks/`** - those commands
 would also delete any custom files you added to those directories. Delete
 files individually, by name, as shown above.
 
@@ -746,7 +746,7 @@ Same for `.claude/hooks/`:
 rmdir .claude/hooks/
 ```
 
-### Step 4 — Optional: remove the GitHub workflow
+### Step 4 - Optional: remove the GitHub workflow
 
 `guardian init` copies Guardian's whole `.github/` folder into a project,
 skipping files that already exist: `workflows/security-audit.yml`,
@@ -762,15 +762,15 @@ rm -f .github/workflows/security-audit.yml
 If you customized the workflow after Guardian copied it, leave it in place
 or merge your customizations into a new workflow file under a different name.
 
-### Step 5 — Files Guardian never creates (do NOT touch)
+### Step 5 - Files Guardian never creates (do NOT touch)
 
 Guardian does **not** create any of these files. If they exist in your
 project, they belong to other tools (or to you) and must be left alone:
 
-- `.cursorrules` — used by Cursor
-- `.windsurfrules` — used by Windsurf
-- `.aider.conf.yml` — used by Aider
-- `copilot-instructions.md` — used by GitHub Copilot
+- `.cursorrules` - used by Cursor
+- `.windsurfrules` - used by Windsurf
+- `.aider.conf.yml` - used by Aider
+- `copilot-instructions.md` - used by GitHub Copilot
 
 Guardian's hooks **scan** these files for prompt-injection attempts during
 Claude Code sessions, but Guardian never **writes** to them. Removing
@@ -778,15 +778,15 @@ Guardian must never delete them.
 
 > **Updated 1.3.1:** `AGENTS.md` and `GEMINI.md` have moved OUT of this
 > "do not touch" list and INTO the marker-uninstall list in Step 1. Guardian
-> has merged into both files since 1.1.1 — they now contain the same
+> has merged into both files since 1.1.1 - they now contain the same
 > `<!-- OTLC-GUARDIAN-START -->` markers as `CLAUDE.md` and `STANDARDS.md`,
 > and the marker-block removal procedure in Step 1 applies. This note exists
 > to flag the change for anyone reading older versions of this document.
 
-### Step 6 — Optional: uninstall the global CLI
+### Step 6 - Optional: uninstall the global CLI
 
 You do **not** need to uninstall the global CLI to stop using Guardian in a
-project. Deleting the project files (steps 1-3) is enough — the CLI does
+project. Deleting the project files (steps 1-3) is enough - the CLI does
 nothing on its own until you run `guardian init` again. Keeping it installed
 lets you add Guardian to other projects without reinstalling.
 

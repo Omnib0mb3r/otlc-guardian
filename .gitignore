@@ -1,9 +1,9 @@
 # ============================================================
-# OTLC Guardian — .gitignore
+# OTLC Guardian - .gitignore
 # // onthelevelconcepts.com
 # ============================================================
 
-# ── Secrets — NEVER commit these ────────────────────────────
+# ── Secrets - NEVER commit these ────────────────────────────
 .env
 .env.local
 .env.*.local
@@ -82,13 +82,13 @@ logs/
 log/
 
 # ── Claude Code working state ───────────────────────────────
-# Keep .claude/settings.json and .claude/hooks/ — ignore everything else
+# Keep .claude/settings.json and .claude/hooks/ - ignore everything else
 .claude/cache/
 .claude/state/
 .claude/logs/
 .claude/projects/
 
-# ── GSD / planning artifacts (optional — uncomment to ignore) ──
+# ── GSD / planning artifacts (optional - uncomment to ignore) ──
 # .planning/
 
 # ── Misc ────────────────────────────────────────────────────

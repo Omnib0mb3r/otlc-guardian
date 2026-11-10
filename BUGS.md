@@ -1,4 +1,4 @@
-# BUGS — OTLC Guardian
+# BUGS - OTLC Guardian
 
 Persistent bug log. Survives across sessions so a fresh-context agent knows what is
 already known-broken before it starts troubleshooting.
@@ -86,12 +86,12 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 
 ---
 
-### BUG-001 — `INJ-005b` fires CRITICAL on non-SQL template literals
+### BUG-001 - `INJ-005b` fires CRITICAL on non-SQL template literals
 
 **Status:** RESOLVED
 **Found:** 2026-07-20 (originally observed 2026-04-27 against Guardian 1.3.1)
 **Fixed:** 2026-07-20 (1.4.1)
-**Area:** `security/03-audit.js` — `INJ-005b`
+**Area:** `security/03-audit.js` - `INJ-005b`
 
 `INJ-005b` matches any template literal containing `${}` and one or more SQL-looking
 words, with no awareness of the call site. Because `DELETE`, `UPDATE`, `SELECT`, and
@@ -147,7 +147,7 @@ Two further points the fix had to get right:
 
 No secondary lower-severity hint was added. The handoff suggested one, but a MEDIUM
 noise channel reinstates the exact problem the fix removes, and the clause-pair test
-is orthogonal to the call site — a custom DB wrapper is still caught as long as the
+is orthogonal to the call site - a custom DB wrapper is still caught as long as the
 SQL it builds is really SQL.
 
 13 tests in `tests/audit.test.js`, including a BUG-017 guard that fails if anyone ever
@@ -157,11 +157,11 @@ Original proposal in `HANDOFF-AUDIT-IMPROVEMENTS.md` § Item 1.
 
 ---
 
-### BUG-002 — No audit coverage of AI agent write permissions
+### BUG-002 - No audit coverage of AI agent write permissions
 
 **Status:** OPEN
 **Found:** 2026-07-20 (originally observed 2026-04-27)
-**Area:** `security/03-audit.js` — missing rule, planned as `AGT-001`
+**Area:** `security/03-audit.js` - missing rule, planned as `AGT-001`
 
 Guardian's runtime layer defends against prompt injection and output leakage. The
 audit has no rules about *what AI agents are allowed to write to*.
@@ -177,11 +177,11 @@ Proposed rule shape and file globs in `HANDOFF-AUDIT-IMPROVEMENTS.md` § Item 2.
 
 ---
 
-### BUG-003 — `INJ-003` fires on stock shadcn boilerplate
+### BUG-003 - `INJ-003` fires on stock shadcn boilerplate
 
 **Status:** OPEN
 **Found:** 2026-07-20 (originally observed 2026-04-27)
-**Area:** `security/03-audit.js` — `INJ-003`
+**Area:** `security/03-audit.js` - `INJ-003`
 
 `INJ-003` correctly flags `dangerouslySetInnerHTML`, but shadcn's generated
 `chart.jsx` uses it to inject static CSS variables from a constant. Every shadcn user
@@ -195,15 +195,15 @@ Proposal in `HANDOFF-AUDIT-IMPROVEMENTS.md` § Item 5.
 
 ---
 
-### BUG-004 — Planned `DEP-001` rule id collides with the existing one
+### BUG-004 - Planned `DEP-001` rule id collides with the existing one
 
 **Status:** RESOLVED
 **Found:** 2026-07-20
 **Fixed:** 2026-07-20
 **Area:** `HANDOFF-AUDIT-IMPROVEMENTS.md` § Item 4
 
-The handoff document proposes `DEP-001 — inconsistent npm: import versions`. That id
-is already in use by `DEP-001 — No health check endpoint found`, shipped since at
+The handoff document proposes `DEP-001 - inconsistent npm: import versions`. That id
+is already in use by `DEP-001 - No health check endpoint found`, shipped since at
 least 1.2.4 and covered by tests in `tests/audit.test.js`.
 
 Implementing the handoff as written would either silently overwrite an existing rule
@@ -218,11 +218,11 @@ Unblocks BUG-006.
 
 ---
 
-### BUG-005 — No `setTimeout`-before-query race detection
+### BUG-005 - No `setTimeout`-before-query race detection
 
 **Status:** DEFERRED
 **Found:** 2026-07-20 (originally observed 2026-04-27)
-**Area:** `security/03-audit.js` — missing rule, planned as `RACE-001`
+**Area:** `security/03-audit.js` - missing rule, planned as `RACE-001`
 
 `setTimeout(r, 1000)` followed by an entity lookup is a classic race: the code sleeps
 a guessed interval and hopes the write has landed. Observed at
@@ -235,11 +235,11 @@ Proposal in `HANDOFF-AUDIT-IMPROVEMENTS.md` § Item 3.
 
 ---
 
-### BUG-006 — No `npm:` import version drift detection
+### BUG-006 - No `npm:` import version drift detection
 
 **Status:** DEFERRED
 **Found:** 2026-07-20 (originally observed 2026-04-27)
-**Area:** `security/03-audit.js` — missing rule
+**Area:** `security/03-audit.js` - missing rule
 
 In Deno-based projects (Base44, Supabase Edge Functions, Deno Deploy), `npm:` imports
 pin a version inline, so the same package can drift across entry files. The Zion CMMS
@@ -251,11 +251,11 @@ Proposal in `HANDOFF-AUDIT-IMPROVEMENTS.md` § Item 4.
 
 ---
 
-### BUG-007 — No file-size / decomposition rule
+### BUG-007 - No file-size / decomposition rule
 
 **Status:** DEFERRED
 **Found:** 2026-07-20 (originally observed 2026-04-27)
-**Area:** `security/03-audit.js` — missing rule, planned as `QUAL-001`
+**Area:** `security/03-audit.js` - missing rule, planned as `QUAL-001`
 
 `STANDARDS.md` implies decomposition; the audit does not enforce it. The Zion CMMS
 shipped a 708-line page component.
@@ -269,13 +269,13 @@ Proposal in `HANDOFF-AUDIT-IMPROVEMENTS.md` § Item 6.
 
 ---
 
-### BUG-008 — `SEC-001` missed current-format API keys
+### BUG-008 - `SEC-001` missed current-format API keys
 
 **Status:** RESOLVED · **Found:** pre-1.1.1 · **Fixed:** 1.1.1
 
 The pattern was `/sk-[a-zA-Z0-9]{20,}/`. The hyphen after the provider tag falls
-outside `[a-zA-Z0-9]`, so matching stopped at 4 characters — far below the `{20,}`
-threshold — and both `sk-proj-...` (OpenAI project keys) and `sk-ant-api03-...`
+outside `[a-zA-Z0-9]`, so matching stopped at 4 characters - far below the `{20,}`
+threshold - and both `sk-proj-...` (OpenAI project keys) and `sk-ant-api03-...`
 (Anthropic) were reported as clean. A leaked current-format key passed the audit with
 no finding.
 
@@ -284,7 +284,7 @@ names the provider that just leaked. Regression tests in `tests/audit.test.js`.
 
 ---
 
-### BUG-009 — `ERR-001` missed comment-only catch bodies
+### BUG-009 - `ERR-001` missed comment-only catch bodies
 
 **Status:** RESOLVED · **Found:** pre-1.1.1 · **Fixed:** 1.1.1
 
@@ -297,7 +297,7 @@ a silent body. Runs `wholeFile` so multi-line catch bodies are caught.
 
 ---
 
-### BUG-010 — Raw SQL detection claimed but never implemented
+### BUG-010 - Raw SQL detection claimed but never implemented
 
 **Status:** RESOLVED · **Found:** pre-1.1.1 · **Fixed:** 1.1.1
 
@@ -309,7 +309,7 @@ See BUG-017 for the follow-on bypass.
 
 ---
 
-### BUG-011 — Connection strings with embedded credentials unflagged
+### BUG-011 - Connection strings with embedded credentials unflagged
 
 **Status:** RESOLVED · **Found:** pre-1.1.1 · **Fixed:** 1.1.1
 
@@ -319,19 +319,19 @@ postgres, mysql, mongodb (including `+srv`), redis/rediss, and amqp/amqps.
 
 ---
 
-### BUG-012 — `--json` mode contaminated stdout
+### BUG-012 - `--json` mode contaminated stdout
 
 **Status:** RESOLVED · **Found:** pre-1.1.1 · **Fixed:** 1.1.1 (commit `90f9665`)
 
 Status lines such as `🔍 SAFETY AUDIT STARTING` were written to stdout in `--json`
 mode, so `guardian audit . --json > out.json` produced a file that would not parse.
 
-Status now routes to stderr in JSON mode and stdout in human mode — the standard Unix
+Status now routes to stderr in JSON mode and stdout in human mode - the standard Unix
 diagnostic-vs-result split.
 
 ---
 
-### BUG-013 — README uninstall instructions caused data loss
+### BUG-013 - README uninstall instructions caused data loss
 
 **Status:** RESOLVED · **Found:** 1.3.0 · **Fixed:** 1.3.1
 
@@ -343,12 +343,12 @@ Replaced with a marker-based manual procedure linking to the full SETUP instruct
 
 ---
 
-### BUG-014 — `CFG-003` flagged safe localhost binds
+### BUG-014 - `CFG-003` flagged safe localhost binds
 
 **Status:** RESOLVED · **Found:** pre-1.2.2 · **Fixed:** 1.2.2
 
 The rule conflated two opposite things: binding a server to `127.0.0.1` (a security
-best practice — refuses external connections) and a URL pointing at a hardcoded IP (a
+best practice - refuses external connections) and a URL pointing at a hardcoded IP (a
 real config leak). Flagging the safe form is actively misleading security advice.
 
 Added `excludeLinePatterns` anchored on the syntactic shape of `listen`/`bind`/`host`
@@ -356,12 +356,12 @@ calls so they cannot match a URL string on the same line.
 
 ---
 
-### BUG-015 — `DEP-001` fired on projects with no HTTP server
+### BUG-015 - `DEP-001` fired on projects with no HTTP server
 
 **Status:** RESOLVED · **Found:** pre-1.2.4 · **Fixed:** 1.2.4
 
 The rule fired on every project lacking a "health" substring, producing spurious
-findings on CLI tools, static sites, libraries, notebooks, and desktop apps — none of
+findings on CLI tools, static sites, libraries, notebooks, and desktop apps - none of
 which should have a `/health` endpoint.
 
 Now gated on `looksLikeHttpServer()`, which checks the manifest for a server framework
@@ -369,7 +369,7 @@ before falling back to a capped source scan for `.listen(`/`createServer(`.
 
 ---
 
-### BUG-016 — `INJ-006` broke on Python f-strings containing inner quotes
+### BUG-016 - `INJ-006` broke on Python f-strings containing inner quotes
 
 **Status:** RESOLVED · **Found:** pre-1.3.0 · **Fixed:** 1.3.0
 
@@ -382,7 +382,7 @@ opposite inner style.
 
 ---
 
-### BUG-017 — `INJ-005` bypassed by variable indirection
+### BUG-017 - `INJ-005` bypassed by variable indirection
 
 **Status:** RESOLVED · **Found:** pre-1.3.0 · **Fixed:** 1.3.0
 
@@ -404,7 +404,7 @@ precision problem by reverting to a call-site match.
 
 ---
 
-### BUG-018 — Subdirectory audits ignored project-root config
+### BUG-018 - Subdirectory audits ignored project-root config
 
 **Status:** RESOLVED · **Found:** pre-1.3.1 · **Fixed:** 1.3.1
 
@@ -417,7 +417,7 @@ walking upward for `.git`, the allowlist, or a manifest, capped at 8 levels).
 
 ---
 
-### BUG-019 — Hooks bypassed the runtime guard's decode passes
+### BUG-019 - Hooks bypassed the runtime guard's decode passes
 
 **Status:** RESOLVED · **Found:** 1.3.0 · **Fixed:** 1.3.1
 
@@ -431,7 +431,7 @@ identical to runtime coverage.
 
 ---
 
-### BUG-020 — FastAPI dependency returned unsanitized input
+### BUG-020 - FastAPI dependency returned unsanitized input
 
 **Status:** RESOLVED · **Found:** 1.3.0 · **Fixed:** 1.3.1
 
@@ -442,7 +442,7 @@ CHANGELOG entry.
 
 ---
 
-### BUG-021 to BUG-026 — 2026-11-10 review (fixed in 1.5.0, awaiting live verification)
+### BUG-021 to BUG-026 - 2026-11-10 review (fixed in 1.5.0, awaiting live verification)
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10 · **Fix applied:** 2026-11-10 (1.5.0, commit da927d8; BUG-021 and BUG-022 reopened by the independent review `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`, findings 1 to 5, and fixed again in e8481d8, d8346da, 17d049c, 3d18992, a55d884)
 
@@ -461,7 +461,7 @@ Still to verify outside the test suite before marking RESOLVED:
   carries Guardian's section is allowed, `grep` over CLAUDE.md quoting a pattern is not
   blocked, and a `{"disableAllHooks":true}` write to `settings.local.json` prompts.
 
-### BUG-027 — Hook files and scanner are not write-protected
+### BUG-027 - Hook files and scanner are not write-protected
 
 **Status:** IN-PROGRESS · **Found:** 2026-11-10
 
@@ -482,7 +482,7 @@ IN-PROGRESS: writes the hook cannot see (a variable or glob target, `node -e` co
 script that writes the file, `guardian update` run by the agent). Those belong to the
 hard-no hook (Lane 5, hosted by DevNeural).
 
-### BUG-028 — Hook command path is cwd-relative
+### BUG-028 - Hook command path is cwd-relative
 
 **Status:** OPEN · **Found:** 2026-11-10
 

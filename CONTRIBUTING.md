@@ -28,14 +28,14 @@ If `npm test` is green and `guardian audit` reports no findings, your environmen
 | **New audit rules** | Add to `AUDIT_RULES` in `security/03-audit.js`. Use the existing rule shape (`id`, `category`, `severity`, `description`, `pattern`, `fileTypes`). |
 | **New default watch paths for the hook** | Add to `DEFAULT_WATCH_DIR_PATTERNS` or `DEFAULT_WATCH_FILE_PATTERNS` in `.claude/hooks/injection-guard-hook.mjs`. Add a test in `tests/hook.test.js`. |
 | **Bug fixes** | Always preferred over new features. Open an issue first if the fix changes behavior. |
-| **Documentation** | README, FAQ, SETUP, STANDARDS — corrections and clarifications welcome. |
-| **Test coverage** | Always welcome. The test files use a zero-dependency mini runner — no Jest, no Vitest, just Node's built-in `assert`. |
+| **Documentation** | README, FAQ, SETUP, STANDARDS - corrections and clarifications welcome. |
+| **Test coverage** | Always welcome. The test files use a zero-dependency mini runner - no Jest, no Vitest, just Node's built-in `assert`. |
 
 ---
 
 ## What is **not** welcome
 
-- Adding dependencies. Guardian is intentionally zero-dependency. The whole package — CLI, runtime guards, hooks, audit, tests — runs on Node's standard library and Python's standard library. If you think you need a dependency, open an issue first to discuss.
+- Adding dependencies. Guardian is intentionally zero-dependency. The whole package - CLI, runtime guards, hooks, audit, tests - runs on Node's standard library and Python's standard library. If you think you need a dependency, open an issue first to discuss.
 - Removing security patterns without a clear rationale and reviewer sign-off.
 - Adding files to `security/.audit-allowlist` without a reason field. CI rejects allowlist entries that don't justify themselves.
 - Disabling tests to make CI green. Fix the underlying issue.
@@ -147,7 +147,7 @@ Before opening a PR, verify:
 
 ## Questions
 
-Open a [discussion](https://github.com/Omnib0mb3r/otlc-guardian/discussions) or an [issue](https://github.com/Omnib0mb3r/otlc-guardian/issues) — both are fine for general questions.
+Open a [discussion](https://github.com/Omnib0mb3r/otlc-guardian/discussions) or an [issue](https://github.com/Omnib0mb3r/otlc-guardian/issues) - both are fine for general questions.
 
 ---
 

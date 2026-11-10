@@ -1,6 +1,6 @@
 /**
  * ============================================================
- * OTLC GUARDIAN — AGENTS.md + editor-coverage tests
+ * OTLC GUARDIAN - AGENTS.md + editor-coverage tests
  * // tests · onthelevelconcepts.com
  * Version: 1.5.0
  * ============================================================
@@ -14,7 +14,7 @@
  *   - `guardian init` merges Guardian content into an existing user
  *     AGENTS.md under the OTLC-GUARDIAN-START marker without clobbering
  *     the user's content
- *   - `guardian init` is idempotent on a truly-fresh project — running
+ *   - `guardian init` is idempotent on a truly-fresh project - running
  *     it twice in a row produces byte-identical CLAUDE.md / AGENTS.md /
  *     STANDARDS.md. This test guards the mergeMd fresh-install path
  *     that replaced the old copyFileSync branch, which silently
@@ -96,7 +96,7 @@ function runInit(cwd) {
 // AGENTS.md source template
 // ---------------------------------------------------------------------------
 
-describe("AGENTS.md — source template at repo root", () => {
+describe("AGENTS.md - source template at repo root", () => {
   test("exists", () => {
     const p = path.join(GUARDIAN_ROOT, "AGENTS.md");
     assert.ok(
@@ -126,16 +126,16 @@ describe("AGENTS.md — source template at repo root", () => {
     const mentioned = nonClaudeAgents.filter((a) => content.includes(a));
     assert.ok(
       mentioned.length >= 2,
-      `AGENTS.md should mention at least two of ${nonClaudeAgents.join(", ")} — found ${mentioned.length}`,
+      `AGENTS.md should mention at least two of ${nonClaudeAgents.join(", ")} - found ${mentioned.length}`,
     );
   });
 });
 
 // ---------------------------------------------------------------------------
-// guardian init — AGENTS.md provisioning via subprocess
+// guardian init - AGENTS.md provisioning via subprocess
 // ---------------------------------------------------------------------------
 
-describe("guardian init — AGENTS.md provisioning (subprocess)", () => {
+describe("guardian init - AGENTS.md provisioning (subprocess)", () => {
   test("creates AGENTS.md in a fresh project that has none", () => {
     withTempDir((dir) => {
       runInit(dir);
@@ -181,7 +181,7 @@ describe("guardian init — AGENTS.md provisioning (subprocess)", () => {
     // This is the test the README's idempotency claim depends on.
     // Before the mergeMd fresh-install fix, runInit's copyFileSync
     // branch produced a marker-less copy on run 1, which mergeMd then
-    // appended to a second time on run 2 — silently doubling CLAUDE.md,
+    // appended to a second time on run 2 - silently doubling CLAUDE.md,
     // AGENTS.md, and STANDARDS.md. The fix routes all three writes
     // through mergeMd, which now handles the missing-destination case
     // by creating a marker-sealed file. Any regression that reintroduces
@@ -215,10 +215,10 @@ describe("guardian init — AGENTS.md provisioning (subprocess)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// mergeMd — direct unit test for AGENTS.md content shape
+// mergeMd - direct unit test for AGENTS.md content shape
 // ---------------------------------------------------------------------------
 
-describe("mergeMd — AGENTS.md content shape", () => {
+describe("mergeMd - AGENTS.md content shape", () => {
   test("marker block wraps only Guardian content, not user content", () => {
     withTempDir((dir) => {
       const userPath = path.join(dir, "AGENTS.md");
@@ -263,7 +263,7 @@ describe("mergeMd — AGENTS.md content shape", () => {
       assert.ok(content.includes("Guardian paragraph"),            "Fresh file must contain Guardian content");
       // Marker should be at the top (no user prefix to invent)
       assert.ok(content.startsWith("<!-- OTLC-GUARDIAN-START -->"),
-        "Marker must start at byte 0 on a fresh file — no leading whitespace or phantom content");
+        "Marker must start at byte 0 on a fresh file - no leading whitespace or phantom content");
     });
   });
 
@@ -286,7 +286,7 @@ describe("mergeMd — AGENTS.md content shape", () => {
 });
 
 // ---------------------------------------------------------------------------
-// editorCoverage — per-agent status reporting
+// editorCoverage - per-agent status reporting
 // ---------------------------------------------------------------------------
 
 // Helper: populate a temp dir with an arbitrary set of Guardian artifacts
@@ -311,7 +311,7 @@ function setupCoverageDir(dir, opts) {
   }
 }
 
-describe("editorCoverage — per-editor status reporting", () => {
+describe("editorCoverage - per-editor status reporting", () => {
   test("FULL Claude Code install: everything present → Claude FULL, others BEHAVIOR-ONLY", () => {
     withTempDir((dir) => {
       setupCoverageDir(dir, { claudeMd: true, agentsMd: true, settings: true, hooks: true });

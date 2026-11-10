@@ -1,11 +1,11 @@
 /**
  * ============================================================
- * OTLC GUARDIAN — Code Security Standards
+ * OTLC GUARDIAN - Code Security Standards
  * // security · onthelevelconcepts.com
  * Version: 1.5.0
  * ============================================================
  * Note: this file is exempted from `guardian audit` via the
- * central allowlist at security/.audit-allowlist (logger module —
+ * central allowlist at security/.audit-allowlist (logger module - 
  * must call console.* directly to be the logger).
  *
  * Production security utilities for Node.js/Express projects.
@@ -23,7 +23,7 @@
 import crypto from "crypto";
 
 // ---------------------------------------------------------------------------
-// CUSTOM ERROR — thrown by validateEnv when required vars are missing.
+// CUSTOM ERROR - thrown by validateEnv when required vars are missing.
 // Library code never calls process.exit; the caller decides how to handle it.
 // ---------------------------------------------------------------------------
 
@@ -42,7 +42,7 @@ export class GuardianConfigError extends Error {
 
 /**
  * Validates required environment variables exist.
- * Fails loudly — never silently start with missing config.
+ * Fails loudly - never silently start with missing config.
  *
  * Throws GuardianConfigError when required vars are missing. The caller is
  * expected to catch and exit if appropriate. This keeps the library safe to
@@ -74,7 +74,7 @@ export function validateEnv(required = [], recommended = []) {
     console.warn("");
   }
 
-  console.info(`✅ [OTLC GUARDIAN] Environment validated — all required vars present.\n`);
+  console.info(`✅ [OTLC GUARDIAN] Environment validated - all required vars present.\n`);
 }
 
 // ---------------------------------------------------------------------------
@@ -94,7 +94,7 @@ export const SECURE_HEADERS = {
 };
 
 /**
- * Express middleware — applies all secure headers.
+ * Express middleware - applies all secure headers.
  * Usage: app.use(applySecureHeaders)
  */
 export function applySecureHeaders(req, res, next) {
@@ -125,7 +125,7 @@ export function requestIdMiddleware(req, res, next) {
 
 // ---------------------------------------------------------------------------
 // STRUCTURED LOGGER
-// Never use console.log() in production paths — use this.
+// Never use console.log() in production paths - use this.
 // ---------------------------------------------------------------------------
 
 const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -157,7 +157,7 @@ export const logger = {
 
 // ---------------------------------------------------------------------------
 // RATE LIMITER
-// In-memory store. Per-process only — counters reset on restart and are
+// In-memory store. Per-process only - counters reset on restart and are
 // NOT shared across PM2 cluster workers, Kubernetes pods, or multiple hosts.
 //
 // ⚠️  PRODUCTION SWAP POINT: replace `rateLimitStore` below with a Redis
@@ -169,7 +169,7 @@ export const logger = {
 //       // then in checkRateLimit, INCR + EXPIRE on a key like
 //       //   `rl:${key}` with PX=windowMs and read the counter back.
 //
-//     Everything else in this module stays the same — only the store needs
+//     Everything else in this module stays the same - only the store needs
 //     to change. Keep the same { count, resetAt } shape and the rest of the
 //     code path is identical.
 // ---------------------------------------------------------------------------
@@ -278,7 +278,7 @@ export function sendSuccess(res, data, requestId, status = 200) {
 // ---------------------------------------------------------------------------
 // GLOBAL ERROR HANDLER (Express)
 // Must be registered LAST in your Express app.
-// Catches all unhandled errors — never leaks stack traces.
+// Catches all unhandled errors - never leaks stack traces.
 // ---------------------------------------------------------------------------
 
 /**
@@ -335,7 +335,7 @@ export function printWindowsEnvSetup(keys = []) {
   console.info(`\n   PowerShell (current session only):`);
   keys.forEach((key) => console.info(`   $env:${key} = "your_value_here"`));
 
-  console.info(`\n   PowerShell (permanent — system level):`);
+  console.info(`\n   PowerShell (permanent - system level):`);
   keys.forEach((key) =>
     console.info(`   [System.Environment]::SetEnvironmentVariable("${key}", "your_value_here", "User")`)
   );

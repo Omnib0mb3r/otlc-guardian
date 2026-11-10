@@ -1,4 +1,4 @@
-# Field Guides — INDEX
+# Field Guides - INDEX
 
 > Reference material for the bug classes AI coding assistants generate most often.
 > Each guide follows the same shape: what it looks like, why AI tools generate it,
@@ -28,7 +28,7 @@ always has somewhere to send you.
 |---|---|---|---|
 | `AUTHZ-001` | CRITICAL | analyzer | Handler performs a side effect with no authentication check anywhere in its body |
 | `AUTHZ-002` | CRITICAL | pattern | Identity (`userId`, `email`, `role`) read from the request instead of a verified session |
-| `AUTHZ-003` | CRITICAL | analyzer | IDOR — authenticated handler acts on a caller-supplied object ID with no ownership check |
+| `AUTHZ-003` | CRITICAL | analyzer | IDOR - authenticated handler acts on a caller-supplied object ID with no ownership check |
 | `AUTHZ-004` | HIGH | pattern | Secret compared with `===` instead of `crypto.timingSafeEqual` |
 | `AUTHZ-005` | HIGH | pattern | Cache key not scoped to the requesting user, so a cache hit bypasses authorization |
 | `AUTHZ-011` | HIGH | analyzer | Python (FastAPI/Flask) handler performs a side effect with no authentication check |
@@ -36,7 +36,7 @@ always has somewhere to send you.
 | `WEB-001` | HIGH | pattern | Auth token written to `localStorage` / `sessionStorage` |
 | `WEB-002` | MEDIUM | project | nginx server block with no Content-Security-Policy anywhere in the project |
 | `VAL-001` | HIGH | analyzer | Request body reaches a side effect without a schema parse |
-| `VAL-002` | CRITICAL | pattern | Raw email header built by interpolation — CRLF injection makes it an open relay |
+| `VAL-002` | CRITICAL | pattern | Raw email header built by interpolation - CRLF injection makes it an open relay |
 
 `analyzer` rules use the per-file route-handler analyzer in
 [`../security/03-audit.js`](../security/03-audit.js) rather than a regex, because

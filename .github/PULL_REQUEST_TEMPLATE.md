@@ -1,6 +1,6 @@
 <!--
 Thanks for opening a PR. Please fill in the sections below.
-For security vulnerabilities, see SECURITY.md — do not open a public PR.
+For security vulnerabilities, see SECURITY.md - do not open a public PR.
 -->
 
 ## Summary

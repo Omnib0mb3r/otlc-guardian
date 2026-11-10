@@ -10,10 +10,10 @@ Free and open source · MIT License · Built by [onthelevelconcepts.com](https:/
 
 ---
 
-> **Disclaimer — read before you ship.** Guardian is **defense-in-depth, not a silver bullet.**
+> **Disclaimer - read before you ship.** Guardian is **defense-in-depth, not a silver bullet.**
 > The runtime injection guard is regex-based (28 patterns plus Unicode / URL / base64
 > normalization) and will not catch every novel or adversarial attack. The audit CLI is an
-> advisory tool with known false positives and false negatives — review every finding before
+> advisory tool with known false positives and false negatives - review every finding before
 > acting on it. For applications handling regulated data (financial, healthcare, PII), engage
 > a professional security firm for penetration testing in addition to running Guardian. See
 > [`SECURITY.md`](SECURITY.md) for the full threat model, including a list of what Guardian
@@ -28,11 +28,11 @@ in force at the same time:
 
 | Layer | Purpose | Files | When it runs |
 |---|---|---|---|
-| **Behavior layer** | Tells your coding agent HOW and WHAT to build — senior-dev standards and an approved, named technology stack | `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `STANDARDS.md` | At the start of every agent session |
+| **Behavior layer** | Tells your coding agent HOW and WHAT to build - senior-dev standards and an approved, named technology stack | `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `STANDARDS.md` | At the start of every agent session |
 | **Runtime layer** | Protects your running application from prompt injection, leaked secrets, and common API vulnerabilities | `security/01-injection-guard.js`, `security/02-code-security.js`, `security/03-audit.js`, `security/injection_guard.py` | On every request your app handles, on every audit you run |
 
 People skim past the first layer and notice the second. In practice the first layer is
-where most of the value lives — it's what stops your agent from writing a silent catch
+where most of the value lives - it's what stops your agent from writing a silent catch
 block, hardcoding a secret, or reaching for `moment.js` in 2026. The runtime layer is
 there for the moments when the first layer isn't enough.
 
@@ -40,17 +40,17 @@ there for the moments when the first layer isn't enough.
 
 ## The Two Layers, in Detail
 
-### Layer 1 — The Behavior Layer
+### Layer 1 - The Behavior Layer
 
 Four files that your coding agent reads on session start. Each file has a single purpose
 and they cross-reference each other:
 
-**`CLAUDE.md` — Claude Code behavior rules (HOW to build)**
+**`CLAUDE.md` - Claude Code behavior rules (HOW to build)**
 Identity as a senior developer, non-negotiable rules, the 15-point self-audit checklist,
 what to never do. No silent `catch {}`, no hardcoded secrets, structured logging with
 request IDs, versioned APIs, typed validation. Claude Code reads this natively.
 
-**`STANDARDS.md` — The approved technology stack (WHAT to build with)**
+**`STANDARDS.md` - The approved technology stack (WHAT to build with)**
 This file is easy to underrate. It is a curated list of the libraries a senior developer
 reaches for in 2026, categorized and justified. It's what turns "Claude picked a random
 thing from npm" into "Claude reached for exactly the same tool your team already uses."
@@ -67,11 +67,11 @@ A one-screen preview of what's in `STANDARDS.md`:
 | ORM | Prisma | SQLAlchemy 2 + Alembic |
 | Auth | Passport.js + jose + bcryptjs | python-jose + passlib |
 | Testing | Vitest + Supertest | pytest + httpx |
-| Frontend data | TanStack Query v5 | — |
-| Frontend forms | React Hook Form + Zod | — |
-| Frontend state | Zustand | — |
-| Frontend UI | shadcn/ui + Tailwind CSS | — |
-| Bundler | Vite 5 | — |
+| Frontend data | TanStack Query v5 | - |
+| Frontend forms | React Hook Form + Zod | - |
+| Frontend state | Zustand | - |
+| Frontend UI | shadcn/ui + Tailwind CSS | - |
+| Bundler | Vite 5 | - |
 | Error monitoring | Sentry | Sentry |
 | Process management | PM2 cluster mode | Gunicorn + uvicorn workers |
 | Task queue | BullMQ + Redis | Celery + Redis |
@@ -87,24 +87,24 @@ with a one-line reason for every entry.
 folder layouts), a "stack selection philosophy" (four questions to ask before picking any
 library), and a complete observability / health-check baseline.
 
-**`AGENTS.md` — Universal agent behavior rules**
-Everything in `CLAUDE.md` also applies to every non-Claude agent — `AGENTS.md` is the
+**`AGENTS.md` - Universal agent behavior rules**
+Everything in `CLAUDE.md` also applies to every non-Claude agent - `AGENTS.md` is the
 entry door for Codex CLI, Cursor, Aider, Continue, and Windsurf. It points at
 `STANDARDS.md` and `CLAUDE.md` for the full ruleset so you maintain one source of truth.
 
-**`GEMINI.md` — Gemini CLI entry point**
-Same pattern for Google Gemini CLI — a short file that reads `AGENTS.md`, `CLAUDE.md`,
+**`GEMINI.md` - Gemini CLI entry point**
+Same pattern for Google Gemini CLI - a short file that reads `AGENTS.md`, `CLAUDE.md`,
 and `STANDARDS.md` for the full rule set. Added in 1.1.1 so the template now matches
 the ecosystem the hooks were already defending.
 
-### Layer 2 — The Runtime Security Layer
+### Layer 2 - The Runtime Security Layer
 
 Five files under `security/`. All zero-dependency, all drop-in, all work on Windows,
 Linux, and macOS. **Most files are Node-only**; the injection guard has a Python
 parity implementation. See the per-file breakdown below for the exact language
 support of each component.
 
-**`01-injection-guard.js` (Node) / `injection_guard.py` (Python) — Input + output scanner**
+**`01-injection-guard.js` (Node) / `injection_guard.py` (Python) - Input + output scanner**
 Wraps every call into your AI API. Scans user input before it reaches the model (blocks
 critical injections, sanitizes delimiters, normalizes Unicode) and scans AI output
 before it reaches your user (blocks leaked API keys, catches reflected injection).
@@ -112,42 +112,42 @@ before it reaches your user (blocks leaked API keys, catches reflected injection
 `scanChange()`, its `scan()` returns a list instead of an object, and the decode passes differ
 (see the manual, chapter 03).
 
-- **28 injection patterns** — classic override, role hijack, prompt extraction, delimiter
+- **28 injection patterns** - classic override, role hijack, prompt extraction, delimiter
   injection, jailbreak classics, HTML/block-comment context poisoning
-- **Secret leak detection** — OpenAI (`sk-proj-` and legacy), Anthropic (`sk-ant-api03-`),
+- **Secret leak detection** - OpenAI (`sk-proj-` and legacy), Anthropic (`sk-ant-api03-`),
   Google, GitHub, AWS, private keys, inline passwords, database connection strings with
-  embedded credentials. **All key format regexes were updated in 1.1.1** — prior releases
+  embedded credentials. **All key format regexes were updated in 1.1.1** - prior releases
   silently missed current-generation OpenAI and Anthropic keys. If you were relying on
   the output scanner, please upgrade.
-- **Unicode / encoding bypass defense** — NFKC normalization (fullwidth attacks),
-  invisible-character stripping (zero-width space attacks), URL-decode, base64-decode —
+- **Unicode / encoding bypass defense** - NFKC normalization (fullwidth attacks),
+  invisible-character stripping (zero-width space attacks), URL-decode, base64-decode - 
   before the pattern scan runs
 - **Input length cap** (1.1.1) - `scan()` hard-caps input at 1,000,000 characters to prevent CPU burn
   from crafted mega-payloads
 - **Express middleware** (Node) and **FastAPI dependency** (Python) both included
-- The Python module uses `logging` from the standard library — **no `structlog` or
+- The Python module uses `logging` from the standard library - **no `structlog` or
   any other dependency required.** It runs on a stock Python 3.11+ install.
 
-**`02-code-security.js` — Server utilities (Node only)**
+**`02-code-security.js` - Server utilities (Node only)**
 Secure headers, rate limiter, structured logger with request ID threading, consistent
 success/error response shapes, health check helper, environment variable validation,
 Windows environment setup helper. Drop in, wire up, done. **No Python equivalent
-yet** — Python projects should use established libraries (`fastapi.middleware`, `slowapi`,
+yet** - Python projects should use established libraries (`fastapi.middleware`, `slowapi`,
 `structlog`, `pydantic-settings`) for the same functionality.
 
-**`03-audit.js` — Standalone audit CLI (Node, scans both Node and Python source)**
+**`03-audit.js` - Standalone audit CLI (Node, scans both Node and Python source)**
 Run `guardian audit` from anywhere inside a project. Scans for hardcoded secrets,
 silent catches, raw SQL string concatenation, `console.log` in production paths,
 missing health endpoints, `any`-typed TypeScript, and a dozen other junior patterns.
-**The audit script itself runs on Node, but the rules cover both `.js/.ts/.mjs/.cjs/.mts/.cts/.jsx/.tsx` AND `.py` files** — your Python source code is scanned alongside your JS. Exit
+**The audit script itself runs on Node, but the rules cover both `.js/.ts/.mjs/.cjs/.mts/.cts/.jsx/.tsx` AND `.py` files** - your Python source code is scanned alongside your JS. Exit
 code signals CI failure when `--fail-on-error` is set. JSON output mode for machine
 parsing.
 
-**`04-sql-guard.js` — Tagged template literal SQL helper (Node only)**
+**`04-sql-guard.js` - Tagged template literal SQL helper (Node only)**
 A `sql\`SELECT * FROM users WHERE id = ${id}\`` tagged template that auto-parameterizes
 interpolated values into `{ text, values }` for direct use with `pg`, `mysql2`,
 `better-sqlite3`, etc. OWASP-aligned: parameterized queries are the #1 SQL injection
-defense. **Python equivalent is on the roadmap** — Python has no tagged template
+defense. **Python equivalent is on the roadmap** - Python has no tagged template
 literals, so the design needs to be different (context manager or `?` placeholder
 wrapper). Until it ships, Python users should use SQLAlchemy parameterized queries
 or the DB-API `execute(sql, params)` form, both of which the audit's `INJ-006` rule
@@ -169,15 +169,15 @@ before you install:
 | Agent                                       | Behavior rules | Runtime guard | Audit CLI | PreToolUse / PostToolUse hooks |
 |---------------------------------------------|:-------------:|:-------------:|:---------:|:------------------------------:|
 | **Claude Code**                             | ✅ `CLAUDE.md` | ✅            | ✅        | ✅                              |
-| **Codex CLI**                               | ✅ `AGENTS.md` | ✅            | ✅        | —                              |
-| **Cursor**                                  | ✅ `AGENTS.md` | ✅            | ✅        | —                              |
-| **Aider**                                   | ✅ `AGENTS.md` | ✅            | ✅        | —                              |
-| **Continue**                                | ✅ `AGENTS.md` | ✅            | ✅        | —                              |
-| **Windsurf**                                | ✅ `AGENTS.md` | ✅            | ✅        | —                              |
-| **Gemini CLI**                              | ✅ `GEMINI.md` | ✅            | ✅        | —                              |
+| **Codex CLI**                               | ✅ `AGENTS.md` | ✅            | ✅        | - |
+| **Cursor**                                  | ✅ `AGENTS.md` | ✅            | ✅        | - |
+| **Aider**                                   | ✅ `AGENTS.md` | ✅            | ✅        | - |
+| **Continue**                                | ✅ `AGENTS.md` | ✅            | ✅        | - |
+| **Windsurf**                                | ✅ `AGENTS.md` | ✅            | ✅        | - |
+| **Gemini CLI**                              | ✅ `GEMINI.md` | ✅            | ✅        | - |
 
 **Why the split:** the runtime guard, the audit CLI, and the behavior files are portable
-— they work anywhere Node or Python runs. The two Claude Code hooks live inside
+because they work anywhere Node or Python runs. The two Claude Code hooks live inside
 Claude's PreToolUse / PostToolUse tool-call lifecycle, which has no direct equivalent in
 other agents. When you run `guardian check` it reports which tier you're in and what's
 active per agent.
@@ -196,7 +196,7 @@ Guardian has two parts:
 | **The CLI** | The `guardian` command | Once per machine |
 | **The project files** | `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `STANDARDS.md`, `security/`, etc. | Once per project |
 
-**Step 1 — Install the CLI on your machine (do this once)**
+**Step 1 - Install the CLI on your machine (do this once)**
 
 ```bash
 git clone https://github.com/Omnib0mb3r/otlc-guardian.git
@@ -204,14 +204,14 @@ cd otlc-guardian
 npm install -g .
 ```
 
-**Step 2 — Add Guardian to a project (do this for each project)**
+**Step 2 - Add Guardian to a project (do this for each project)**
 
 ```bash
 cd /your/project
 guardian init
 ```
 
-**Step 3 — Start (or restart) your coding agent.** Behavior files are re-read at session
+**Step 3 - Start (or restart) your coding agent.** Behavior files are re-read at session
 start:
 
 - **Claude Code** reads `CLAUDE.md` and `STANDARDS.md` automatically.
@@ -229,14 +229,14 @@ Then run `guardian check` to confirm the install and see which coverage tier you
 
 Once installed, you have six commands:
 
-**`guardian init`** — Run once inside each project you want Guardian in. Merge-safe and
+**`guardian init`** - Run once inside each project you want Guardian in. Merge-safe and
 idempotent.
 ```bash
 cd /your/project
 guardian init
 ```
 
-**`guardian update`** — Bring an existing install up to the current Guardian version.
+**`guardian update`** - Bring an existing install up to the current Guardian version.
 Unlike `init`, which never overwrites an existing file, `update` replaces Guardian-owned
 files (`security/*`, `.claude/hooks/*`) and the Guardian section between the markers in
 `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` and `STANDARDS.md`. Your own content, your
@@ -246,7 +246,7 @@ after pulling a new release; until you do, that project keeps its old scanner an
 guardian update
 ```
 
-**`guardian audit`** — Scan your project for security and quality problems. 42 rules
+**`guardian audit`** - Scan your project for security and quality problems. 42 rules
 in 1.5.x: 34 regex patterns, 5 per-file analyzers, 3 project-level checks. The audit
 prints the live breakdown on every run (`Rules : 34 pattern · 5 analyzer · 3 project`), so
 that line is always the authoritative count.
@@ -258,27 +258,27 @@ guardian audit . --fail-on-error  # exit 1 if any CRITICAL/HIGH findings
 guardian audit . --json           # machine-readable output for CI
 ```
 
-**`guardian scan`** — Test a specific string for prompt injection. Useful during
+**`guardian scan`** - Test a specific string for prompt injection. Useful during
 development.
 ```bash
 guardian scan "some text you want to check"
 ```
 
-**`guardian check`** — Verify Guardian is correctly installed. Includes a hook smoke
+**`guardian check`** - Verify Guardian is correctly installed. Includes a hook smoke
 test that pipes a known-bad payload through the PreToolUse hook and confirms it fires.
 Also prints the editor coverage table.
 ```bash
 guardian check
 ```
 
-**`guardian list-watched`** — Print the effective hook watch list for the current
+**`guardian list-watched`** - Print the effective hook watch list for the current
 project. Useful when debugging why a file is (or isn't) being scanned by the hook.
 ```bash
 guardian list-watched
 ```
 
 > **Uninstalling is deliberately manual.** There is no `guardian uninstall` command
-> — the blast radius of any bug in an automated file-mutation command that touches
+> - the blast radius of any bug in an automated file-mutation command that touches
 > user content is too wide for a security-forward template. See
 > [SETUP.md § Uninstalling](SETUP.md#uninstalling) for the step-by-step marker-based
 > procedure, which gives you full control over every delete and every edit.
@@ -290,30 +290,30 @@ guardian list-watched
 Two clearly-scoped tiers. Tier 1 works for every agent. Tier 2 only activates inside
 Claude Code.
 
-### Tier 1 — Works in any project, with any agent
+### Tier 1 - Works in any project, with any agent
 
 **Senior-dev behavior rules, loaded from `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` / `STANDARDS.md`:**
 - No silent `catch {}` blocks (and from 1.1.1, no `catch { /* comment */ }` either)
 - No hardcoded secrets, URLs, or config values
 - Structured logging with request IDs on every entry
 - Versioned APIs with consistent response shapes
-- Zod / Pydantic validation — never hand-rolled
+- Zod / Pydantic validation - never hand-rolled
 - Self-audit checklist before marking any task complete
 - Stack deviation warnings when the agent is about to reach for a junior-level library
 
 **Runtime protection for your running app:**
-- Prompt injection scanner — 28 patterns including Unicode bypass attacks (NFKC
+- Prompt injection scanner - 28 patterns including Unicode bypass attacks (NFKC
   normalization, invisible-character stripping, base64/URL decoding)
-- Output scanner — catches leaked API keys (OpenAI `sk-proj-`, Anthropic `sk-ant-api03-`,
+- Output scanner - catches leaked API keys (OpenAI `sk-proj-`, Anthropic `sk-ant-api03-`,
   legacy `sk-`, Google, GitHub, AWS, private keys, and connection strings with embedded
   credentials)
 - Rate limiter, secure headers, structured logger, health check endpoint
 - Node (`security/01-injection-guard.js`) and Python (`security/injection_guard.py`), with
   the differences listed in the manual, chapter 03
 
-**Audit CLI — scan any codebase:**
+**Audit CLI - scan any codebase:**
 - `guardian audit` scans for hardcoded secrets, silent errors, raw SQL, console.log in
-  prod paths, missing `/health`, and more (42 rules in 1.5.x — every finding should be
+  prod paths, missing `/health`, and more (42 rules in 1.5.x - every finding should be
   reviewed; the tool is advisory)
 - Finds the two bugs AI coding tools generate most, which no regex can express:
   endpoints that perform side effects with no authentication (`AUTHZ-001`) and
@@ -321,24 +321,24 @@ Claude Code.
   (`AUTHZ-003`, IDOR). Both use a per-file route-handler analyzer. See
   [`guides/INDEX.md`](guides/INDEX.md)
 - JSON output mode for CI integration
-- Works on any project — Python, TypeScript, JavaScript, mixed
+- Works on any project - Python, TypeScript, JavaScript, mixed
 
-**Tagged-template SQL helper — parameterized queries without an ORM:**
+**Tagged-template SQL helper - parameterized queries without an ORM:**
 - `security/04-sql-guard.js` exports a zero-dep `sql\`\`` tag that auto-parameterizes
   every `${}` interpolation into a `{ text, values }` object for `pg`, `mysql2`, and
   `better-sqlite3`
-- OWASP-aligned — follows the Prepared Statements primary defense, not input filtering
+- OWASP-aligned - follows the Prepared Statements primary defense, not input filtering
 - Dynamic identifiers go through `sql.identifier(name, allowList)` with strict
   allow-list validation; nested `sql\`\`` composition is supported
 
 **GitHub Actions workflow (if you push to GitHub):**
-- Secret scanning (Gitleaks) — **blocking**, fails the build on a hit
-- Full Guardian audit (`guardian audit . --fail-on-error`) — **blocking**, fails on any HIGH or CRITICAL finding
-- All Guardian unit tests run before the audit — **blocking**, fails on any test failure
+- Secret scanning (Gitleaks) - **blocking**, fails the build on a hit
+- Full Guardian audit (`guardian audit . --fail-on-error`) - **blocking**, fails on any HIGH or CRITICAL finding
+- All Guardian unit tests run before the audit - **blocking**, fails on any test failure
 - Audit exemption count posted to the workflow summary for visibility
-- Dependency vulnerability checks (`npm audit`, `pip-audit`) — **advisory only** (`continue-on-error: true`). Vulnerable dependencies show up in the run log but do NOT fail the build by default. The shipped behavior is "report, don't block" because a hard-fail gate would brick PRs in the window between a CVE landing and an upstream fix shipping. To switch to hard-fail in your fork, remove `continue-on-error: true` from both steps in `.github/workflows/security-audit.yml`.
+- Dependency vulnerability checks (`npm audit`, `pip-audit`) - **advisory only** (`continue-on-error: true`). Vulnerable dependencies show up in the run log but do NOT fail the build by default. The shipped behavior is "report, don't block" because a hard-fail gate would brick PRs in the window between a CVE landing and an upstream fix shipping. To switch to hard-fail in your fork, remove `continue-on-error: true` from both steps in `.github/workflows/security-audit.yml`.
 
-### Tier 2 — Claude Code integrations (Claude Code only)
+### Tier 2 - Claude Code integrations (Claude Code only)
 
 These features piggy-back on Claude Code's `PreToolUse` / `PostToolUse` tool-call
 lifecycle, which no other agent exposes today. They're installed automatically by
@@ -352,13 +352,13 @@ lifecycle, which no other agent exposes today. They're installed automatically b
   weakens Guardian (by Edit, Write or a Bash write), asks before any change to the
   hook scripts or the scanner they import, and
   warns on HIGH/MEDIUM findings. It scans Write, Edit, MultiEdit, NotebookEdit,
-  Bash and PowerShell on a wide default watch list — `.planning/`,
+  Bash and PowerShell on a wide default watch list - `.planning/`,
   `.gsd/`, `.plans/`, `.cursor/`, `.continue/`, `.aider/`, `.windsurf/`, every `*/memory/`
   directory, plus `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursorrules`, `.windsurfrules`,
   `MEMORY.md`, `copilot-instructions.md`, and `.env*`. Patterns are imported from the
   runtime guard so they cannot drift.
 - **PostToolUse** scans every `WebFetch` and `WebSearch` response **before** Claude
-  reasons about the content — catches indirect prompt injection at the entry point, the
+  reasons about the content - catches indirect prompt injection at the entry point, the
   highest-leverage place to defend.
 - Configurable per project via `otlcGuardian.watchPaths` / `ignorePaths` in
   `.claude/settings.json`. `ignorePaths` is the only exemption; the `otlc-guardian:doc`
@@ -372,7 +372,7 @@ lifecycle, which no other agent exposes today. They're installed automatically b
 > **For non-Claude users:** Tier 2 is not blocking or even visible in your workflow. You
 > get the full Tier 1 stack, which is the majority of Guardian's value. An equivalent
 > lifecycle-hook integration for Codex / Cursor / Aider would require per-agent
-> tool-call interception which those tools don't currently expose — we're tracking it,
+> tool-call interception which those tools don't currently expose - we're tracking it,
 > but we're not pretending it exists today.
 
 ---
@@ -381,20 +381,20 @@ lifecycle, which no other agent exposes today. They're installed automatically b
 
 `guardian init` never overwrites your files. It merges:
 
-- **CLAUDE.md** — your rules stay at the top, Guardian's are appended below (Claude Code
+- **CLAUDE.md** - your rules stay at the top, Guardian's are appended below (Claude Code
   behavior file)
-- **AGENTS.md** — same merge pattern (universal agent behavior file)
-- **GEMINI.md** — same merge pattern (Gemini CLI entry point)
-- **STANDARDS.md** — same merge pattern (approved technology stack)
-- **.gitignore** — only adds entries you don't already have
-- **.env.example** — only adds variables you don't already have
-- **.claude/settings.json** — adds Guardian's Claude-only hooks alongside your existing
+- **AGENTS.md** - same merge pattern (universal agent behavior file)
+- **GEMINI.md** - same merge pattern (Gemini CLI entry point)
+- **STANDARDS.md** - same merge pattern (approved technology stack)
+- **.gitignore** - only adds entries you don't already have
+- **.env.example** - only adds variables you don't already have
+- **.claude/settings.json** - adds Guardian's Claude-only hooks alongside your existing
   hooks (aborts if the file has invalid JSON rather than clobbering it)
-- **Everything else** — only copies files that don't already exist
+- **Everything else** - only copies files that don't already exist
 
-Run it twice — nothing changes the second time. It detects what's already there and
+Run it twice - nothing changes the second time. It detects what's already there and
 skips it. Guardian's own internal test files and Python bytecode caches are never
-copied into your project (1.1.1 fix — prior releases shipped `tests/` and `__pycache__/`
+copied into your project (1.1.1 fix - prior releases shipped `tests/` and `__pycache__/`
 into every user project).
 
 ---
@@ -405,18 +405,18 @@ OTLC Guardian does not collect data, does not phone home, and does not require a
 network connection. All Guardian operations (injection scanning, auditing, hook
 execution) run entirely on your machine. There are no API calls to
 `onthelevelconcepts.com` or any external service. The package has **zero runtime
-dependencies** (`"dependencies": {}` in `package.json`) — every import is a Node
+dependencies** (`"dependencies": {}` in `package.json`) - every import is a Node
 builtin, which you can verify by grepping the source tree.
 
 ---
 
 ## Uninstalling
 
-> **Uninstalling Guardian is a manual, marker-based process — NOT a blanket delete.**
+> **Uninstalling Guardian is a manual, marker-based process - NOT a blanket delete.**
 > `guardian init` is merge-safe: it appends Guardian's content below
 > `<!-- OTLC-GUARDIAN-START -->` markers inside your `CLAUDE.md`, `AGENTS.md`,
 > `GEMINI.md`, `STANDARDS.md`, `.gitignore`, and `.env.example`, preserving every
-> line you wrote above. Uninstalling cleanly therefore requires the inverse — remove
+> line you wrote above. Uninstalling cleanly therefore requires the inverse - remove
 > only the marker-delimited block, never blanket-delete a merged file.
 >
 > **A blanket `rm -f CLAUDE.md` would destroy any project-specific rules you wrote
@@ -426,22 +426,22 @@ builtin, which you can verify by grepping the source tree.
 
 **Full step-by-step uninstall instructions live in [`SETUP.md`](SETUP.md#uninstalling).** It walks through:
 
-1. **Un-merging files Guardian appended into** — open `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `STANDARDS.md`, `.gitignore`, and `.env.example` in your editor and delete only the content between the `<!-- OTLC-GUARDIAN-START -->` and `<!-- OTLC-GUARDIAN-END -->` markers (or `# OTLC-GUARDIAN-START` for shell-comment files).
-2. **Cleaning `.claude/settings.json`** — remove only the two Guardian hook entries (PreToolUse `Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell` → `injection-guard-hook.mjs` and PostToolUse `WebFetch|WebSearch|mcp__firecrawl__crawl|mcp__exa__search` → `web-content-guard.mjs`). Leave every other hook alone.
-3. **Deleting pure-Guardian files individually by name** — `security/01-injection-guard.js`, `security/02-code-security.js`, `security/03-audit.js`, `security/04-sql-guard.js`, `security/injection_guard.py`, `.claude/hooks/injection-guard-hook.mjs`, `.claude/hooks/web-content-guard.mjs`. **Never** `rm -rf security/` or `rm -rf .claude/hooks/` — those would also delete any custom files you added.
-4. **Optionally uninstalling the global CLI** — `npm uninstall -g otlc-guardian`.
+1. **Un-merging files Guardian appended into** - open `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `STANDARDS.md`, `.gitignore`, and `.env.example` in your editor and delete only the content between the `<!-- OTLC-GUARDIAN-START -->` and `<!-- OTLC-GUARDIAN-END -->` markers (or `# OTLC-GUARDIAN-START` for shell-comment files).
+2. **Cleaning `.claude/settings.json`** - remove only the two Guardian hook entries (PreToolUse `Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell` → `injection-guard-hook.mjs` and PostToolUse `WebFetch|WebSearch|mcp__firecrawl__crawl|mcp__exa__search` → `web-content-guard.mjs`). Leave every other hook alone.
+3. **Deleting pure-Guardian files individually by name** - `security/01-injection-guard.js`, `security/02-code-security.js`, `security/03-audit.js`, `security/04-sql-guard.js`, `security/injection_guard.py`, `.claude/hooks/injection-guard-hook.mjs`, `.claude/hooks/web-content-guard.mjs`. **Never** `rm -rf security/` or `rm -rf .claude/hooks/` - those would also delete any custom files you added.
+4. **Optionally uninstalling the global CLI** - `npm uninstall -g otlc-guardian`.
 
 See [`SETUP.md` § Uninstalling](SETUP.md#uninstalling) for the full marker syntax, exact file list, and the "files Guardian never creates and must never delete" safety list (`.cursorrules`, `.windsurfrules`, `.aider.conf.yml`, `copilot-instructions.md`, etc.).
 
 You do **not** need to uninstall the global CLI to stop using Guardian in a project.
-Deleting the project files is enough — the CLI does nothing on its own.
+Deleting the project files is enough - the CLI does nothing on its own.
 
 ---
 
 ## Maintenance & Support
 
-OTLC Guardian is actively maintained. For security issues, see [`SECURITY.md`](SECURITY.md)
-— there is a private disclosure process with a 3-business-day target response. For bug
+OTLC Guardian is actively maintained. For security issues, see [`SECURITY.md`](SECURITY.md):
+there is a private disclosure process with a 3-business-day target response. For bug
 reports and feature requests, open a
 [GitHub issue](https://github.com/Omnib0mb3r/otlc-guardian/issues). For general questions,
 start a [discussion](https://github.com/Omnib0mb3r/otlc-guardian/discussions).
@@ -468,10 +468,10 @@ start a [discussion](https://github.com/Omnib0mb3r/otlc-guardian/discussions).
 
 ## Requirements
 
-- **Node.js 22+** — required (the CLI, audit, and runtime guard are ESM Node)
-- **Python 3.11+** — required only if you use the Python runtime guard module
-- **A coding agent that reads behavior files** — see the [Agent compatibility](#agent-compatibility) table above for the supported list
-- **GitHub** — required only if you want the included CI workflow
+- **Node.js 22+** - required (the CLI, audit, and runtime guard are ESM Node)
+- **Python 3.11+** - required only if you use the Python runtime guard module
+- **A coding agent that reads behavior files** - see the [Agent compatibility](#agent-compatibility) table above for the supported list
+- **GitHub** - required only if you want the included CI workflow
 
 ---
 
@@ -489,16 +489,16 @@ git fetch upstream && git merge upstream/main
 
 If you're keeping Guardian's multi-agent posture and just want to rebrand:
 
-- Update `package.json` — `name`, `homepage`, `repository`, `bugs`
+- Update `package.json` - `name`, `homepage`, `repository`, `bugs`
 - Replace `onthelevelconcepts.com` in `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, and `STANDARDS.md`
 - Replace `Omnib0mb3r/otlc-guardian` in `README.md` and `SETUP.md` install commands
-- Keep `security/` intact — don't modify the runtime guard unless you're adding patterns
+- Keep `security/` intact - don't modify the runtime guard unless you're adding patterns
 - Keep the `otlc-guardian:audit-exempt` marker name intact, or your fork's markers won't match any downstream docs that reference them (`otlc-guardian:doc` no longer exempts anything)
 
 ### Single-agent fork (e.g. Codex-only, Cursor-only)
 
-If you want a fork that's scoped to a single agent — say, a Codex-first template for
-your team — the work is bigger than a rebrand. Be honest with yourself about the effort
+If you want a fork that's scoped to a single agent - say, a Codex-first template for
+your team - the work is bigger than a rebrand. Be honest with yourself about the effort
 before you start:
 
 - **Delete the Claude-specific tier.** Remove `CLAUDE.md`, `.claude/`, the
@@ -506,13 +506,13 @@ before you start:
   and the Claude Code row from the compatibility table. Update `runInit`'s "what was
   merged" output. Update tests in `tests/init.test.js` and `tests/hook.test.js` that
   assert Claude-specific behavior.
-- **Replace the hook layer with something your agent actually supports** — or drop it
+- **Replace the hook layer with something your agent actually supports** - or drop it
   entirely and ship a behavior-only product. Guardian's PreToolUse / PostToolUse hooks
   rely on Claude Code's tool-call lifecycle; Codex, Cursor, Aider, Continue, and
-  Windsurf don't expose an equivalent as of early 2026. A real replacement is a 1–2 day
+  Windsurf don't expose an equivalent as of early 2026. A real replacement is a 1-2 day
   research-and-build effort at minimum, and it may not be possible at all depending on
   the agent. A behavior-only fork is the realistic path.
-- **Rewrite the value sections in README, SETUP, and FAQ.** Everything in "Tier 2 —
+- **Rewrite the value sections in README, SETUP, and FAQ.** Everything in "Tier 2 - 
   Claude Code integrations" has to go. The compatibility table collapses to one row.
   The `guardian check` editor-coverage output needs to be simplified.
 - **Decide whether to rename files.** `CLAUDE.md` is meaningless in a Codex-only fork.

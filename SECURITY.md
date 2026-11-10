@@ -13,7 +13,7 @@ In your report, please include:
 
 - A clear description of the issue
 - The Guardian version (`package.json` → `version`) and commit SHA
-- Reproduction steps — the smaller the test case, the faster the fix
+- Reproduction steps - the smaller the test case, the faster the fix
 - The impact you observed (what an attacker can do)
 - Any suggested mitigation, if you have one
 
@@ -66,16 +66,16 @@ A pattern-based scanner cannot achieve 100% detection. Guardian is a strong defa
 
 ---
 
-## The audit-exempt mechanism — is it a vulnerability?
+## The audit-exempt mechanism - is it a vulnerability?
 
 Short answer: **no, but it's a controlled trust mechanism worth being explicit about.**
 
 Two ways to exempt a file from `guardian audit` scanning:
 
-1. **Per-file marker** (`otlc-guardian:audit-exempt`) — drop a comment in any file.
-2. **Central allowlist** (`security/.audit-allowlist`) — one file, one line per exemption, **required reason field**.
+1. **Per-file marker** (`otlc-guardian:audit-exempt`) - drop a comment in any file.
+2. **Central allowlist** (`security/.audit-allowlist`) - one file, one line per exemption, **required reason field**.
 
-For an attacker to abuse either mechanism, they need write access to your repository. If they have that, they can already do strictly worse things — modify the audit script itself, modify the patterns, add backdoors, change the CI workflow.
+For an attacker to abuse either mechanism, they need write access to your repository. If they have that, they can already do strictly worse things - modify the audit script itself, modify the patterns, add backdoors, change the CI workflow.
 
 Defenses we ship to make abuse visible:
 
@@ -85,7 +85,7 @@ Defenses we ship to make abuse visible:
 - **CI step summary.** GitHub Actions writes the exemption count to the workflow summary so reviewers see it from the Actions tab.
 - **CODEOWNERS suggested.** Repos that need stronger guarantees can require security-team review of any change to `security/.audit-allowlist` and `.claude/hooks/`.
 
-If you find a way to add an exemption that does **not** show up in the summary or the allowlist — that **is** a Guardian security issue. Please report it.
+If you find a way to add an exemption that does **not** show up in the summary or the allowlist - that **is** a Guardian security issue. Please report it.
 
 ---
 
@@ -96,7 +96,7 @@ The following are not Guardian security issues:
 - Bugs in user-supplied code that Guardian failed to catch (Guardian is not a substitute for security review)
 - DoS attacks against the audit script via maliciously-large input files (the audit is a developer tool, not a public endpoint)
 - Issues in third-party dependencies of *your* project that Guardian doesn't scan
-- Issues in tools Guardian wraps (Gitleaks, npm audit, pip-audit) — please report those upstream
+- Issues in tools Guardian wraps (Gitleaks, npm audit, pip-audit) - please report those upstream
 
 ---
 
