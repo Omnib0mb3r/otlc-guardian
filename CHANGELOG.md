@@ -201,6 +201,15 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Any change to the `env` block of either settings file asks (BUG-045,
+  re-probe 2 S9).** Claude Code passes `env` to every hook it runs, so
+  `"env": {"NODE_OPTIONS": "--require exit0.cjs"}` in
+  `settings.local.json` made Guardian's hook exit 0 before it judged
+  anything, and `CLAUDE_PROJECT_DIR` moved the root it protects; both were
+  written silently. Adding, changing or removing any `env` entry in
+  `.claude/settings.json` or `settings.local.json` now asks (denied in
+  bypass mode). Key order is no change.
+
 - **A field added to Guardian's hook entry is a weakening (BUG-045,
   re-probe 2 S2).** Adding `"async": true` to Guardian's entry in
   `.claude/settings.json` was silent, and Claude Code then runs the hook

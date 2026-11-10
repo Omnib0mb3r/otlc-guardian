@@ -1737,6 +1737,40 @@ describe("PreToolUse hook - settings protection reads matchers and hook commands
     assert.equal(decisionOf(change(() => withFields({ async: false }), () => withFields({ async: true }))), "ask");
   });
 
+  // Re-probe 2, S9: env reaches the hook's process (NODE_OPTIONS can
+  // preload a script that exits 0; CLAUDE_PROJECT_DIR moves the root).
+  const writeLocal = (current, next) => withTempProject((dir) => {
+    mkdirSync(path.join(dir, ".claude"), { recursive: true });
+    writeFileSync(path.join(dir, ".claude", "settings.json"), JSON.stringify(settings(), null, 2));
+    const file = path.join(dir, ".claude", "settings.local.json");
+    if (current) writeFileSync(file, JSON.stringify(current, null, 2));
+    return runHook(PRE_HOOK, { tool_name: "Write", cwd: dir, tool_input: { file_path: file, content: JSON.stringify(next, null, 2) } });
+  });
+  for (const [name, current, next] of [
+    ["NODE_OPTIONS added to settings.local.json", null, { env: { NODE_OPTIONS: "--require C:/x/exit0.cjs" } }],
+    ["CLAUDE_PROJECT_DIR added to settings.local.json", null, { env: { CLAUDE_PROJECT_DIR: "C:/nowhere" } }],
+    ["an env value changed", { env: { FOO: "1" } }, { env: { FOO: "2" } }],
+    ["an env key removed", { env: { FOO: "1", BAR: "2" } }, { env: { FOO: "1" } }],
+  ]) {
+    stagedOnly(`${name} asks (S9)`, () => {
+      const out = writeLocal(current, next);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+      expectWarning(out, "env");
+    });
+  }
+  stagedOnly("an env block added to settings.json asks (S9)", () => {
+    const out = change(() => settings(), () => ({ ...settings(), env: { PATH: "C:/evil" } }));
+    assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+  });
+  for (const [name, current, next] of [
+    ["the same env written again in another key order", { env: { A: "1", B: "2" }, model: "x" }, { model: "y", env: { B: "2", A: "1" } }],
+    ["a settings.local.json with no env", null, { permissions: { allow: ["Bash(npm test)"] } }],
+  ]) {
+    test(`${name} is unchanged (S9)`, () => {
+      expectSilent(writeLocal(current, next));
+    });
+  }
+
   for (const [name, from, to] of [
     ["raising the timeout", () => settings(), () => withFields({ timeout: 120 })],
     ["keeping a field as it was", () => withFields({ async: false }), () => withFields({ async: false })],

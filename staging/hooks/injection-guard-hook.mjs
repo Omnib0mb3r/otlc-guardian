@@ -1636,6 +1636,15 @@ function hookCoverage(settings, root, tools) {
   return coverage;
 }
 
+/** A JSON value spelled one way: object keys sorted, so key order is no change. */
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`).join(",")}}`;
+  }
+  return value === undefined ? "" : JSON.stringify(value);
+}
+
 /** Guardian's standing across settings.json and settings.local.json together. */
 function guardianPosture(projectText, localText, root, tools) {
   const project = parseSettings(projectText);
@@ -1654,6 +1663,10 @@ function guardianPosture(projectText, localText, root, tools) {
   return {
     coverage,
     disableAllHooks: project?.disableAllHooks === true || local?.disableAllHooks === true,
+    // Claude Code passes env to every hook it runs: NODE_OPTIONS can preload
+    // a script that exits 0, CLAUDE_PROJECT_DIR moves the root. Guardian
+    // cannot judge a value, so any change asks (re-probe 2, S9).
+    env:             `${canonicalJson(project?.env)}\u0000${canonicalJson(local?.env)}`,
     extendDefaults:  cfg.extendDefaults !== false,
     ignorePaths:     Array.isArray(cfg.ignorePaths) ? cfg.ignorePaths.map(String) : [],
     watchPaths:      Array.isArray(cfg.watchPaths)  ? cfg.watchPaths.map(String)  : [],
@@ -1722,6 +1735,7 @@ function settingsWeakening(absPath, after) {
   const now = pair(after);
   const reasons = [];
   if (now.disableAllHooks && !was.disableAllHooks) reasons.push("disableAllHooks is turned on");
+  if (now.env !== was.env) reasons.push("the env block changes, and every hook Claude Code runs gets those variables (NODE_OPTIONS can preload code into the hook)");
   for (const key of guarded) {
     const [event, tool] = key.split("\u0000");
     const need = was.coverage.get(key);
