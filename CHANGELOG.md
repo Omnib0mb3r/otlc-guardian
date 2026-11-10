@@ -201,6 +201,17 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **`ignorePaths` matches whole path segments from the project root
+  (BUG-058).** An entry was a substring of the target path, so `docs`
+  also exempted `src/docs-loader/CLAUDE.md` and `spec.md` exempted
+  `old-spec.md`: an approved entry covered more than it read. An entry
+  is now a path from the project root (or an absolute path), resolved
+  like a target (`./docs`, `docs/` and `docs\guides` work), and
+  exempts that file or everything under that folder. An entry that names
+  the project root or a folder above it (`.`, `..`) is skipped, as an
+  empty one is. A project whose entry relied on the substring reading
+  (`docs` meant for `src/docs/`) must write the full path.
+
 - **A deny message keeps the file name of a long path (BUG-038, hook
   half).** Paths echoed in the hook's messages were cut from the end, so
   a long path lost its file name. They now keep the tail, after `...`

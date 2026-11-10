@@ -468,6 +468,64 @@ describe("PreToolUse hook - blocks CRITICAL, warns on the rest (1.5.0)", () => {
     });
   });
 
+  // BUG-058: an entry names whole path segments from the project root.
+  const writeUnderIgnores = (ignorePaths, rel) => {
+    let out;
+    withTempProject((dir) => {
+      mkdirSync(path.join(dir, ".claude"), { recursive: true });
+      writeFileSync(path.join(dir, ".claude", "settings.json"), JSON.stringify({ otlcGuardian: { ignorePaths } }));
+      out = runHook(PRE_HOOK, {
+        tool_name: "Write",
+        cwd: dir,
+        tool_input: { file_path: path.join(dir, ...rel.split("/")), content: CRITICAL_PAYLOAD },
+      });
+    });
+    return out;
+  };
+
+  for (const [entry, rel] of [
+    ["docs", "docs/CLAUDE.md"],
+    ["docs/", "docs/guides/CLAUDE.md"],
+    ["docs\\guides", "docs/guides/CLAUDE.md"],
+    [".planning/specs/x.md", ".planning/specs/x.md"],
+  ]) {
+    test(`ignorePaths entry "${entry}" exempts ${rel} (BUG-058)`, () => {
+      expectSilent(writeUnderIgnores([entry], rel));
+    });
+  }
+
+  stagedOnly(`ignorePaths entry "./docs" exempts docs/CLAUDE.md (BUG-058)`, () => {
+    expectSilent(writeUnderIgnores(["./docs"], "docs/CLAUDE.md"));
+  });
+
+  stagedOnly("an absolute ignorePaths entry exempts that path (BUG-058)", () => {
+    let out;
+    withTempProject((dir) => {
+      mkdirSync(path.join(dir, ".claude"), { recursive: true });
+      writeFileSync(path.join(dir, ".claude", "settings.json"), JSON.stringify({ otlcGuardian: { ignorePaths: [path.join(dir, "docs")] } }));
+      out = runHook(PRE_HOOK, {
+        tool_name: "Write",
+        cwd: dir,
+        tool_input: { file_path: path.join(dir, "docs", "CLAUDE.md"), content: CRITICAL_PAYLOAD },
+      });
+    });
+    expectSilent(out);
+  });
+
+  for (const [entry, rel] of [
+    ["docs", "src/docs-loader/CLAUDE.md"],
+    ["docs", "notes/docs-old/CLAUDE.md"],
+    ["docs", "src/docs/CLAUDE.md"],
+    [".planning/specs", ".planning/specs-old/x.md"],
+    [".planning/specs/x.md", ".planning/specs/x.md.bak"],
+    [".", "docs/CLAUDE.md"],
+    ["..", "docs/CLAUDE.md"],
+  ]) {
+    stagedOnly(`ignorePaths entry "${entry}" does not exempt ${rel} (BUG-058)`, () => {
+      assert.equal(decisionOf(writeUnderIgnores([entry], rel)), "deny");
+    });
+  }
+
   test("removing a bad line is not flagged (old_string is not scanned)", () => {
     const out = runHook(PRE_HOOK, {
       tool_name: "Edit",

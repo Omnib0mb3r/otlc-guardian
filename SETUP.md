@@ -335,7 +335,11 @@ guard does not read it; its tool list is fixed in the script.
 ```
 
 - `watchPaths` - extra paths to scan (added to defaults)
-- `ignorePaths` - paths to exclude from scanning
+- `ignorePaths` - paths to exclude from scanning. Write each as a path
+  from the project root (`docs/security-spec.md`, or `docs` for the
+  whole folder). The live hook still matches an entry anywhere in the path
+  (BUG-058, fix staged in staging/, not yet live); once applied, an entry
+  matches only that file or folder.
 - `extendDefaults: false` - replace the default list entirely with your own
 
 ### Hook exemptions

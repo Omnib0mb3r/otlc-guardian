@@ -263,13 +263,25 @@ function isWatchedPath(filePath, settings) {
   return false;
 }
 
-function isIgnoredPath(filePath, settings) {
-  const normalized = exemptKey(filePath);
+/**
+ * True when an ignorePaths entry names the file or a folder holding it.
+ * An entry is a path from the project root (or an absolute path) and
+ * matches whole segments: `docs` exempts `docs/...`, never
+ * `src/docs-loader/...` or `notes/docs-old.md`. A substring match let an
+ * approved entry cover more than it read (BUG-058).
+ */
+function isIgnoredPath(filePath, settings, projectRoot) {
+  const file = exemptKey(filePath);
+  const root = exemptKey(projectRoot);
+  const covers = (entry, p) => p === entry || p.startsWith(entry.endsWith("/") ? entry : `${entry}/`);
   const ignored = Array.isArray(settings.ignorePaths) ? settings.ignorePaths : [];
   for (const p of ignored) {
-    if (typeof p !== "string" || !p) continue; // an empty entry would match every path
-    const entry = p.replace(/\\/g, "/");
-    if (normalized.includes(CASE_INSENSITIVE_FS ? entry.toLowerCase() : entry)) return true;
+    if (typeof p !== "string" || !p.trim()) continue;
+    const entry = exemptKey(path.resolve(projectRoot, p));
+    // An entry naming the project root or a folder above it (".", "..",
+    // a drive) would exempt every file, as an empty one would.
+    if (covers(entry, root)) continue;
+    if (covers(entry, file)) return true;
   }
   return false;
 }
@@ -1853,7 +1865,7 @@ process.stdin.on("end", () => {
     // ── Which targets are watched? ────────────────────────────────────
     // For Bash, only a path the command writes can make it ask; a watched
     // path it merely names (grep, git commit, cat) earns an advisory.
-    const isWatched = (t) => t && !isIgnoredPath(t, settings) && isWatchedPath(t, settings);
+    const isWatched = (t) => t && !isIgnoredPath(t, settings, projectRoot) && isWatchedPath(t, settings);
     const written = bashWrites.filter(isWatched);
     const watched = [...written, ...write.targets.filter(isWatched)];
     if (watched.length === 0) process.exit(0);

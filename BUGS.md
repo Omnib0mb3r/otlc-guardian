@@ -69,7 +69,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-055 | SMOKE-TESTING | `DEP-001` reads files with no error handling, so one unreadable file crashes the audit |
 | BUG-056 | SMOKE-TESTING | Audit allowlist accepts an entry with an empty `# reason:`, though SECURITY.md says entries without a reason are rejected |
 | BUG-057 | SMOKE-TESTING | Any mention of `otlc-guardian:audit-exempt` in a file's first 4 KB exempts the whole file, including a string or a comment about the marker |
-| BUG-058 | OPEN | Hook `ignorePaths` is a substring match: an entry such as `docs` exempts every path containing it |
+| BUG-058 | IN-PROGRESS | Hook `ignorePaths` is a substring match: an entry such as `docs` exempts every path containing it |
 | BUG-059 | SMOKE-TESTING | Audit exemptions do not reach the project checks: `DEP-001`, `DEP-002`, `WEB-002` still read exempt files |
 | BUG-060 | SMOKE-TESTING | `guardian init` copies Guardian's own `.github/` (CODEOWNERS naming Guardian's maintainer, templates) and allowlist into every project |
 | BUG-061 | SMOKE-TESTING | `guardian init` and `update` on an invalid `.claude/settings.json` stop with a raw stack trace after earlier steps are written |
@@ -848,9 +848,11 @@ The marker check looks for the string anywhere in the first 4096 characters, so 
 
 ### BUG-058: Hook `ignorePaths` is a substring match
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** IN-PROGRESS · **Found:** 2026-11-10
 
 `isIgnoredPath()` in `.claude/hooks/injection-guard-hook.mjs` tests `normalized.includes(entry)`, so `docs` exempts `src/docs-loader/CLAUDE.md` and any other path containing those letters. Adding an entry asks (self-protection), so a person approves it, but the approval covers more than the entry reads. Fix: match whole path segments from the project root. Protected file; session that prompts.
+
+**Fix in staging (2026-11-10), not yet live.** Staging commit: recorded in `staging/APPLY.md`. In `staging/hooks/injection-guard-hook.mjs`: `isIgnoredPath(filePath, settings, projectRoot)` resolves each entry against the project root (an absolute entry as written) and canonicalizes it with `exemptKey()`, the same key as the target, then exempts the target when it equals the entry or lies under it as a folder. An entry that covers the project root itself (`.`, `..`, a drive root) is skipped like an empty one; on the old reading `.` exempted every path with a dot in it. The one caller, `isWatched()`, passes `projectRoot`. Tests: `tests/hook.test.js`, group "PreToolUse hook - blocks CRITICAL, warns on the rest (1.5.0)": 4 exempting cases that pass on both (`docs`, `docs/`, `docs\guides`, a file), staged `./docs` and an absolute entry, and 7 staged non-exempting cases (`src/docs-loader/`, `notes/docs-old/`, `src/docs/`, `.planning/specs-old/`, `x.md.bak`, `.`, `..`). 7 failed against the staged hook before the fix (`./docs` and six of the non-exempting cases; `..` already denied, and the absolute entry already exempted). Behavior change to tell users at apply time: an entry that relied on the substring reading must be written as the full path from the root. Smoke test after applying: in a scratch project set `ignorePaths: ["docs"]`, ask Claude to Write a CRITICAL payload to `src/docs-loader/CLAUDE.md`, see the deny; the same Write to `docs/CLAUDE.md` is silent.
 
 ### BUG-059: Audit exemptions do not reach project checks
 
