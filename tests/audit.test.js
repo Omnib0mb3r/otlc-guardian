@@ -3323,6 +3323,92 @@ describe("BUG-002: AGT-003, committed settings switch Guardian's hooks off", () 
 });
 
 // ---------------------------------------------------------------------------
+// BUG-002, AGT-001: a Base44 agent may write a high-risk entity
+// ---------------------------------------------------------------------------
+//
+// The Zion CMMS case: base44/agents/zion_ai_assistant.jsonc gave the model
+// create, update and delete on QuoteLineItem and update on Inventory, and
+// the only "gate" was a sentence in its instructions. Base44 documents no
+// approval field (docs.base44.com, agents config: allowed_operations is the
+// only write control), so the audit cannot see a gate and none is invented.
+
+const base44Agent = (toolConfigs, extra = "") => [
+  "// Zion assistant",
+  "{",
+  '  "name": "assistant",',
+  '  "description": "Internal ops assistant",',
+  '  "instructions": "Ask before you create a record. // not a comment",',
+  '  "model": "gpt-4o",',
+  `  "tool_configs": ${JSON.stringify(toolConfigs, null, 2).replace(/\n/g, "\n  ")},${extra}`,
+  "}",
+  "",
+].join("\n");
+
+describe("BUG-002: AGT-001, a Base44 agent may create, update or delete a high-risk entity", () => {
+  test("fires on the Zion shape, once per entity, on the entity's line, naming the operations", () => {
+    const hits = agtFindings({ "base44/agents/zion.jsonc": base44Agent([
+      { entity_name: "Case", allowed_operations: ["read", "create", "update"] },
+      { entity_name: "QuoteLineItem", allowed_operations: ["read", "create", "update", "delete"] },
+      { entity_name: "Inventory", allowed_operations: ["read", "update"] },
+      { entity_name: "Asset", allowed_operations: ["read"] },
+    ]) }, "AGT-001");
+    assert.deepEqual(hits.map((h) => h.content), [
+      "QuoteLineItem: create, update, delete",
+      "Inventory: update",
+    ]);
+    const text = base44Agent([{ entity_name: "Case", allowed_operations: ["read", "create", "update"] },
+      { entity_name: "QuoteLineItem", allowed_operations: ["read", "create", "update", "delete"] }]);
+    const line = text.split("\n").findIndex((l) => l.includes('"QuoteLineItem"')) + 1;
+    assert.equal(hits[0].line, line);
+  });
+
+  for (const entity of ["Invoice", "Payment", "Refund", "User", "Role", "Permission", "ApiKey", "PurchaseOrder", "CustomerInvoice", "Stock"]) {
+    test(`fires on write access to ${entity}`, () => {
+      assert.equal(agtFindings({ "base44/agents/a.jsonc": base44Agent([{ entity_name: entity, allowed_operations: ["delete"] }]) }, "AGT-001").length, 1);
+    });
+  }
+
+  test("fires on a .json config, a trailing comma and a block comment (JSONC)", () => {
+    // tool_configs is the last member, so its comma is a trailing one.
+    const text = base44Agent([{ entity_name: "Invoice", allowed_operations: ["update"] }], " /* note */\n  ");
+    assert.equal(agtFindings({ "base44/agents/a.json": text }, "AGT-001").length, 1);
+  });
+
+  for (const [name, configs] of [
+    ["read-only access to a high-risk entity", [{ entity_name: "Invoice", allowed_operations: ["read"] }]],
+    ["write access to an ordinary entity (WorkOrder, Case, Ticket)", [{ entity_name: "WorkOrder", allowed_operations: ["create", "update"] }, { entity_name: "Case", allowed_operations: ["update"] }, { entity_name: "Ticket", allowed_operations: ["create"] }]],
+    ["a function tool", [{ function_name: "refund_order", description: "Refunds an order after a human confirms" }]],
+  ]) {
+    test(`silent on ${name}`, () => {
+      assert.deepEqual(agtFindings({ "base44/agents/a.jsonc": base44Agent(configs) }, "AGT-001"), []);
+    });
+  }
+
+  test("silent on the same shape outside base44/agents/", () => {
+    const text = base44Agent([{ entity_name: "Invoice", allowed_operations: ["delete"] }]);
+    assert.deepEqual(agtFindings({ "config/agent.jsonc": text, "base44/agents/old/a.jsonc": text, "base44/functions/a.json": text }, "AGT-001"), []);
+  });
+
+  test("a per-rule allowlist entry silences it", () => {
+    assert.deepEqual(agtFindings({
+      "base44/agents/a.jsonc": base44Agent([{ entity_name: "Invoice", allowed_operations: ["update"] }]),
+      "security/.audit-allowlist": "base44/agents/a.jsonc  [AGT-001]  # reason: writes go through a confirm step in the UI\n",
+    }, "AGT-001"), []);
+  });
+
+  test("a config that does not parse is reported by the analyzer warning, not as a finding", () => {
+    const dir = makeProject({ "base44/agents/a.jsonc": "{ \"tool_configs\": [ " });
+    try {
+      const result = spawnSync("node", [AUDIT_SCRIPT, dir, "--json"], { encoding: "utf8", shell: false });
+      assert.deepEqual(JSON.parse(result.stdout).findings.filter((f) => f.rule?.id === "AGT-001"), []);
+      assert.match(result.stderr, /AGT-001 analyzer failed on base44\/agents\/a\.jsonc/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

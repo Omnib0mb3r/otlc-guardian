@@ -246,9 +246,9 @@ after pulling a new release; until you do, that project keeps its old scanner an
 guardian update
 ```
 
-**`guardian audit`** - Scan your project for security and quality problems. 47 rules
-in 1.5.x: 37 regex patterns, 6 per-file analyzers, 4 project-level checks. The audit
-prints the live breakdown on every run (`Rules : 37 pattern · 6 analyzer · 4 project`), so
+**`guardian audit`** - Scan your project for security and quality problems. 48 rules
+in 1.5.x: 37 regex patterns, 7 per-file analyzers, 4 project-level checks. The audit
+prints the live breakdown on every run (`Rules : 37 pattern · 7 analyzer · 4 project`), so
 that line is always the authoritative count.
 Run regularly.
 ```bash
@@ -315,13 +315,17 @@ Claude Code.
 
 **Audit CLI - scan any codebase:**
 - `guardian audit` scans for hardcoded secrets, silent errors, raw SQL, console.log in
-  prod paths, missing `/health`, and more (47 rules in 1.5.x - every finding should be
+  prod paths, missing `/health`, and more (48 rules in 1.5.x - every finding should be
   reviewed; the tool is advisory)
 - Finds the two bugs AI coding tools generate most, which no regex can express:
   endpoints that perform side effects with no authentication (`AUTHZ-001`) and
   authenticated handlers that act on any object by ID with no ownership check
   (`AUTHZ-003`, IDOR). Both use a per-file route-handler analyzer. See
   [`guides/INDEX.md`](guides/INDEX.md)
+- Reads what a project commits for its AI agents: a Base44 agent that may write
+  money, identity or stock entities (`AGT-001`), an instruction file (`CLAUDE.md`,
+  `AGENTS.md`, a subagent, a skill) carrying a prompt-injection pattern (`AGT-002`),
+  and Claude Code settings that switch hooks off (`AGT-003`)
 - JSON output mode for CI integration
 - Works on any project - Python, TypeScript, JavaScript, mixed
 

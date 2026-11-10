@@ -110,6 +110,18 @@ const query = sql`SELECT * FROM users WHERE id = ${userId}`;
 
 ## Item 2 - AI agent permission audit (new rule, AGT-001)
 
+> **Built 2026-11-10 (BUG-002), with corrections.** AGT-001 reads Base44 agent
+> configs (`base44/agents/<agent>.jsonc`) only: that is the one precise shape
+> found, and generic `**/agents/**` files have no common schema. The approval
+> markers below (`requires_approval`, `human_approval`, `approval-gate.json`,
+> `human-in-loop.json`) are not Base44 features (its agents config reference
+> lists `allowed_operations` as the only write control), so they are not
+> honored; the exemption is a per-rule allowlist entry. The `*Order` suffix is
+> narrowed to `Order`, `PurchaseOrder` and `SalesOrder` so `WorkOrder` stays
+> out. Two more rules came with it: AGT-002 (instruction files carrying an
+> injection pattern) and AGT-003 (committed Claude Code settings that switch
+> hooks off). See the manual, chapter 02, AGT family.
+
 ### Problem
 
 Guardian's runtime layer protects against prompt injection and output leakage. The audit has zero rules about *what AI agents can write to*. The Zion CMMS shipped an AI agent with `create/update/delete` on `QuoteLineItem` and `update` on `Inventory`, with the only "approval" being a politely worded line in the system prompt. That is exactly the threat surface Guardian's README claims to cover, and the audit walks past it.

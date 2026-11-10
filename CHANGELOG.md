@@ -168,6 +168,14 @@ project (each project picks it up when `guardian update` is run there).
   code, now in `security/claude-settings.js` (installed with `security/`,
   required by `check`). A project check may now report findings with a file
   and line. 47 rules: 37 pattern, 6 analyzer, 4 project.
+- **Audit rule AGT-001: a Base44 agent may write a high-risk entity
+  (BUG-002).** HIGH. Reads `base44/agents/*.jsonc` and reports each
+  `tool_configs` entity tool that may create, update or delete a quote,
+  invoice, payment, user, role, permission, inventory or similar entity.
+  Base44 has no approval field, so nothing in the file clears it; a
+  per-rule allowlist entry records a confirm step built elsewhere. On the
+  Zion CMMS agent behind BUG-002 it reports `Quote`, `QuoteLineItem` and
+  `Inventory`. 48 rules: 37 pattern, 7 analyzer, 4 project.
 - **staging/ for the protected files (Guardian's own repo).** The candidate
   next versions of the two hooks and the scanner live in `staging/hooks/`
   and `staging/security/`, outside every path the live hook watches or

@@ -806,6 +806,90 @@ function ignoredByGuardian(file, projectRoot) {
   });
 }
 
+// AGT-001: Base44 agent configurations (base44/agents/<agent>.jsonc, one
+// file per agent, pushed with `base44 agents push`). An entity tool is a
+// tool_configs entry with entity_name and allowed_operations ("read",
+// "create", "update", "delete"); Base44 documents no other write control
+// and no approval field (docs.base44.com, agents config, checked
+// 2026-11-10), so a write the config grants is a write the model can make.
+// The rule reports writes to the entities where a wrong write costs money,
+// identity or access: the list from HANDOFF-AUDIT-IMPROVEMENTS.md Item 2,
+// with PurchaseOrder and SalesOrder named outright in place of an "Order"
+// suffix, which would take in WorkOrder. Base44 entity names are
+// PascalCase, so the match is case-sensitive.
+const BASE44_AGENT_FILE = /\/base44\/agents\/[^/]+\.jsonc?$/i;
+const AGENT_WRITE_OPERATIONS = ["create", "update", "delete"];
+const HIGH_RISK_ENTITY = new RegExp(
+  "^(?:Quote|Invoice|LineItem|Order|PurchaseOrder|SalesOrder|Payment|Transaction|Charge|Refund|Subscription|" +
+  "Customer|User|Account|Credential|ApiKey|Token|Permission|Role|Inventory|Stock|Warehouse)$" +
+  "|(?:LineItem|Quote|Invoice|Payment|Transaction)$"
+);
+
+/**
+ * JSONC as JSON: comments and trailing commas become spaces, every other
+ * character stays where it was, so an offset in the result is an offset
+ * in the file. Strings are copied whole, so "//" inside one is text.
+ */
+function jsoncToJson(text) {
+  const out = [];
+  let comma = -1; // a comma not yet followed by anything but space and comments
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "/" && text[i + 1] === "/") {
+      const end = text.indexOf("\n", i);
+      const stop = end === -1 ? text.length : end;
+      out.push(" ".repeat(stop - i));
+      i = stop - 1;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      const stop = end === -1 ? text.length : end + 2;
+      out.push(text.slice(i, stop).replace(/[^\n]/g, " "));
+      i = stop - 1;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      out.push(ch);
+      continue;
+    }
+    // A comma whose next real character closes an object or array is a trailing one.
+    if ((ch === "}" || ch === "]") && comma !== -1) out[comma] = " ";
+    comma = ch === "," ? out.length : -1;
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      out.push(text.slice(i, j + 1));
+      i = j;
+    } else {
+      out.push(ch);
+    }
+  }
+  return out.join("");
+}
+
+/** AGT-001: one finding per high-risk entity a Base44 agent may write. */
+function checkBase44AgentWrites(content) {
+  const json = jsoncToJson(content);
+  const config = JSON.parse(json); // a parse error is reported by the analyzer loop
+  const entries = Array.isArray(config?.tool_configs) ? config.tool_configs : [];
+  // Each entity tool's line: its entity_name key, in file order.
+  const nameAt = [...json.matchAll(/"entity_name"\s*:/g)].map((m) => json.slice(0, m.index).split("\n").length);
+  const findings = [];
+  let k = 0;
+  for (const entry of entries) {
+    if (typeof entry?.entity_name !== "string") continue;
+    const line = nameAt[k++] ?? 1;
+    const ops = Array.isArray(entry.allowed_operations)
+      ? entry.allowed_operations.filter((op) => typeof op === "string").map((op) => op.toLowerCase())
+      : [];
+    const writes = AGENT_WRITE_OPERATIONS.filter((op) => ops.includes(op));
+    if (writes.length === 0 || !HIGH_RISK_ENTITY.test(entry.entity_name)) continue;
+    findings.push({ line, content: `${printable(entry.entity_name).slice(0, 80)}: ${writes.join(", ")}` });
+  }
+  return findings;
+}
+
 // AGT-003: the Claude Code settings a project commits, judged as Claude
 // Code loads them (security/claude-settings.js, shared with guardian
 // check). settings.local.json is per person and Claude Code's own setup
@@ -1981,6 +2065,14 @@ const AUDIT_RULES = [
   //
   // The runtime guard and the hooks defend what an agent reads at run
   // time; these rules read what a project commits for its agents.
+  {
+    id: "AGT-001", category: "AI Agent", severity: "HIGH",
+    description: "Base44 AI agent may create, update or delete a high-risk entity (money, identity, access, stock); Base44 enforces no approval step",
+    pattern: null,
+    fileTypes: [],
+    includePatterns: [BASE44_AGENT_FILE],
+    fileCheckFn: checkBase44AgentWrites,
+  },
   {
     id: "AGT-002", category: "AI Agent", severity: "CRITICAL",
     description: "Instruction file an AI agent loads (CLAUDE.md, AGENTS.md, a subagent, a skill) carries a CRITICAL prompt-injection pattern",
