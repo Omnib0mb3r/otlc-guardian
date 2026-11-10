@@ -2397,6 +2397,36 @@ describe("BUG-054: audit secret rules cover the runtime secret patterns", () => 
 });
 
 // ---------------------------------------------------------------------------
+// BUG-056: an allowlist entry with an empty reason is rejected
+// ---------------------------------------------------------------------------
+
+describe("BUG-056: allowlist entries need a non-empty reason", () => {
+  const secretFile = `const k = "${"AKIA" + "ABCDEFGHIJKLMNOP"}";\n`;
+
+  for (const [label, line] of [
+    ["an empty reason", "src/a.js  # reason:"],
+    ["a reason of only spaces", "src/a.js  # reason:   "],
+  ]) {
+    test(`${label} is ignored with a visible warning`, () => {
+      withTempProject({ "src/a.js": secretFile, "security/.audit-allowlist": line + "\n" }, (dir) => {
+        const r = runAuditArgs(dir, "--json");
+        assert.equal(r.status, 0, r.stderr.slice(0, 300));
+        assert.ok(hasFinding(JSON.parse(r.stdout), "SEC-002"), "the file was exempted by an entry with no reason");
+        assert.ok(/\.audit-allowlist:1 - reason is empty, line ignored/.test(r.stderr), r.stderr.slice(0, 300));
+      });
+    });
+  }
+
+  test("an entry with a reason still exempts the file", () => {
+    withTempProject({ "src/a.js": secretFile, "security/.audit-allowlist": "src/a.js  # reason: fixture key\n" }, (dir) => {
+      const r = runAuditArgs(dir, "--json");
+      assert.ok(!hasFinding(JSON.parse(r.stdout), "SEC-002"));
+      assert.ok(!/reason is empty/.test(r.stderr));
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

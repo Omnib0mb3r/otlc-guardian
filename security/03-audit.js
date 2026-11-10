@@ -1616,9 +1616,17 @@ function loadAllowlist(rootDir) {
       return;
     }
 
+    // The reason is the point of the entry: `# reason:` with nothing
+    // after it is the same as no reason (BUG-056).
+    const reason = reasonPart.replace(/^reason:\s*/i, "");
+    if (!reason) {
+      console.warn(`⚠️  [OTLC GUARDIAN] .audit-allowlist:${idx + 1} - reason is empty, line ignored`);
+      return;
+    }
+
     // Normalize path separators so Windows backslashes match Unix forward slashes
     const normalized = filePart.replace(/\\/g, "/");
-    allowlist.set(normalized, reasonPart.replace(/^reason:\s*/i, ""));
+    allowlist.set(normalized, reason);
   });
 
   return allowlist;

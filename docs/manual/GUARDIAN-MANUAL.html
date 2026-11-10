@@ -1928,7 +1928,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <ul>
 <li>No <code>#</code> at all: <code>.audit-allowlist:N missing reason, line ignored</code>.</li>
 <li>Text after the <code>#</code> does not start with <code>reason:</code> (case-insensitive): <code>reason must start with "reason:", line ignored</code>.</li>
-<li><code># reason:</code> with nothing after it is accepted. The code checks for the prefix, not for any text after it.</li>
+<li><code># reason:</code> with nothing (or only spaces) after it: <code>reason is empty, line ignored</code> (BUG-056, fixed 2026-11-10; before the fix the prefix alone was accepted).</li>
 <li>A path that itself contains <code>#</code> cannot be listed, because the split happens at the first <code>#</code>.</li>
 </ul>
 
@@ -2062,7 +2062,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <li><b>The runtime guard</b> (<code>security/01-injection-guard.js</code>, <code>injection_guard.py</code>) has no exemption parameter or marker.</li>
 </ul>
 
-<div class="limit"><b>Open on 2026-11-10</b><p><b>BUG-038</b>: a comment naming the CSP header clears WEB-002 and is not reported as an exemption. <b>BUG-056</b>: the allowlist accepts an empty reason. <b>BUG-057</b>: a mention of the audit-exempt marker in the first 4 KB exempts the file. <b>BUG-058</b>: hook <code>ignorePaths</code> is a substring match. <b>BUG-059</b>: audit exemptions do not reach the project checks.</p></div>
+<div class="limit"><b>Open on 2026-11-10</b><p><b>BUG-038</b>: a comment naming the CSP header clears WEB-002 and is not reported as an exemption. <b>BUG-057</b>: a mention of the audit-exempt marker in the first 4 KB exempts the file. <b>BUG-058</b>: hook <code>ignorePaths</code> is a substring match. <b>BUG-059</b>: audit exemptions do not reach the project checks.</p></div>
 
 <h3 id="sp-policy">When to use one</h3>
 

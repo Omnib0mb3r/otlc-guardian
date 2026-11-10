@@ -172,6 +172,12 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **An allowlist entry with an empty reason is rejected (BUG-056).**
+  `src/a.js  # reason:` with nothing after the prefix used to exempt the
+  file, though SECURITY.md says entries without a reason are rejected.
+  `loadAllowlist()` now ignores the line and warns
+  `.audit-allowlist:N - reason is empty, line ignored`.
+
 - **Audit secret rules now cover every runtime secret format (BUG-054).**
   The 1.5.0 runtime widening (BUG-026) had not reached the audit, so a
   committed fine-grained GitHub token or an OpenSSH key passed

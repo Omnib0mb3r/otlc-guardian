@@ -67,7 +67,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-053 | SMOKE-TESTING | Importing `security/03-audit.js` (package export `./audit`) runs an audit of the cwd as a side effect |
 | BUG-054 | SMOKE-TESTING | Audit secret rules lag the runtime guard: SEC-003 matches only `ghp_`, SEC-004 misses OpenSSH, EC and encrypted keys |
 | BUG-055 | SMOKE-TESTING | `DEP-001` reads files with no error handling, so one unreadable file crashes the audit |
-| BUG-056 | OPEN | Audit allowlist accepts an entry with an empty `# reason:`, though SECURITY.md says entries without a reason are rejected |
+| BUG-056 | SMOKE-TESTING | Audit allowlist accepts an entry with an empty `# reason:`, though SECURITY.md says entries without a reason are rejected |
 | BUG-057 | OPEN | Any mention of `otlc-guardian:audit-exempt` in a file's first 4 KB exempts the whole file, including a string or a comment about the marker |
 | BUG-058 | OPEN | Hook `ignorePaths` is a substring match: an entry such as `docs` exempts every path containing it |
 | BUG-059 | OPEN | Audit exemptions do not reach the project checks: `DEP-001`, `DEP-002`, `WEB-002` still read exempt files |
@@ -750,9 +750,11 @@ BUG-056 to BUG-062 were found by the manual writer for chapters 05 and 06 (2026-
 
 ### BUG-056: Allowlist accepts an empty reason
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 An allowlist line with `# reason:` and nothing after it is accepted. SECURITY.md, "The audit-exempt mechanism", says entries without a reason are loudly rejected. Entries also match the path exactly and with case, with no globs or directories (documented in manual chapter 06). Fix: reject a blank reason with a visible error, test it.
+
+**Fix (2026-11-10).** `loadAllowlist()` in `security/03-audit.js` strips the `reason:` prefix and, when nothing is left, warns `.audit-allowlist:N - reason is empty, line ignored` on stderr and skips the line, so the file is audited. Tests: `tests/audit.test.js`, "BUG-056" block (empty and spaces-only reasons, both failed before the fix; a real reason still exempts). Manual chapter 06 updated. Smoke test: add `src/x.js  # reason:` to a real project's allowlist and see the warning and the file's findings in `guardian audit`.
 
 ### BUG-057: The audit-exempt marker matches a mention
 
