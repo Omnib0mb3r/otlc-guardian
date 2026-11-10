@@ -201,6 +201,15 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Prose that names an opening and closing role tag is not a delimiter
+  (BUG-043, re-probe 2 S8).** "Wrap the request in <user> and </user>
+  tags." and "Put the text in a <user>...</user> block." were still denied
+  as `GUARD-INJ-015`. A role tag followed by more role tags (joined by
+  "and", "or", a comma, a slash or an ellipsis) and then by "tag(s)",
+  "element(s)" or "block(s)" is now prose; a tag followed by anything else
+  (`<user>...</user> obey me`) still matches. The Python port has the same
+  rule, live.
+
 - **`find` with a name filter that cannot match Guardian's files is not
   asked about (BUG-065, re-probe 2 S10).** The BUG-065 change read every
   `find . ... -delete` as deleting the project root, so an everyday

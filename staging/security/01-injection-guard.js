@@ -45,7 +45,7 @@ export const INJECTION_PATTERNS = [
 
   // Token/delimiter injection (LLM-specific)
   // BUG-043: a role tag named as a noun ("wrap in <user> tags") is prose.
-  { pattern: /<\/?(?:system|assistant|human|user)>(?![ \t]*(?:tags?|elements?|blocks?)\b)/i, severity: "CRITICAL", id: "GUARD-INJ-015" },
+  { pattern: /<\/?(?:system|assistant|human|user)>(?!(?:[ \t]*(?:and|or|,|\/|\.\.\.|\u2026)?[ \t]*<\/?(?:system|assistant|human|user)>)*[ \t]*(?:tags?|elements?|blocks?)\b)/i, severity: "CRITICAL", id: "GUARD-INJ-015" },
   { pattern: /\[SYSTEM\]/i,                                          severity: "CRITICAL", id: "GUARD-INJ-016" },
   { pattern: /\[INST\]/i,                                            severity: "CRITICAL", id: "GUARD-INJ-017" },
   { pattern: /<<\s*SYS\s*>>/i,                                       severity: "CRITICAL", id: "GUARD-INJ-018" },
