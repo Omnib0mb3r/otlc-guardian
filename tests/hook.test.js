@@ -37,7 +37,7 @@ import { spawnSync } from "child_process";
 import { fileURLToPath, pathToFileURL } from "url";
 import path from "path";
 import os from "os";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "fs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT      = path.resolve(__dirname, "..");
@@ -1325,6 +1325,95 @@ describe("PreToolUse hook - the PowerShell tool and cmd /c are read like Bash (B
     // bash keeps "\s" as two characters; only $ ` " \ and newline are escaped there.
     const out = shell("Bash", String.raw`cp notes/x.md ".planning\STATE.md"`, { "notes/x.md": `${CRITICAL_PAYLOAD}\n` }, "bypassPermissions");
     assert.equal(decisionOf(out), "deny", out.slice(0, 200));
+  });
+});
+
+describe("PreToolUse hook - Windows path aliases reach the real file (BUG-064)", () => {
+  // A project with settings, the guard files and a .planning folder on disk.
+  const inProject = (fn) => withTempProject((dir) => {
+    for (const [rel, text] of Object.entries({
+      ".claude/settings.json": "{}",
+      ".claude/hooks/injection-guard-hook.mjs": "// real guard code\n",
+      ".planning/STATE.md": "# State\n",
+    })) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), text);
+    }
+    return fn(dir);
+  });
+  const write = (dir, rel, content) => runHook(PRE_HOOK, { tool_name: "Write", cwd: dir, tool_input: { file_path: path.join(dir, rel), content } });
+  const DISABLE = '{"disableAllHooks":true}';
+
+  // Platform-dependent cases are listed, never silently passed, where they cannot run.
+  const shortNames = process.platform === "win32" && withTempProject((dir) => {
+    mkdirSync(path.join(dir, ".claude"));
+    return existsSync(path.join(dir, "CLAUDE~1"));
+  });
+  const onlyIf = (ok, why) => (name, fn) => (ok ? stagedOnly(name, fn) : console.log(`  ⏸  ${name} (${why})`));
+  const withShortNames = onlyIf(shortNames, "needs Windows with 8.3 short names on the temp volume");
+  const onWindows = onlyIf(process.platform === "win32", "Windows only");
+
+  for (const stream of ["::$INDEX_ALLOCATION", ":$I30:$INDEX_ALLOCATION"]) {
+    stagedOnly(`a folder stream suffix (${stream}) does not dodge the settings protection`, () => {
+      inProject((dir) => assert.equal(decisionOf(write(dir, `.claude${stream}/settings.local.json`, DISABLE)), "ask"));
+    });
+    stagedOnly(`a folder stream suffix (${stream}) does not dodge the guard files`, () => {
+      inProject((dir) => {
+        const out = write(dir, `.claude${stream}/hooks/injection-guard-hook.mjs`, "process.exit(0)\n");
+        assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+        expectWarning(out, "Guardian's own enforcement");
+      });
+    });
+    stagedOnly(`a folder stream suffix (${stream}) does not dodge the watch list`, () => {
+      inProject((dir) => assert.equal(decisionOf(write(dir, `.planning${stream}/STATE.md`, `${CRITICAL_PAYLOAD}\n`)), "deny"));
+    });
+  }
+
+  stagedOnly("Bash: a folder stream suffix does not dodge the settings protection", () => {
+    inProject((dir) => {
+      const out = runHook(PRE_HOOK, { tool_name: "Bash", cwd: dir, tool_input: { command: `echo '${DISABLE}' > '.claude::$INDEX_ALLOCATION/settings.local.json'` } });
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    });
+  });
+
+  withShortNames("an 8.3 short name does not dodge the settings protection (re-probe R2)", () => {
+    inProject((dir) => assert.equal(decisionOf(write(dir, "CLAUDE~1/settings.local.json", DISABLE)), "ask"));
+  });
+  withShortNames("an 8.3 short name does not dodge the guard files", () => {
+    inProject((dir) => assert.equal(decisionOf(write(dir, "CLAUDE~1/hooks/injection-guard-hook.mjs", "process.exit(0)\n")), "ask"));
+  });
+  withShortNames("an 8.3 short name does not dodge the watch list", () => {
+    inProject((dir) => assert.equal(decisionOf(write(dir, "PLANNI~1/STATE.md", `${CRITICAL_PAYLOAD}\n`)), "deny"));
+  });
+  withShortNames("Bash: an 8.3 short name does not dodge the settings protection", () => {
+    inProject((dir) => {
+      const out = runHook(PRE_HOOK, { tool_name: "Bash", cwd: dir, tool_input: { command: `echo '${DISABLE}' > CLAUDE~1/settings.local.json` } });
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    });
+  });
+
+  onWindows("a \\\\?\\ or \\\\.\\ device prefix does not dodge the settings or guard file protection", () => {
+    inProject((dir) => {
+      for (const prefix of ["\\\\?\\", "\\\\.\\", "//?/"]) {
+        for (const [rel, content] of [[".claude/settings.local.json", DISABLE], [".claude/hooks/injection-guard-hook.mjs", "process.exit(0)\n"]]) {
+          const out = runHook(PRE_HOOK, { tool_name: "Write", cwd: dir, tool_input: { file_path: `${prefix}${path.join(dir, rel)}`, content } });
+          assert.equal(decisionOf(out), "ask", `${prefix}${rel}: ${out.slice(0, 200)}`);
+        }
+      }
+    });
+  });
+
+  onWindows("PowerShell: trailing dots and spaces, which Win32 drops, do not dodge the settings protection", () => {
+    inProject((dir) => {
+      for (const target of [".claude\\settings.json.", ".claude.\\settings.json", "'.claude\\settings.json '"]) {
+        const out = runHook(PRE_HOOK, { tool_name: "PowerShell", cwd: dir, tool_input: { command: `Set-Content ${target} '{}'` } });
+        assert.equal(decisionOf(out), "ask", `${target}: ${out.slice(0, 200)}`);
+      }
+    });
+  });
+
+  test("a folder that only starts like a watched one is not watched", () => {
+    inProject((dir) => expectSilent(write(dir, ".claude-notes/x.md", `${CRITICAL_PAYLOAD}\n`)));
   });
 });
 

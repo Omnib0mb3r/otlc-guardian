@@ -64,7 +64,7 @@
 //   the self-protection below guards.
 // ============================================================
 
-import { readFileSync, existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
+import { readFileSync, existsSync, statSync, openSync, readSync, closeSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -168,16 +168,63 @@ function loadSettings(projectRoot) {
 // ---------------------------------------------------------------------------
 
 /**
- * The file a path names, spelled one way: forward slashes, `..` and `.`
- * collapsed, and an NTFS stream suffix removed ("CLAUDE.md::$DATA" and
- * "CLAUDE.md:x:$DATA" are CLAUDE.md to the reader that matters). A drive
- * letter ("C:") is not a stream.
+ * The file a path names, spelled one way (BUG-064):
+ *   - forward slashes, `..` and `.` collapsed;
+ *   - a Win32 device prefix removed (`\\?\C:\x`, `\\.\C:\x` are C:\x;
+ *     `\\?\UNC\server\share` is \\server\share);
+ *   - an NTFS stream suffix removed from every name, file or folder
+ *     ("CLAUDE.md::$DATA", ".claude::$INDEX_ALLOCATION" and
+ *     ".claude:$I30:$INDEX_ALLOCATION" are the plain names). A drive
+ *     letter ("C:") is not a stream;
+ *   - on Windows, the trailing dots and spaces Win32 drops from each name
+ *     (PowerShell and cmd write ".claude.\settings.json" to .claude);
+ *   - an absolute path resolved through the file system (onDisk()), so an
+ *     8.3 short name (CLAUDE~1), a symbolic link or a junction is matched
+ *     as the file it reaches.
  */
 function canonicalPath(p) {
-  const slashed = String(p).replace(/\\/g, "/");
-  const unstreamed = slashed.replace(/(^|\/)([^/:]+):[^/]*$/, (whole, sep, name) =>
-    sep === "" && /^[A-Za-z]$/.test(name) ? whole : `${sep}${name}`);
-  return path.posix.normalize(unstreamed);
+  const slashed = String(p).replace(/\\/g, "/")
+    .replace(/^\/\/[?.]\/UNC\//i, "//")
+    .replace(/^\/\/[?.]\/(?=[A-Za-z]:)/, "");
+  const names = slashed.split("/").map((name, k) => {
+    if (k === 0 && /^[A-Za-z]:$/.test(name)) return name;
+    const plain = name.replace(/:.*$/, "");
+    if (!IS_WINDOWS || plain === "." || plain === "..") return plain;
+    return plain.replace(/[. ]+$/, "") || plain;
+  });
+  return onDisk(path.posix.normalize(names.join("/")));
+}
+
+const IS_WINDOWS = process.platform === "win32";
+const onDiskCache = new Map();
+
+/**
+ * An absolute path as the file system spells it: the deepest part that
+ * exists is resolved with realpathSync.native (long names, links, the
+ * case on disk) and the rest is appended. A relative path is returned as
+ * it is; it has no fixed place on disk.
+ */
+function onDisk(p) {
+  if (!path.isAbsolute(p)) return p;
+  if (onDiskCache.has(p)) return onDiskCache.get(p);
+  const rest = [];
+  let head = p;
+  let resolved = p;
+  for (;;) {
+    try {
+      resolved = path.posix.join(realpathSync.native(head).replace(/\\/g, "/"), ...rest);
+      break;
+    } catch (err) {
+      // Not there (or not readable): resolve the parent instead, and keep
+      // the missing names as they are spelled.
+      const parent = path.dirname(head);
+      if (parent === head) break;
+      rest.unshift(path.basename(head));
+      head = parent;
+    }
+  }
+  onDiskCache.set(p, resolved);
+  return resolved;
 }
 
 // Windows and macOS file systems ignore case by default, so ".Claude" is
@@ -1048,7 +1095,7 @@ process.stdin.on("end", () => {
     const settings    = loadSettings(projectRoot);
     const resolve     = (p) => {
       const file = canonicalPath(p);
-      return path.isAbsolute(file) ? file : path.resolve(projectRoot, file);
+      return path.isAbsolute(file) ? file : canonicalPath(path.resolve(projectRoot, file));
     };
 
     // "ask" means a person confirms. In bypassPermissions mode the user

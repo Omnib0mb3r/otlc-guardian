@@ -75,7 +75,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-061 | SMOKE-TESTING | `guardian init` and `update` on an invalid `.claude/settings.json` stop with a raw stack trace after earlier steps are written |
 | BUG-062 | SMOKE-TESTING | `guardian check` passes (exit 0, "correctly installed") when the hook smoke test fails, and never checks the hook is registered |
 | BUG-063 | IN-PROGRESS | HIGH: the PreToolUse hook fails open in every CommonJS project: the ESM scanner cannot load under `"type": "commonjs"` |
-| BUG-064 | OPEN | Windows path aliases dodge the watch and protected sets: `::$INDEX_ALLOCATION` on a folder, and 8.3 short names (`CLAUDE~1`) |
+| BUG-064 | IN-PROGRESS | Windows path aliases dodge the watch and protected sets: `::$INDEX_ALLOCATION` on a folder, and 8.3 short names (`CLAUDE~1`) |
 | BUG-065 | OPEN | Settings and guard-file protection miss explicit deletes and replaces: `find -delete`, `rsync --delete`, `tar -x`, `cmd /c rd` and `del` |
 | BUG-066 | OPEN | Copies into watched paths not judged: directory sources (`cp -r dir/. .claude/agents/`), `sort -o`, `cmd /c copy` |
 | BUG-067 | OPEN | PowerShell parameter prefixes (`-LiteralP`, `-Pat`, `-Val`) are not recognized; `-EncodedCommand` payload text is never scanned |
@@ -866,13 +866,15 @@ Fix: the scanner's module type must not depend on the host project's `package.js
 
 ### BUG-064: Windows path aliases dodge the watch list and protected files
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** IN-PROGRESS · **Found:** 2026-11-10
 
 Re-probe R2 (variants of verifier P5). All confirmed with node `fs` to land in the real folders:
 - A directory stream suffix on a folder: `.claude::$INDEX_ALLOCATION/settings.local.json`, the same under `.planning`, and `.claude::$INDEX_ALLOCATION/hooks/...`. `canonicalPath()` strips a stream suffix only from the last component.
 - 8.3 short names (on for C:): `CLAUDE~1/settings.local.json`, `PLANNI~1/STATE.md`, `CLAUDE~1/hooks/injection-guard-hook.mjs`, and `echo '{"disableAllHooks":true}' > CLAUDE~1/settings.local.json`.
 
 Fix direction: strip `::$INDEX_ALLOCATION` (and `:$I30` forms) from every component, and resolve 8.3 names with `fs.realpathSync.native` on the deepest existing parent before matching. Hook edit; waits.
+
+**Fix in staging (2026-11-10), not yet live.** Staging commit: recorded in `staging/APPLY.md`. Probed first with node `fs` on this machine: both folder stream forms and 8.3 names land in the real folder, and `realpathSync.native` expands short names, stream suffixes, `\\?\` prefixes and case; node keeps a trailing dot literal, but PowerShell and cmd go through Win32, which drops it. In `staging/hooks/injection-guard-hook.mjs`, `canonicalPath()` now removes a Win32 device prefix (`\\?\`, `\\.\`, `\\?\UNC\`), strips a stream suffix from every name, and on Windows (`IS_WINDOWS`) drops trailing dots and spaces from each name; an absolute result goes through the new `onDisk()`, which resolves the deepest existing part with `realpathSync.native` and appends the rest (cached per run). This also resolves symbolic links and junctions. `resolve()` canonicalizes a relative path again after joining the project root. Every key (watch, exempt, settings, guard files) goes through `canonicalPath()`, so both sides of each comparison are resolved the same way. Tests: `tests/hook.test.js`, group "Windows path aliases reach the real file (BUG-064)": 14 staged tests, 13 failing against the staged hook before the fix (the device prefix already hit the settings suffix pattern, not the guard files); the 8.3 tests run only on Windows with short names on the temp volume, and the device-prefix and trailing-dot tests only on Windows, each listed as skipped elsewhere. The bug stays IN-PROGRESS until Michael applies the staged hook. Smoke test after applying, on Windows with prompts on: ask Claude to Write `CLAUDE~1/settings.local.json` with `{"disableAllHooks":true}` and see a Guardian prompt.
 
 ### BUG-065: Explicit deletes and replaces of the settings or guard files pass
 

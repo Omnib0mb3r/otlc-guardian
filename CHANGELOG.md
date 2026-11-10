@@ -201,6 +201,15 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Windows path aliases reach the real file (BUG-064).** The hook matches
+  a path as the file it reaches: a stream suffix is stripped from every
+  folder as well as the file (`.claude::$INDEX_ALLOCATION/...`), a
+  `\\?\` or `\\.\` device prefix is removed, the trailing dots and spaces
+  Win32 drops are dropped, and an absolute path is resolved on disk with
+  `realpathSync.native`, so 8.3 short names (`CLAUDE~1`, `PLANNI~1`),
+  symbolic links and junctions no longer dodge the watch list, the
+  settings protection or the guard files.
+
 - **The PowerShell tool and `cmd /c` are read like Bash (BUG-048).** A
   PowerShell tool command that is not one of the cmdlets the hook reads
   now goes to the same readers as a Bash command, so `git checkout -- `,
