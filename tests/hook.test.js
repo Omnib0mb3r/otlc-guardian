@@ -1082,13 +1082,19 @@ describe("PreToolUse hook - self-protection of .claude/settings.json (1.5.0)", (
     "git checkout main",
     "git restore src/app.ts",
     "mv notes.txt archive/notes.txt",
-    "cp .claude/settings.json /tmp/settings.bak",
     "cp notes/agent.md .claude/agents/",
-    "jq . .claude/settings.json > /tmp/out.json",
   ]) {
     test(`Bash that leaves the settings alone is silent: ${command}`, () => {
       const out = inProject((dir) => runHook(PRE_HOOK, { tool_name: "Bash", cwd: dir, tool_input: { command } }));
       expectSilent(out);
+    });
+  }
+  // Re-probe 3, D1: these read the settings but name them and are not on
+  // the read-only list, so they ask (they were silent before D1).
+  for (const command of ["cp .claude/settings.json /tmp/settings.bak", "jq . .claude/settings.json > /tmp/out.json"]) {
+    stagedOnly(`Bash naming the settings that is not known read-only asks (D1): ${command}`, () => {
+      const out = inProject((dir) => runHook(PRE_HOOK, { tool_name: "Bash", cwd: dir, tool_input: { command } }));
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
     });
   }
 
@@ -1245,12 +1251,16 @@ describe("PreToolUse hook: self-protection of the hook files and scanner (1.5.0 
 
   for (const command of [
     `cat ${HOOK_REL}`,
-    `cp ${SCANNER_REL} /tmp/scanner.bak`,
     `grep -n deny ${HOOK_REL}`,
-    "node --check .claude/hooks/injection-guard-hook.mjs",
   ]) {
     test(`Bash that only reads a guard file is silent: ${command}`, () => {
       inGuardedProject((dir) => expectSilent(run(dir, "Bash", { command })));
+    });
+  }
+  // Re-probe 3, D1: reads, but not by a known read-only command (silent before D1).
+  for (const command of [`cp ${SCANNER_REL} /tmp/scanner.bak`, "node --check .claude/hooks/injection-guard-hook.mjs"]) {
+    stagedOnly(`Bash naming a guard file that is not known read-only asks (D1): ${command}`, () => {
+      inGuardedProject((dir) => assert.equal(decisionOf(run(dir, "Bash", { command })), "ask"));
     });
   }
 
@@ -1402,12 +1412,15 @@ describe("PreToolUse hook - the PowerShell tool and cmd /c are read like Bash (B
       String.raw`cmd /c type .claude\settings.json`,
       String.raw`cmd /c dir .claude`,
       String.raw`cmd /c "echo x ^> .claude\settings.json"`,
-      String.raw`cmd /c "copy .claude\settings.json backup.json"`,
     ]) {
       test(`${tool} tool: cmd /c that leaves the settings alone is silent: ${command}`, () => {
         expectSilent(shell(tool, command));
       });
     }
+    // Re-probe 3, D1: copy reads the settings but is not on the read-only list.
+    stagedOnly(`${tool} tool: cmd /c copy of the settings asks (D1)`, () => {
+      assert.equal(decisionOf(shell(tool, String.raw`cmd /c "copy .claude\settings.json backup.json"`)), "ask");
+    });
   }
 
   test("PowerShell tool git that leaves the settings alone is silent", () => {
@@ -1611,7 +1624,6 @@ describe("PreToolUse hook - explicit deletes and replaces of the settings and gu
     "rsync -a dist/ backup/",
     "tar -xf deps.tar -C vendor",
     "tar -tf evil.tar",
-    "tar -cf out.tar .claude",
     "unzip -l evil.zip",
     "unzip evil.zip -d vendor",
     "git clean -n",
@@ -1620,6 +1632,10 @@ describe("PreToolUse hook - explicit deletes and replaces of the settings and gu
   ]) {
     test(`silent: ${command}`, () => expectSilent(bash(command)));
   }
+  // Re-probe 3, D1: tar reads .claude here, but names it and is not read-only (silent before D1).
+  stagedOnly("asks: tar -cf out.tar .claude (D1)", () => {
+    assert.equal(decisionOf(bash("tar -cf out.tar .claude")), "ask");
+  });
 });
 
 describe("PreToolUse hook - copies of folders and sort/uniq outputs are judged by content (BUG-066)", () => {
@@ -2254,6 +2270,112 @@ describe("Web content guard - 1.5.0 hardening", () => {
     const elapsed = Date.now() - start;
     assert.ok(elapsed < 3_000, `64 KB comment flood took ${elapsed}ms`);
   });
+});
+
+describe("PreToolUse hook - a command naming a guarded file asks unless it only reads (re-probe 3, D1)", () => {
+  const run = (tool, command, mode) => withTempProject((dir) => {
+    for (const [rel, text] of Object.entries({ ".claude/settings.json": "{}", "notes/x.md": "notes\n", "x.hex": "00\n" })) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), text);
+    }
+    return runHook(PRE_HOOK, { tool_name: tool, cwd: dir, tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) });
+  });
+
+  // Each of these really changed a guarded file in the re-probe and was silent.
+  for (const [tool, command] of [
+    // T5: find running a shell
+    ["Bash", `find .claude -exec sh -c 'rm "$1"' _ {} \\;`],
+    // T7: inline code by flag spelling, interpreter name, bare folder name, stdin
+    ["Bash", `python -Sc "import os; os.remove('.claude/settings.json')"`],
+    ["Bash", `python -Ic "import os; os.remove('.claude/settings.json')"`],
+    ["Bash", `node --eval="require('fs').rmSync('.claude/settings.json')"`],
+    ["Bash", `node -pe "require('fs').rmSync('.claude/settings.json')"`],
+    ["Bash", `perl -E 'unlink ".claude/settings.json"'`],
+    ["Bash", `perl -we 'unlink ".claude/settings.json"'`],
+    ["Bash", `python3.12 -c "import os; os.remove('.claude/settings.json')"`],
+    ["Bash", `deno eval "Deno.removeSync('.claude/settings.json')"`],
+    ["Bash", `perl -Mstrict -e 'unlink ".claude/settings.json"'`],
+    ["Bash", `ruby -rfileutils -e 'FileUtils.rm(".claude/settings.json")'`],
+    ["Bash", `node -e "require('fs').rmSync('security',{recursive:true})"`],
+    ["Bash", `bun --eval "require('fs').rmSync('security',{recursive:true})"`],
+    ["Bash", `python -c "import shutil; shutil.rmtree('security')"`],
+    ["Bash", `python - <<EOF\nimport os\nos.remove('.claude/settings.json')\nEOF`],
+    ["Bash", `bash <<EOF\nrm -f .claude/settings.json\nEOF`],
+    ["Bash", `echo "rm -f .claude/settings.json" | bash`],
+    ["Bash", `bash -s <<< "rm -f .claude/settings.json"`],
+    ["Bash", `awk 'BEGIN{system("rm -f .claude/settings.json")}'`],
+    // T17: bash syntax the reader skipped
+    ["Bash", `{ rm -f .claude/settings.json; }`],
+    ["Bash", `if true; then rm -f .claude/settings.json; fi`],
+    ["Bash", `f() { rm -f .claude/settings.json; }; f`],
+    ["Bash", `rm -f .claude/settings{,.local}.json`],
+    ["Bash", `rm -f .claude/hooks/{injection-guard-hook,web-content-guard}.mjs`],
+    ["Bash", `rm -f $'.claude/settings.json'`],
+    ["Bash", `rm -f $'\\x2eclaude/settings.json'`],
+    // T18: cmd switch forms
+    ["Bash", String.raw`cmd /r del .claude\settings.json`],
+    ["Bash", String.raw`cmd /cdel .claude\settings.json`],
+    ["Bash", String.raw`cmd /d/c del .claude\settings.json`],
+    ["Bash", String.raw`forfiles /c "cmd /c del .claude\settings.json"`],
+    // T20, the guarded half
+    ["Bash", `curl -so.claude/settings.local.json http://localhost:9/x`],
+    ["Bash", `xxd -r x.hex .claude/hooks/injection-guard-hook.mjs`],
+    ["Bash", `git diff --output=.claude/settings.json`],
+    // other spellings of the same names
+    ["Bash", `rm -f .cl'au'de/settings.json`],
+    ["Bash", `rm -f .c\\laude/settings.json`],
+    ["Bash", `rm -f .claude/settings.loc*.json`],
+    ["Bash", `rm -f .claude/[s]ettings.json`],
+    ["Bash", `rm -f CLAUDE~1/SETTIN~1.JSO`],
+    ["Bash", `rm -f '.claude::$INDEX_ALLOCATION/settings.local.json'`],
+    ["Bash", `rm -f .CLAUDE/Settings.JSON`],
+    // T19: PowerShell forms
+    ["PowerShell", `'.claude/settings.json' | Remove-Item`],
+    ["PowerShell", `Get-ChildItem .claude -Recurse | Remove-Item -Force`],
+    ["PowerShell", `& { Remove-Item .claude/settings.json }`],
+    ["PowerShell", `Start-Job { Remove-Item .claude\\settings.json }`],
+    ["PowerShell", `[IO.Directory]::Delete('.claude', $true)`],
+    ["PowerShell", `Expand-Archive x.zip -DestinationPath .claude`],
+    ["PowerShell", `'x' | Export-Csv .claude/settings.json`],
+    ["PowerShell", `$w = New-Object IO.StreamWriter('.claude/settings.json'); $w.Close()`],
+  ]) {
+    stagedOnly(`${tool}: ${command.split("\n")[0].slice(0, 70)} asks (D1)`, () => {
+      const out = run(tool, command);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 300));
+    });
+  }
+
+  stagedOnly("the ask names the guarded file and is a deny in bypass mode (D1)", () => {
+    const out = run("Bash", `bash <<EOF\nrm -f .claude/settings.json\nEOF`, "bypassPermissions");
+    assert.equal(decisionOf(out), "deny", out.slice(0, 300));
+    expectWarning(out, "settings.json");
+  });
+
+  // Known read-only commands, and commands that name no guarded file.
+  for (const [tool, command] of [
+    ["Bash", "cat .claude/settings.json"],
+    ["Bash", "cat .claude/settings.json 2>/dev/null"],
+    ["Bash", "grep -n hooks .claude/settings.json"],
+    ["Bash", "head -5 .claude/hooks/injection-guard-hook.mjs | grep node"],
+    ["Bash", "git diff -- .claude/settings.json"],
+    ["Bash", "git log --oneline -- security/01-injection-guard.js"],
+    ["Bash", "jq .hooks .claude/settings.json"],
+    ["Bash", "ls -la .claude && ls security"],
+    ["Bash", "cd .claude && cat settings.json"],
+    ["PowerShell", "Get-Content .claude/settings.json"],
+    ["PowerShell", "Get-Content .claude/settings.json | Select-String hooks"],
+    ["PowerShell", "Get-ChildItem .claude"],
+    ["Bash", `git commit -m "security fix for the login form"`],
+    ["Bash", "npm audit --omit=dev"],
+    ["Bash", "rm -rf dist/* && mkdir -p .claude/agents"],
+    ["Bash", "ls ~/.claude/projects"],
+    ["Bash", "cp .env.example .env"],
+    ["Bash", "rm -f src/security-utils.ts docs/security.md"],
+  ]) {
+    test(`${tool}: ${command} is silent (D1)`, () => {
+      expectSilent(run(tool, command, "bypassPermissions"));
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------

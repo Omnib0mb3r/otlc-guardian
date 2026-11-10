@@ -201,6 +201,20 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A command that names Guardian's files asks unless it only reads
+  (BUG-075, re-probe 3 D1).** Three re-probes each found shell forms that
+  delete or rewrite the settings, the hook files or the scanner past the
+  command readers: `find -exec sh -c`, `python -Ic`, a heredoc fed to
+  `bash`, brace expansion, `$'...'`, `cmd /r`, PowerShell pipelines and
+  script blocks, `curl -so<path>`. For Guardian's own files the hook now
+  judges by name: a Bash, PowerShell or cmd command, inline code or a
+  script on stdin whose text names one of them, or `.claude`,
+  `.claude/hooks` or `security`, in any spelling (split quotes, escapes,
+  case, brace groups, globs, 8.3 short names, NTFS streams) asks, unless
+  every part of it is a known read-only command (cat, grep, jq, git diff,
+  Get-Content and the like, with no redirect to a file). Copying a
+  guarded file out with `cp` or `tar` now asks too.
+
 - **A second Guardian entry with other fields asks (BUG-045, re-probe 3
   D4).** Claude Code runs one copy of an identical hook command, so a
   copy of Guardian's entry in `settings.local.json` with `"async": true`

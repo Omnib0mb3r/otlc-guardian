@@ -892,6 +892,226 @@ const GUARD_ENDINGS = [
 ];
 const namesGuardFile = (absPath) => GUARD_ENDINGS.some((e) => watchKey(absPath).endsWith(e));
 
+// ---------------------------------------------------------------------------
+// GUARDED NAMES (re-probe 3, D1)
+// ---------------------------------------------------------------------------
+//
+// Three re-probes each found shell spellings that change Guardian's own
+// files past the readers here (find -exec sh -c, python -Ic, a heredoc fed
+// to bash, brace expansion, cmd /r, a PowerShell pipeline). Chasing each
+// idiom does not converge, so for Guardian's own files the judgement is
+// by name: a command whose text names one in any spelling asks, unless
+// every part of it is a known read-only command. The text includes inline
+// code, heredoc bodies, nested shells and decoded scripts. The readers
+// still judge what a command copies into a watched instruction file.
+
+// Guardian's files and the folders that hold them, from the project root,
+// most specific first so a message names the file rather than its folder.
+const GUARDED_NAMES = [
+  ".claude/settings.local.json", ".claude/settings.json",
+  ...GUARDIAN_HOOK_FILES.map((f) => `.claude/hooks/${f}`),
+  GUARDIAN_SCANNER_FILE.replace(/\\/g, "/"), GUARDIAN_SCANNER_PACKAGE.replace(/\\/g, "/"),
+  ".claude/hooks", ".claude", "security",
+];
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const NAME_CHAR = "a-z0-9_~.\\-";
+
+/** A path component, or also its Windows 8.3 short name (CLAUDE~1, SETTIN~1.JSO). */
+function componentPattern(name) {
+  const dot = name.lastIndexOf(".");
+  const stem = (dot > 0 ? name.slice(0, dot) : name).replace(/\./g, "");
+  const ext = dot > 0 ? name.slice(dot + 1) : "";
+  const fits83 = !name.startsWith(".") && stem.length <= 8 && ext.length <= 3 && name.split(".").length <= 2;
+  if (fits83) return { long: escapeRe(name), short: null };
+  return { long: escapeRe(name), short: `${escapeRe(stem.slice(0, 6))}~\\d+${ext ? `\\.${escapeRe(ext.slice(0, 3))}` : ""}` };
+}
+
+// One pattern per guarded name over a normalized view of the text. A name
+// that starts with a dot needs no boundary before it, so a value attached
+// to an option cluster still counts (curl -so.claude/settings.local.json);
+// a folder name followed by "/" and a further name is a different path
+// (.claude/agents), so it does not count there.
+const GUARDED_NAME_PATTERNS = GUARDED_NAMES.filter((n) => n.includes("/") || n.startsWith(".")).map((name) => {
+  const parts = name.split("/").map(componentPattern);
+  const first = parts[0].short
+    ? `(?:${parts[0].long}|(?<![${NAME_CHAR}])${parts[0].short})`
+    : parts[0].long;
+  const rest = parts.slice(1).map((p) => (p.short ? `(?:${p.long}|${p.short})` : p.long));
+  const lead = name.startsWith(".") ? "" : `(?<![${NAME_CHAR}])`;
+  return { name, re: new RegExp(`${lead}${[first, ...rest].join("/")}(?=/?(?:$|[^${NAME_CHAR}/]))`, "m") };
+});
+// A bare folder name that is also an English word counts only as a path:
+// after or before a "/", as a whole shell word, or as a quoted literal
+// (rmSync('security')), so a commit message saying "security" does not.
+const BARE_GUARDED_FOLDERS = GUARDED_NAMES.filter((n) => !n.includes("/") && !n.startsWith(".")).map((name) => ({
+  name,
+  re: new RegExp(`(?<=/)${escapeRe(name)}(?=/?(?:$|[^${NAME_CHAR}/]))|(?<![${NAME_CHAR}])${escapeRe(name)}/(?=$|[^${NAME_CHAR}/])`, "m"),
+  quoted: new RegExp(`(['"\`])(?:\\./)?${escapeRe(name)}/?\\1`, "i"),
+}));
+
+/** Text of a bash $'...' string with its escapes decoded. */
+function decodeAnsiC(body) {
+  return body.replace(/\\(x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{1,4}|U[0-9a-fA-F]{1,8}|[0-7]{1,3}|[\s\S])/g, (m, e) => {
+    if (/^[xuU]/.test(e)) return String.fromCodePoint(parseInt(e.slice(1), 16));
+    if (/^[0-7]/.test(e)) return String.fromCharCode(parseInt(e, 8));
+    return { n: "\n", t: "\t", r: "\r", a: "", b: "", e: "", f: "", v: "" }[e] ?? e;
+  });
+}
+
+/** Expands bash brace groups (a{b,c}d -> abd acd), up to 64 groups. */
+function expandBraces(text) {
+  const group = /([^\s{}]*)\{([^{}\s]*,[^{}\s]*)\}([^\s{}]*)/;
+  for (let n = 0; n < 64 && text.length < 400_000; n++) {
+    const m = group.exec(text);
+    if (!m) break;
+    const words = m[2].split(",").map((p) => `${m[1]}${p}${m[3]}`).join(" ");
+    text = `${text.slice(0, m.index)}${words}${text.slice(m.index + m[0].length)}`;
+  }
+  return text;
+}
+
+/**
+ * The text spelled one way for name matching: $'...' decoded, quote,
+ * backtick and caret characters removed (split quotes, PowerShell and cmd
+ * escapes), lower case, NTFS stream suffixes (::$INDEX_ALLOCATION) and
+ * "/./" dropped, brace groups expanded. A backslash is either a path
+ * separator or a bash escape, so there are two views.
+ */
+function nameViews(text) {
+  const t = text
+    .replace(/\$'((?:[^'\\]|\\[\s\S])*)'/g, (m, body) => decodeAnsiC(body))
+    .replace(/['"`^]/g, "")
+    .toLowerCase();
+  return [t.replace(/\\/g, "/"), t.replace(/\\([\s\S])/g, "$1")].map((v) => expandBraces(v
+    .replace(/:[a-z0-9_.-]*:\$data\b/g, "")
+    .replace(/:{1,2}\$[a-z_]+/g, "")
+    .replace(/\/(?:\.\/)+/g, "/")
+    .replace(/\/{2,}/g, "/")));
+}
+
+/** A shell glob as an anchored regex over a lower-case posix path, or null. */
+function globRegex(glob) {
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    const ch = glob[i];
+    if (ch === "*") {
+      if (glob[i + 1] === "*") { re += ".*"; i++; } else re += "[^/]*";
+    } else if (ch === "?") re += "[^/]";
+    else if (ch === "[") {
+      const end = glob.indexOf("]", i + 2);
+      if (end < 0) { re += "\\["; continue; }
+      const body = glob.slice(i + 1, end).replace(/^!/, "^").replace(/\\/g, "\\\\");
+      re += `[${body}]`;
+      i = end;
+    } else re += escapeRe(ch);
+  }
+  return compiles(`^${re}/?$`, "");
+}
+
+/**
+ * The first of Guardian's files a command's text names, in any spelling,
+ * or null.
+ * @param {string[]} texts - the command and any scripts it carries encoded
+ * @param {string} cwd - the session's working directory, for globs
+ * @param {string} root - the project root
+ */
+function guardedNameIn(texts, dialect, cwd, root) {
+  const guardedAbs = GUARDED_NAMES.map((name) => ({ name, abs: path.join(root, name).replace(/\\/g, "/").toLowerCase() }));
+  for (const text of texts) {
+    const words = lexShell(text, dialect).tokens.filter((t) => t.word !== undefined)
+      .map((t) => t.word.replace(/\\/g, "/").replace(/\/+$/, "").replace(/^\.\//, "").toLowerCase());
+    for (const view of nameViews(text)) {
+      const hit = GUARDED_NAME_PATTERNS.find((p) => p.re.test(view));
+      if (hit) return hit.name;
+      for (const run of view.split(/[\s;|&<>()=,]+/)) {
+        if (!/[*?[]/.test(run)) continue;
+        const re = globRegex(path.resolve(cwd, run.replace(/^~(?=$|\/)/, os.homedir())).replace(/\\/g, "/").toLowerCase());
+        const globHit = re && guardedAbs.find((g) => re.test(g.abs));
+        if (globHit) return globHit.name;
+      }
+    }
+    for (const folder of BARE_GUARDED_FOLDERS) {
+      if (nameViews(text).some((v) => folder.re.test(v)) || words.includes(folder.name) || folder.quoted.test(text)) return folder.name;
+    }
+  }
+  return null;
+}
+
+// Commands that only read (and cd, which only moves). A command with a
+// redirect to a file, or with any other stage, is not read-only.
+const READ_ONLY_COMMANDS = new Set([
+  "cat", "less", "more", "head", "tail", "grep", "egrep", "fgrep", "rg", "ls", "dir", "stat", "wc", "file", "diff",
+  "cmp", "jq", "md5sum", "sha1sum", "sha256sum", "cd", "pushd", "popd", "pwd", "echo", "printf", "test", "[", "true",
+  "realpath", "readlink", "basename", "dirname", "type",
+  "get-content", "gc", "get-childitem", "gci", "get-item", "gi", "test-path", "select-string", "sls",
+  "get-filehash", "set-location", "sl", "resolve-path", "rvpa", "write-output", "write-host",
+  "select-object", "where-object", "measure-object", "format-list", "format-table", "convertfrom-json", "out-string",
+]);
+const READ_ONLY_GIT = new Set(["diff", "log", "show", "status", "blame", "ls-files", "rev-parse", "cat-file", "grep"]);
+const NULL_SINK = /^(?:\/dev\/null|nul|\$null)$/i;
+
+/**
+ * Whether a find command only lists: no -delete, -ok or file-writing
+ * action (-fprint, -fprintf, -fls), and each -exec runs a read-only command.
+ */
+function findOnlyReads(args, dialect, depth) {
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    if (a === "-exec" || a === "-execdir") {
+      const end = args.findIndex((x, j) => j > k && (x === ";" || x === "\\;" || x === "+"));
+      const run = args.slice(k + 1, end < 0 ? args.length : end).map((x) => (x === "{}" ? "x" : x));
+      if (run.length === 0 || !onlyReads(run.join(" "), dialect, depth + 1)) return false;
+      k = end < 0 ? args.length : end;
+    } else if (/^-(?:delete|ok|okdir|fprint|fprint0|fprintf|fls)$/.test(a)) return false;
+  }
+  return true;
+}
+
+/** Whether every stage of a command is a known read-only command with no redirect to a file. */
+function onlyReads(command, dialect, depth = 0) {
+  if (depth > MAX_SHELL_DEPTH) return false;
+  const { tokens, subs } = lexShell(command, dialect);
+  if (!subs.every((s) => onlyReads(s, dialect, depth + 1))) return false;
+  let words = [];
+  const stageReads = () => {
+    let w = words.filter((x) => x !== "");
+    words = [];
+    while (w.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(w[0])) w = w.slice(1);
+    if (w.length === 0) return true;
+    const name = commandName(w[0]);
+    if (name === "git") {
+      const sub = w.slice(1).find((x) => !x.startsWith("-"));
+      return READ_ONLY_GIT.has(sub) && !w.some((x) => /^--(?:output|ext-diff|textconv)(?:=|$)/i.test(x));
+    }
+    if (name === "rg" && w.some((x) => /^--pre(?:=|$)/.test(x))) return false;
+    // A nested shell reads when the script it runs does.
+    if (SHELLS.has(name)) return w[1] === "-c" && w.length === 3 && onlyReads(w[2], "bash", depth + 1);
+    if (name === "cmd") {
+      const script = cmdScript(w.slice(1));
+      return script !== null && onlyReads(script, "cmd", depth + 1);
+    }
+    if (name === "powershell" || name === "pwsh") {
+      const script = powershellScript(w.slice(1));
+      return script !== null && !script.encoded && onlyReads(script.text, "powershell", depth + 1);
+    }
+    if (name === "find") return findOnlyReads(w.slice(1), dialect, depth);
+    return READ_ONLY_COMMANDS.has(name);
+  };
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (tok.word !== undefined) words.push(tok.word);
+    else if (CONTROL_OPERATORS.has(tok.op)) {
+      if (!stageReads()) return false;
+    } else if (WRITE_REDIRECTS.has(tok.op)) {
+      const next = tokens[i + 1]?.word;
+      const sink = next !== undefined && (NULL_SINK.test(next) || (tok.op === ">&" && /^\d+$/.test(next)));
+      if (!sink) return false;
+      i++;
+    } else if (READ_REDIRECTS.has(tok.op) && tokens[i + 1]?.word !== undefined) i++;
+  }
+  return stageReads();
+}
+
 /** Index just past the ")" that closes a "$(" opened before `from`. */
 function closingParen(text, from) {
   let depth = 1;
@@ -2236,6 +2456,22 @@ process.stdin.on("end", () => {
           `A change there can switch Guardian off, and Guardian cannot judge code, so a person confirms it. ` +
           `Approve only if you asked for it.${bypassNote}`,
       });
+    }
+
+    // A shell command that names one of those files, or a folder holding
+    // one, in any spelling, and is not known to only read (re-probe 3, D1).
+    if (write.kind === "bash") {
+      const named = guardedNameIn([write.content, ...shellRead.decoded], write.dialect, sessionCwd, projectRoot);
+      if (named && !onlyReads(write.content, write.dialect)) {
+        emit({
+          permissionDecision: confirmOrDeny,
+          permissionDecisionReason:
+            `${TAG} This command names ${safeEchoPath(named, 60)}, part of Guardian's own enforcement or settings, ` +
+            `and is not a known read-only command. Guardian does not read every shell, interpreter and script ` +
+            `form, so any command that names its files is confirmed by a person. To read them use the Read tool, ` +
+            `cat or Get-Content. Approve only if you asked for it.${bypassNote}`,
+        });
+      }
     }
 
     // ── Which targets are watched? ────────────────────────────────────
