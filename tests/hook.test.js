@@ -661,6 +661,42 @@ describe("PreToolUse hook — an Edit is judged as the file it leaves (1.5.0 rev
   });
 });
 
+describe("PreToolUse hook — a copy into a watched path is judged by what it copies (1.5.0 verify, P1)", () => {
+  const PATCH = `--- a/CLAUDE.md\n+++ b/CLAUDE.md\n@@ -0,0 +1 @@\n+${CRITICAL_PAYLOAD}\n`;
+  const bash = (files, command, mode = "bypassPermissions") => withTempProject((dir) => {
+    for (const [rel, text] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), text);
+    }
+    return runHook(PRE_HOOK, { tool_name: "Bash", cwd: dir, permission_mode: mode, tool_input: { command } });
+  });
+
+  for (const [name, files, command] of [
+    ["cp of a staged file (verifier's case)",   { "notes/x.md": `${CRITICAL_PAYLOAD}\n` }, "cp notes/x.md CLAUDE.md"],
+    ["cat redirect (verifier's case)",          { "notes/x.md": `${CRITICAL_PAYLOAD}\n` }, "cat notes/x.md > CLAUDE.md"],
+    ["append redirect of several files",        { "a.md": "fine\n", "b.md": `${CRITICAL_PAYLOAD}\n` }, "cat a.md b.md >> .planning/STATE.md"],
+    ["input redirect",                          { "notes/x.md": `${CRITICAL_PAYLOAD}\n` }, "sort < notes/x.md > AGENTS.md"],
+    ["pipe into tee",                           { "notes/x.md": `${CRITICAL_PAYLOAD}\n` }, "cat notes/x.md | tee -a CLAUDE.md"],
+    ["mv into a watched directory",             { "tmp/p.md": `${CRITICAL_PAYLOAD}\n` }, "mv tmp/p.md .claude/agents/"],
+    ["git apply (verifier's case)",             { "p.diff": PATCH }, "git apply p.diff"],
+    ["patch -p1",                               { "p.diff": PATCH }, "patch -p1 < p.diff"],
+  ]) {
+    test(`${name} is denied`, () => assert.equal(decisionOf(bash(files, command)), "deny"));
+  }
+
+  test("copying a clean file into a watched path is silent", () => {
+    expectSilent(bash({ "notes/x.md": "Use pnpm.\n" }, "cp notes/x.md CLAUDE.md"));
+  });
+
+  test("copying a file that already matches the destination is not new", () => {
+    expectSilent(bash({ "CLAUDE.md": `Quote: ${CRITICAL_PAYLOAD}\n`, "backup/CLAUDE.md": `Quote: ${CRITICAL_PAYLOAD}\n` }, "cp backup/CLAUDE.md CLAUDE.md"));
+  });
+
+  test("copying a payload to an unwatched path is silent", () => {
+    expectSilent(bash({ "notes/x.md": `${CRITICAL_PAYLOAD}\n` }, "cp notes/x.md backup/x.md"));
+  });
+});
+
 describe("PreToolUse hook — path spelling does not dodge the watch list (1.5.0 verify, P4/P5)", () => {
   const writeTo = (rel, content = CRITICAL_PAYLOAD) => withTempProject((dir) =>
     runHook(PRE_HOOK, { tool_name: "Write", cwd: dir, permission_mode: "bypassPermissions", tool_input: { file_path: `${dir}/${rel}`, content } }));
@@ -891,6 +927,7 @@ describe("PreToolUse hook — self-protection of .claude/settings.json (1.5.0)",
     "git restore src/app.ts",
     "mv notes.txt archive/notes.txt",
     "cp .claude/settings.json /tmp/settings.bak",
+    "cp notes/agent.md .claude/agents/",
     "jq . .claude/settings.json > /tmp/out.json",
   ]) {
     test(`Bash that leaves the settings alone is silent: ${command}`, () => {

@@ -60,7 +60,7 @@
 //   the self-protection below guards.
 // ============================================================
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -231,6 +231,33 @@ function readCurrent(absPath) {
   }
 }
 
+/**
+ * The text of a file a shell command copies from, or "" when it is not a
+ * readable regular file (a directory, a glob, a variable, a missing path).
+ * Read up to the scanner's limit; anything past it is not judged.
+ */
+const MAX_SOURCE_BYTES = 1_000_000;
+function readSource(absPath) {
+  try {
+    if (!statSync(absPath, { throwIfNoEntry: false })?.isFile()) return "";
+    const fd = openSync(absPath, "r");
+    try {
+      const buf = Buffer.alloc(MAX_SOURCE_BYTES);
+      return buf.toString("utf8", 0, readSync(fd, buf, 0, MAX_SOURCE_BYTES, 0));
+    } finally {
+      closeSync(fd);
+    }
+  } catch (err) {
+    process.stderr.write(`${TAG} could not read copy source ${absPath} (${err?.message ?? "unknown"}).\n`);
+    return "";
+  }
+}
+
+/** The lines a unified diff adds, without their "+" marker. */
+function addedLines(diff) {
+  return diff.split("\n").filter((l) => l.startsWith("+") && !l.startsWith("+++")).map((l) => l.slice(1)).join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // BASH: which paths a command writes
 // ---------------------------------------------------------------------------
@@ -257,6 +284,8 @@ const INTERPRETERS      = new Set(["node", "deno", "bun", "python", "python3", "
 const INLINE_CODE_FLAGS = new Set(["-c", "-e", "-p", "-r", "--eval", "--print", "-command", "-Command"]);
 const COPY_COMMANDS     = new Set(["cp", "mv", "install", "ln", "rsync", "scp"]);
 const DELETE_COMMANDS   = new Set(["rm", "unlink", "truncate", "shred"]);
+// Commands whose stdout is (a selection of) the files they read.
+const CONTENT_PASSERS   = new Set(["cat", "tac", "head", "tail", "sort", "uniq", "nl", "paste", "cut", "grep", "egrep", "fgrep", "sed", "awk", "type", "more"]);
 const MAX_SHELL_DEPTH   = 4;
 
 /** Index just past the ")" that closes a "$(" opened before `from`. */
@@ -368,51 +397,81 @@ function pathLikeWords(text) {
 }
 
 /**
- * Absolute paths a shell command writes, including deletes.
+ * Paths a shell command writes (deletes included), each with the files
+ * whose content it puts there, so a copy is judged by what it copies.
+ *
  * @param {string} command
  * @param {string} cwd - the session's working directory
+ * @returns {Map<string, { sources: Set<string>, append: boolean }>}
+ *   absolute target -> absolute source files. A source prefixed "patch:"
+ *   is a patch file, of which only the added lines land. `append` is true
+ *   when the write adds to the file (>>, tee -a, a patch) instead of
+ *   replacing it.
  */
 function shellWriteTargets(command, cwd, depth = 0) {
-  const targets = new Set();
+  const targets = new Map();
   if (depth > MAX_SHELL_DEPTH) return targets;
-  const add = (dir, p) => {
+  const abs = (dir, p) => path.resolve(dir, p.replace(/^~(?=$|[\\/])/, os.homedir())).replace(/\\/g, "/");
+  const add = (dir, p, sources = [], append = false) => {
     if (!p || p === "-" || /^&?\d+$/.test(p)) return;
-    const expanded = p.replace(/^~(?=$|[\\/])/, os.homedir());
-    targets.add(path.resolve(dir, expanded).replace(/\\/g, "/"));
+    const key = abs(dir, p);
+    const entry = targets.get(key) ?? { sources: new Set(), append: false };
+    for (const s of sources) entry.sources.add(s);
+    entry.append ||= append;
+    targets.set(key, entry);
   };
   const recurse = (text, dir) => {
-    for (const t of shellWriteTargets(text, dir, depth + 1)) targets.add(t);
+    for (const [key, entry] of shellWriteTargets(text, dir, depth + 1)) {
+      const mine = targets.get(key) ?? { sources: new Set(), append: false };
+      for (const s of entry.sources) mine.sources.add(s);
+      mine.append ||= entry.append;
+      targets.set(key, mine);
+    }
   };
+  const ctx = { add, abs, recurse };
 
   const { tokens, subs } = lexShell(command);
   for (const sub of subs) recurse(sub, cwd);
 
   let dir = cwd;
   let words = [];
-  const finish = () => {
-    dir = commandWrites(words, dir, add, recurse);
+  let writes = [];   // [{ word, append }] from > and >> redirections
+  let reads = [];    // files read through <
+  let pipeIn = [];   // sources whose content arrives on stdin through a pipe
+  const finish = (op) => {
+    const stage = commandWrites(words, dir, ctx, { pipeIn, reads: reads.map((r) => abs(dir, r)) });
+    for (const w of writes) add(dir, w.word, stage.out, w.append);
+    dir = stage.dir;
+    pipeIn = op === "|" || op === "|&" ? stage.out : [];
     words = [];
+    writes = [];
+    reads = [];
   };
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i];
     if (tok.word !== undefined) words.push(tok.word);
-    else if (CONTROL_OPERATORS.has(tok.op)) finish();
+    else if (CONTROL_OPERATORS.has(tok.op)) finish(tok.op);
     else if (WRITE_REDIRECTS.has(tok.op) || READ_REDIRECTS.has(tok.op)) {
       const next = tokens[i + 1];
       if (next?.word === undefined) continue;
       i++;
-      if (WRITE_REDIRECTS.has(tok.op)) add(dir, next.word);
+      if (WRITE_REDIRECTS.has(tok.op)) writes.push({ word: next.word, append: tok.op === ">>" || tok.op === "&>>" });
+      if (tok.op === "<" || tok.op === "<>") reads.push(next.word);
     }
   }
-  finish();
+  finish(null);
   return targets;
 }
 
 /**
  * Records what one simple command writes.
- * @returns {string} the working directory for the commands after it
+ * @param {{ pipeIn: string[], reads: string[] }} input - sources of its stdin
+ * @returns {{ dir: string, out: string[] }} the working directory for the
+ *   commands after it, and the sources whose content its stdout carries
  */
-function commandWrites(allWords, dir, add, recurse) {
+function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
+  const { add, abs, recurse } = ctx;
+  const stdin = [...input.pipeIn, ...input.reads];
   let words = allWords.filter((w) => w !== "");
   while (words.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) words = words.slice(1);
   while (words.length > 0 && COMMAND_WRAPPERS.has(commandName(words[0]))) {
@@ -421,14 +480,17 @@ function commandWrites(allWords, dir, add, recurse) {
     while (words.length > 0 && (words[0].startsWith("-") || (wrapper === "env" && words[0].includes("=")))) words = words.slice(1);
     if (wrapper === "timeout" && words.length > 1) words = words.slice(1); // the duration
   }
-  if (words.length === 0) return dir;
+  if (words.length === 0) return { dir, out: stdin };
 
   const name = commandName(words[0]);
   const args = words.slice(1);
   const operands = args.filter((a) => !a.startsWith("-"));
+  // A command that copies what it reads to stdout (cat, sort, head...)
+  // carries its file operands' content; any other carries its stdin's.
+  const out = CONTENT_PASSERS.has(name) ? [...stdin, ...operands.map((p) => abs(dir, p))] : stdin;
 
   if (name === "cd" || name === "pushd") {
-    return operands[0] && operands[0] !== "-" ? path.resolve(dir, operands[0].replace(/^~(?=$|[\\/])/, os.homedir())) : dir;
+    return { dir: operands[0] && operands[0] !== "-" ? abs(dir, operands[0]) : dir, out };
   }
   if (SHELLS.has(name)) {
     const flag = args.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a));
@@ -439,9 +501,12 @@ function commandWrites(allWords, dir, add, recurse) {
     const exec = args.findIndex((a) => /^-(?:exec|execdir|ok|okdir)$/.test(a));
     if (exec >= 0) {
       const end = args.findIndex((a, k) => k > exec && (a === ";" || a === "+"));
-      commandWrites(args.slice(exec + 1, end < 0 ? args.length : end), dir, add, recurse);
+      commandWrites(args.slice(exec + 1, end < 0 ? args.length : end), dir, ctx);
     }
-  } else if (name === "tee" || DELETE_COMMANDS.has(name)) {
+  } else if (name === "tee") {
+    const append = args.some((a) => /^-[a-z]*a/.test(a) || a === "--append");
+    for (const p of operands) add(dir, p, stdin, append);
+  } else if (DELETE_COMMANDS.has(name)) {
     for (const p of operands) add(dir, p);
   } else if ((name === "sed" || name === "perl" || name === "ruby") && args.some((a) => /^-[a-zA-Z]*i/.test(a) || a.startsWith("--in-place"))) {
     for (const p of operands) add(dir, p);
@@ -453,13 +518,20 @@ function commandWrites(allWords, dir, add, recurse) {
     const inline = args.find((a) => a.startsWith("--target-directory="));
     const dest = inline ? inline.split("=")[1] : t >= 0 ? args[t + 1] : operands[operands.length - 1];
     const sources = operands.filter((p) => p !== dest);
-    add(dir, dest);
-    for (const src of sources) add(dir, `${dest}/${path.basename(src)}`);
+    // Into a directory each source keeps its name; onto a file the sources replace it.
+    const intoDir = Boolean(inline) || t >= 0 || sources.length > 1 || /[\\/]$/.test(dest ?? "")
+      || Boolean(dest && statSync(abs(dir, dest), { throwIfNoEntry: false })?.isDirectory());
+    if (intoDir) for (const src of sources) add(dir, `${dest}/${path.basename(src)}`, [abs(dir, src)]);
+    else add(dir, dest, sources.map((s) => abs(dir, s)));
     if (name === "mv") for (const src of sources) add(dir, src); // a moved file is gone from its old path
   } else if (name === "git") {
-    gitWrites(args, dir, add);
+    gitWrites(args, dir, ctx);
+  } else if (name === "patch") {
+    const file = args.findIndex((a) => a === "-i" || a === "--input");
+    const patches = file >= 0 && args[file + 1] ? [abs(dir, args[file + 1])] : input.reads;
+    for (const p of patches) patchWrites(p, dir, ctx);
   } else if (name === "dd") {
-    for (const a of args) if (a.startsWith("of=")) add(dir, a.slice(3));
+    for (const a of args) if (a.startsWith("of=")) add(dir, a.slice(3), [...stdin, ...args.filter((x) => x.startsWith("if=")).map((x) => abs(dir, x.slice(3)))]);
   } else if (name === "curl" || name === "wget") {
     const outFlag = name === "curl" ? /^(?:-[a-zA-Z]*o|--output)$/ : /^(?:-[a-zA-Z]*O|--output-document)$/;
     args.forEach((a, k) => {
@@ -467,7 +539,17 @@ function commandWrites(allWords, dir, add, recurse) {
       else if (/^--output(?:-document)?=/.test(a)) add(dir, a.slice(a.indexOf("=") + 1));
     });
   }
-  return dir;
+  return { dir, out };
+}
+
+/**
+ * The files a unified diff writes, from its "+++ " lines, each with the
+ * patch as its source. The usual "b/" prefix is dropped (git apply, patch -p1).
+ */
+function patchWrites(patchFile, dir, ctx) {
+  for (const m of readSource(patchFile).matchAll(/^\+\+\+ (?:[ab]\/)?([^\t\n]+)/gm)) {
+    if (m[1] !== "/dev/null") ctx.add(dir, m[1].trim(), [`patch:${patchFile}`], true);
+  }
 }
 
 /**
@@ -475,7 +557,8 @@ function commandWrites(allWords, dir, add, recurse) {
  * restore of paths, rm, mv. A branch switch, reset, stash or merge also
  * rewrites files, but which ones is not visible in the command.
  */
-function gitWrites(args, dir, add) {
+function gitWrites(args, dir, ctx) {
+  const add = ctx.add;
   let i = 0;
   let cwd = dir;
   while (i < args.length && args[i].startsWith("-")) {
@@ -499,6 +582,8 @@ function gitWrites(args, dir, add) {
     }
   } else if (sub === "rm" || sub === "mv") {
     paths = operands(dashes >= 0 ? rest.filter((_, k) => k !== dashes) : rest);
+  } else if (sub === "apply" || sub === "am") {
+    for (const p of operands(rest)) patchWrites(ctx.abs(cwd, p), cwd, ctx);
   }
   for (const p of paths) add(cwd, p);
 }
@@ -763,7 +848,8 @@ process.stdin.on("end", () => {
 
     // Paths a Bash command writes, resolved against the session cwd.
     const sessionCwd = (typeof data.cwd === "string" && data.cwd) || projectRoot;
-    const bashWrites = write.kind === "bash" ? [...shellWriteTargets(write.content, sessionCwd)] : [];
+    const bashTargets = write.kind === "bash" ? shellWriteTargets(write.content, sessionCwd) : new Map();
+    const bashWrites = [...bashTargets.keys()];
 
     // ── Self-protection: settings changes that weaken Guardian ────────
     const isSettings = (p) => SETTINGS_FILE_PATTERN.test(canonicalPath(p));
@@ -806,6 +892,35 @@ process.stdin.on("end", () => {
     const written = bashWrites.filter(isWatched);
     const watched = [...written, ...write.targets.filter(isWatched)];
     if (watched.length === 0) process.exit(0);
+
+    // ── Content a shell command copies into a watched file ────────────
+    // cp, cat > file, tee, git apply: the payload is in the source file,
+    // not in the command text, so the sources are read and judged the
+    // way a Write of the result would be.
+    for (const target of written) {
+      const { sources, append } = bashTargets.get(target);
+      if (sources.size === 0) continue;
+      const incoming = [...sources]
+        .map((s) => (s.startsWith("patch:") ? addedLines(readSource(s.slice(6))) : readSource(s)))
+        .join("\n");
+      if (!incoming.trim()) continue;
+      const before = readSource(canonicalPath(target)).replace(/\r\n/g, "\n");
+      const after = append ? `${before}\n${incoming}` : incoming;
+      const found = scanChange(before, after.replace(/\r\n/g, "\n"), "injection").violations;
+      if (!found.some((v) => v.severity === "CRITICAL")) continue;
+      const details = found.map((v) => `${v.severity} ${v.id} matched "${safeEcho(v.matched)}"`).join(" | ");
+      process.stderr.write(`${TAG} blocked ${toolName} copying into ${safeEcho(target, 160)}: ${details}\n`);
+      emit({
+        permissionDecision: "deny",
+        permissionDecisionReason:
+          `⚠️  ${TAG} PROMPT INJECTION BLOCKED (content copied by a shell command)\n` +
+          `    Target   : ${safeEcho(target, 160)}\n` +
+          `    Sources  : ${safeEcho([...sources].map((s) => path.basename(s)).join(", "), 160)}\n` +
+          `    Details  : ${details}\n` +
+          `    Action   : Denied, as a Write of the same content would be. Do not retry through another\n` +
+          `               route. Tell the user what was blocked.`,
+      });
+    }
 
     // A file write is judged by what it adds to the text on disk:
     //   Write             the new content replaces the file.

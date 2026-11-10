@@ -35,6 +35,16 @@ project (each project picks it up when `guardian update` is run there).
   counts only when the change adds a matched string that was not there
   before, view by view (plain, decoded, folded). A second copy of an
   already-quoted pattern is still new.
+- **A shell copy is judged by what it copies (verification P1).** Writing a
+  payload to an unwatched file and then `cp notes/x.md CLAUDE.md`,
+  `cat x > CLAUDE.md` or `git apply p.diff` was allowed: the command text
+  carried nothing to scan. The hook now reads the files whose content a
+  command puts in a watched file (`cp`/`mv`/`install` sources, the
+  operands of `cat`/`sort`/`head`-style commands under a redirect, `<`
+  input, content piped into `tee`, `dd if=`, and the added lines of a
+  patch for the files it names) and denies a CRITICAL finding the same way
+  a Write would. A replace is compared as the new file, an append as the
+  old file plus the new text.
 - **Bash can no longer undo the settings protection by removing the
   folder (verification P2).** `rm -rf .claude`, `mv .claude .claude-old`
   and `git checkout HEAD~3 -- .claude/settings.json` were allowed, because
