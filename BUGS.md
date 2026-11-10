@@ -13,7 +13,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | ID | Status | Summary |
 |---|---|---|
 | BUG-001 | RESOLVED | `INJ-005b` fires CRITICAL on any template literal containing a SQL-looking word, including `window.confirm` and JSX labels |
-| BUG-002 | OPEN | Audit has zero rules covering what AI agents can write to, despite the README claiming AI-attack coverage |
+| BUG-002 | IN-PROGRESS | Audit has zero rules covering what AI agents can write to, despite the README claiming AI-attack coverage |
 | BUG-003 | RESOLVED | `INJ-003` fires HIGH on stock shadcn `chart.jsx`: the rule is right; the fix is a per-rule allowlist entry |
 | BUG-004 | RESOLVED | Planned rule id `DEP-001` for npm version drift collides with the existing `DEP-001` health-check rule |
 | BUG-005 | DEFERRED | No detection of `setTimeout`-before-query race conditions (planned `RACE-001`) |
@@ -163,7 +163,7 @@ Original proposal in `HANDOFF-AUDIT-IMPROVEMENTS.md` § Item 1.
 
 ### BUG-002 - No audit coverage of AI agent write permissions
 
-**Status:** OPEN
+**Status:** IN-PROGRESS
 **Found:** 2026-07-20 (originally observed 2026-04-27)
 **Area:** `security/03-audit.js` - missing rule, planned as `AGT-001`
 
