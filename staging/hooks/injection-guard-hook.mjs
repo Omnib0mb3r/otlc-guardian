@@ -386,6 +386,32 @@ function addCopy(dir, ctx, src, dest, { intoDir, recursive, slashMeansContents }
   for (const rel of tree) add(dir, `${base}/${rel}`, [abs(dir, `${folder}/${rel}`)]);
 }
 
+/**
+ * robocopy SRC DEST [files...] and xcopy SRC DEST, judged like cp: each
+ * file lands where it would and is judged by its content (re-probe 2,
+ * S5). robocopy always copies the contents of SRC (every level with /E,
+ * /S or /MIR; its file filters are not applied, so every file is judged);
+ * /MIR and /PURGE remove what SRC lacks, so DEST itself is written, and
+ * /MOV and /MOVE remove SRC. xcopy copies a folder's contents (every level
+ * with /S or /E), or one file onto DEST, or into it when DEST is a folder,
+ * ends in a separator or /I is given.
+ */
+function winCopyWrites(name, args, dir, ctx) {
+  const switches = args.filter((a) => WIN_COPY_SWITCH.test(a)).map((a) => a.replace(/^\/\/?/, "").toUpperCase());
+  const [src, dest] = args.filter((a) => !WIN_COPY_SWITCH.test(a));
+  if (!src || !dest) return;
+  const has = (...s) => switches.some((w) => s.includes(w.split(":")[0]));
+  const recursive = has("E", "S", "MIR");
+  const isDir = (p) => Boolean(statSync(ctx.abs(dir, p), { throwIfNoEntry: false })?.isDirectory());
+  if (name === "robocopy" || isDir(src)) {
+    addCopy(dir, ctx, `${src.replace(/[\\/]+$/, "")}/*`, dest, { intoDir: false, recursive });
+  } else {
+    addCopy(dir, ctx, src, dest, { intoDir: has("I") || /[\\/]$/.test(dest) || isDir(dest), recursive: false });
+  }
+  if (name === "robocopy" && has("MIR", "PURGE")) ctx.add(dir, dest);
+  if (name === "robocopy" && has("MOV", "MOVE")) ctx.add(dir, src);
+}
+
 /** The lines a unified diff adds, without their "+" marker. */
 function addedLines(diff) {
   return diff.split("\n").filter((l) => l.startsWith("+") && !l.startsWith("+++")).map((l) => l.slice(1)).join("\n");
@@ -417,6 +443,22 @@ const INTERPRETERS      = new Set(["node", "deno", "bun", "python", "python3", "
 const INLINE_CODE_FLAGS = new Set(["-c", "-e", "-p", "-r", "--eval", "--print"]);
 const POWERSHELLS       = new Set(["powershell", "pwsh"]);
 const COPY_COMMANDS     = new Set(["cp", "mv", "install", "ln", "rsync", "scp"]);
+// Options of the copy commands that take the next word as their value
+// (spelled "--opt=value" they take none), so the value is not read as a
+// source: "install -m 644 a CLAUDE.md" copies a, not 644 (re-probe 2, S5).
+const COPY_VALUE_OPTIONS = {
+  cp: ["-S", "--suffix"],
+  mv: ["-S", "--suffix"],
+  ln: ["-S", "--suffix"],
+  install: ["-m", "--mode", "-o", "--owner", "-g", "--group", "-S", "--suffix"],
+  rsync: ["-e", "--rsh", "-f", "--filter", "--exclude", "--include", "--exclude-from", "--include-from", "--files-from",
+    "--chmod", "--chown", "-T", "--temp-dir", "--backup-dir", "--partial-dir", "--compare-dest", "--copy-dest", "--link-dest",
+    "--log-file", "--password-file", "-B", "--block-size", "--port", "--timeout", "--bwlimit", "--max-size", "--min-size",
+    "--suffix", "--rsync-path", "-M", "--remote-option"],
+  scp: ["-P", "-i", "-o", "-F", "-c", "-l", "-S", "-J"],
+};
+// robocopy and xcopy switches: "/E", "/MIR", "/R:3", and "//E" from Git Bash.
+const WIN_COPY_SWITCH = /^\/\/?[A-Za-z?][\w:+-]*$/;
 const DELETE_COMMANDS   = new Set(["rm", "unlink", "truncate", "shred"]);
 // Commands that change who may read a file; every operand counts as written.
 const METADATA_COMMANDS = new Set(["chmod", "chown", "chgrp", "chattr", "setfacl", "icacls", "cacls", "takeown"]);
@@ -1092,22 +1134,28 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   } else if (COPY_COMMANDS.has(name)) {
     const t = args.findIndex((a) => a === "-t" || a === "--target-directory");
     const inline = args.find((a) => a.startsWith("--target-directory="));
-    const dest = inline ? inline.split("=")[1] : t >= 0 ? args[t + 1] : operands[operands.length - 1];
-    const sources = operands.filter((p) => p !== dest);
+    const valued = new Set(COPY_VALUE_OPTIONS[name] ?? []);
+    const paths = args.filter((a, k) => !a.startsWith("-") && !valued.has(args[k - 1]));
+    const dest = inline ? inline.split("=")[1] : t >= 0 ? args[t + 1] : paths[paths.length - 1];
+    const sources = paths.filter((p) => p !== dest);
     // Into a directory each source keeps its name; onto a file the sources replace it.
     const intoDir = Boolean(inline) || t >= 0 || sources.length > 1 || /[\\/]$/.test(dest ?? "")
       || Boolean(dest && statSync(abs(dir, dest), { throwIfNoEntry: false })?.isDirectory());
     const recursive = name === "mv" || args.some((a) => /^-[a-zA-Z]*[rRa]/.test(a) || a === "--recursive" || a === "--archive");
     if (dest) {
       for (const src of sources) {
-        // rsync always puts a folder under the destination, by name unless "src/".
-        addCopy(dir, ctx, src, dest, { intoDir: intoDir || name === "rsync", recursive, slashMeansContents: name === "rsync" });
+        // rsync always puts a folder under the destination, by name unless
+        // "src/"; a single file onto a path that is not a folder replaces it.
+        const folder = name === "rsync" && Boolean(statSync(abs(dir, src), { throwIfNoEntry: false })?.isDirectory());
+        addCopy(dir, ctx, src, dest, { intoDir: intoDir || folder, recursive, slashMeansContents: name === "rsync" });
       }
     }
     if (name === "mv") for (const src of sources) add(dir, src); // a moved file is gone from its old path
     // "rsync src/ dest" fills dest with the contents of src, and --delete
     // removes what src lacks, so the destination itself is written (BUG-065).
     if (name === "rsync" && dest) add(dir, dest);
+  } else if (name === "robocopy" || name === "xcopy") {
+    winCopyWrites(name, args, dir, ctx);
   } else if (name === "git") {
     gitWrites(args, dir, ctx);
   } else if (name === "patch") {

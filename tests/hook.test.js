@@ -1640,6 +1640,42 @@ describe("PreToolUse hook - copies of folders and sort/uniq outputs are judged b
     });
   }
 
+  // Re-probe 2, S5: robocopy, xcopy, install and single-file rsync.
+  const TOP = { "staged/a.md": `${CRITICAL_PAYLOAD}\n` };
+  const NOTE = { "notes/x.md": `${CRITICAL_PAYLOAD}\n` };
+  for (const [tool, command, files, existing] of [
+    ["PowerShell", "robocopy staged .claude\\agents /E", BAD, []],
+    ["Bash", "robocopy staged .claude/agents //E", BAD, []],
+    ["PowerShell", "robocopy staged .claude\\agents", TOP, []],
+    ["PowerShell", "robocopy staged .planning *.md /S", TOP, [".planning"]],
+    ["Bash", `cmd /c "xcopy staged .claude\\agents /E /I"`, BAD, []],
+    ["PowerShell", "xcopy staged\\a.md CLAUDE.md", TOP, []],
+    ["PowerShell", "xcopy staged .claude\\agents\\ /S", BAD, []],
+    ["Bash", "install -m 644 notes/x.md CLAUDE.md", NOTE, []],
+    ["Bash", "install -D --mode=0644 -o root notes/x.md .planning/STATE.md", NOTE, []],
+    ["Bash", "rsync notes/x.md CLAUDE.md", NOTE, []],
+    ["Bash", "rsync -av --chmod=644 notes/x.md AGENTS.md", NOTE, []],
+  ]) {
+    stagedOnly(`${tool}: a copy carrying a payload is denied (S5): ${command}`, () => {
+      const out = run(tool, command, files, existing);
+      assert.equal(decisionOf(out), "deny", out.slice(0, 200));
+    });
+  }
+  for (const command of ["robocopy empty .claude /MIR", "robocopy .claude backup /MOVE /E"]) {
+    stagedOnly(`PowerShell: ${command} asks (S5)`, () => {
+      const out = run("PowerShell", command, { ".claude/settings.json": "{}", "empty/.keep": "" });
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    });
+  }
+  for (const [tool, command, files] of [
+    ["PowerShell", "robocopy staged backup /E", BAD],
+    ["Bash", "install -m 755 notes/x.md bin/x", NOTE],
+    ["Bash", "rsync notes/x.md notes/y.md", NOTE],
+    ["PowerShell", "robocopy staged .claude\\agents", BAD],
+  ]) {
+    test(`${tool}: silent (S5): ${command}`, () => expectSilent(run(tool, command, files)));
+  }
+
   test("a folder copy past the file cap into an unwatched path stays silent (S1)", () => {
     expectSilent(run("Bash", "cp -r big/. backup/", many));
   });

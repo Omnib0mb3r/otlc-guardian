@@ -201,6 +201,18 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **robocopy, xcopy, `install` and single-file `rsync` are judged by
+  what they copy (BUG-066, BUG-048, re-probe 2 S5).** `robocopy staged
+  .claude\agents /E` and `cmd /c "xcopy staged .claude\agents /E /I"` had
+  no reader; `install -m 644 notes/x.md CLAUDE.md` read `644` as a
+  source and `rsync notes/x.md CLAUDE.md` put the file under
+  `CLAUDE.md/`, so each copied a payload silently. robocopy and xcopy now
+  record each file where it lands (robocopy `/MIR`, `/PURGE`, `/MOV`,
+  `/MOVE` also write the destination or the source); the copy commands
+  skip the values of their value-taking options; rsync copies a single
+  file onto a destination that is not a folder. `xargs cp` builds its
+  arguments at run time and stays out of reach (SECURITY.md).
+
 - **PowerShell host options in slash form are read (BUG-067, re-probe 2
   S3).** Windows PowerShell takes `/enc`, `/EncodedCommand` and `/c` as
   it takes `-enc`, so `powershell /enc <base64>` ran a payload or a
