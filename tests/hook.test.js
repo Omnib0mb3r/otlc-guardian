@@ -661,6 +661,42 @@ describe("PreToolUse hook — an Edit is judged as the file it leaves (1.5.0 rev
   });
 });
 
+describe("PreToolUse hook — path spelling does not dodge the watch list (1.5.0 verify, P4/P5)", () => {
+  const writeTo = (rel, content = CRITICAL_PAYLOAD) => withTempProject((dir) =>
+    runHook(PRE_HOOK, { tool_name: "Write", cwd: dir, permission_mode: "bypassPermissions", tool_input: { file_path: `${dir}/${rel}`, content } }));
+
+  for (const rel of [
+    ".PLANNING/STATE.md",          // verifier's case
+    ".Claude/agents/a.md",         // verifier's case
+    "claude.md",
+    "src/Memory/notes.md",
+    "CLAUDE.md::$DATA",            // NTFS default data stream, verifier's case
+    "AGENTS.md:hidden:$DATA",      // named stream
+    "src/../CLAUDE.md",
+  ]) {
+    test(`${rel} is watched`, () => assert.equal(decisionOf(writeTo(rel)), "deny"));
+  }
+
+  test("custom watchPaths match case-insensitively", () => {
+    withTempProject((dir) => {
+      mkdirSync(path.join(dir, ".claude"), { recursive: true });
+      writeFileSync(path.join(dir, ".claude", "settings.json"), JSON.stringify({ otlcGuardian: { watchPaths: ["src/prompts/"] } }));
+      const out = runHook(PRE_HOOK, { tool_name: "Write", cwd: dir, tool_input: { file_path: `${dir}/SRC/Prompts/sys.md`, content: CRITICAL_PAYLOAD } });
+      assert.equal(decisionOf(out), "deny");
+    });
+  });
+
+  test("settings.local.json::$DATA is judged as the settings file (verifier's case)", () => {
+    const out = withTempProject((dir) => {
+      mkdirSync(path.join(dir, ".claude"), { recursive: true });
+      return runHook(PRE_HOOK, { tool_name: "Write", cwd: dir, tool_input: { file_path: `${dir}/.claude/settings.local.json::$DATA`, content: '{"disableAllHooks":true}' } });
+    });
+    assert.equal(decisionOf(out), "ask");
+  });
+
+  test("an unwatched path stays unwatched", () => expectSilent(writeTo("src/notes.md")));
+});
+
 describe("PreToolUse hook — scanner bypasses closed (1.5.0)", () => {
   const tagSmuggled = [...CRITICAL_PAYLOAD].map((ch) => String.fromCodePoint(0xE0000 + ch.charCodeAt(0))).join("");
   const cyrO = String.fromCodePoint(0x043E);

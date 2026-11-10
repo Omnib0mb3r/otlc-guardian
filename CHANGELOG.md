@@ -35,6 +35,14 @@ project (each project picks it up when `guardian update` is run there).
   counts only when the change adds a matched string that was not there
   before, view by view (plain, decoded, folded). A second copy of an
   already-quoted pattern is still new.
+- **Path spelling no longer dodges the watch list (verification P4, P5).**
+  Matching was case-sensitive, so `.PLANNING/STATE.md` and
+  `.Claude/agents/a.md` were not watched on Windows, where they are the
+  same files; and an NTFS stream suffix (`CLAUDE.md::$DATA`) slipped past
+  the end-anchored file patterns. Paths are now canonicalized (slashes,
+  `..`, stream suffix) and matched without case. `ignorePaths` matches
+  without case only on Windows and macOS, so an exemption never covers a
+  different file on a case-sensitive file system.
 - **An Edit is judged as the file it leaves (review finding 5).** Only
   `new_string` was scanned, so a payload split between the file and the
   edit, or between two edits, or joined by deleting the text between its

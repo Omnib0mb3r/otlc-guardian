@@ -157,15 +157,36 @@ function loadSettings(projectRoot) {
 // PATH MATCHING
 // ---------------------------------------------------------------------------
 
+/**
+ * The file a path names, spelled one way: forward slashes, `..` and `.`
+ * collapsed, and an NTFS stream suffix removed ("CLAUDE.md::$DATA" and
+ * "CLAUDE.md:x:$DATA" are CLAUDE.md to the reader that matters). A drive
+ * letter ("C:") is not a stream.
+ */
+function canonicalPath(p) {
+  const slashed = String(p).replace(/\\/g, "/");
+  const unstreamed = slashed.replace(/(^|\/)([^/:]+):[^/]*$/, (whole, sep, name) =>
+    sep === "" && /^[A-Za-z]$/.test(name) ? whole : `${sep}${name}`);
+  return path.posix.normalize(unstreamed);
+}
+
+// Windows and macOS file systems ignore case by default, so ".Claude" is
+// ".claude" there. The watch list always matches without case (watching a
+// differently cased folder on Linux costs nothing); an exemption only does
+// where the file system would agree, so it never covers a different file.
+const CASE_INSENSITIVE_FS = process.platform === "win32" || process.platform === "darwin";
+const watchKey  = (p) => canonicalPath(p).toLowerCase();
+const exemptKey = (p) => (CASE_INSENSITIVE_FS ? canonicalPath(p).toLowerCase() : canonicalPath(p));
+
 function isWatchedPath(filePath, settings) {
-  const normalized = filePath.replace(/\\/g, "/");
+  const normalized = watchKey(filePath);
 
   const customDirs = Array.isArray(settings.watchPaths) ? settings.watchPaths : [];
   for (const raw of customDirs) {
     if (typeof raw !== "string" || !raw) continue;
     const trimmed = raw.replace(/[\\/]+$/, "");
     const isDirStyle = /[\\/]/.test(raw); // a separator anywhere means "directory"
-    const normP = trimmed.replace(/\\/g, "/");
+    const normP = trimmed.replace(/\\/g, "/").toLowerCase();
     if (!normP) continue;
     if (isDirStyle) {
       if (normalized.includes(`${normP}/`) || normalized.endsWith(normP)) return true;
@@ -186,11 +207,12 @@ function isWatchedPath(filePath, settings) {
 }
 
 function isIgnoredPath(filePath, settings) {
-  const normalized = filePath.replace(/\\/g, "/");
+  const normalized = exemptKey(filePath);
   const ignored = Array.isArray(settings.ignorePaths) ? settings.ignorePaths : [];
   for (const p of ignored) {
     if (typeof p !== "string" || !p) continue; // an empty entry would match every path
-    if (normalized.includes(p.replace(/\\/g, "/"))) return true;
+    const entry = p.replace(/\\/g, "/");
+    if (normalized.includes(CASE_INSENSITIVE_FS ? entry.toLowerCase() : entry)) return true;
   }
   return false;
 }
@@ -688,7 +710,10 @@ process.stdin.on("end", () => {
     // last resort; it is wrong whenever the session has changed directory.
     const projectRoot = process.env.CLAUDE_PROJECT_DIR || (typeof data.cwd === "string" && data.cwd) || process.cwd();
     const settings    = loadSettings(projectRoot);
-    const resolve     = (p) => (path.isAbsolute(p) ? p : path.resolve(projectRoot, p));
+    const resolve     = (p) => {
+      const file = canonicalPath(p);
+      return path.isAbsolute(file) ? file : path.resolve(projectRoot, file);
+    };
 
     // "ask" means a person confirms. In bypassPermissions mode the user
     // has switched confirmation prompts off, so there is nobody to ask and
@@ -705,7 +730,7 @@ process.stdin.on("end", () => {
     const bashWrites = write.kind === "bash" ? [...shellWriteTargets(write.content, sessionCwd)] : [];
 
     // ── Self-protection: settings changes that weaken Guardian ────────
-    const isSettings = (p) => SETTINGS_FILE_PATTERN.test(p.replace(/\\/g, "/"));
+    const isSettings = (p) => SETTINGS_FILE_PATTERN.test(canonicalPath(p));
     if (write.kind === "file" && isSettings(write.targets[0])) {
       const target = resolve(write.targets[0]);
       const reasons = settingsWeakening(target, settingsAfter(toolName, toolInput, target));
