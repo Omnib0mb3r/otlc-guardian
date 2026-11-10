@@ -1292,7 +1292,14 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
   if (dialect === "powershell") {
     // [IO.File]::WriteAllText('CLAUDE.md', ...): the path is an argument
     // of a .NET call, so every path-like word in the call counts.
-    for (const m of command.matchAll(DOTNET_FILE_WRITE)) for (const p of pathLikeWords(m[1])) add(cwd, p);
+    // Copy and Move put the first path's content at the second (re-probe 3, D1).
+    for (const m of command.matchAll(DOTNET_FILE_WRITE)) {
+      const paths = pathLikeWords(m[2]);
+      if (/^(?:copy|move)$/i.test(m[1]) && paths.length >= 2) {
+        add(cwd, paths[1], [abs(cwd, paths[0])]);
+        if (/^move$/i.test(m[1])) add(cwd, paths[0]);
+      } else for (const p of paths) add(cwd, p);
+    }
   }
 
   let dir = cwd;
@@ -1312,7 +1319,8 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
     }
     for (const w of writes) add(dir, w.word, stage.out, w.append);
     dir = stage.dir;
-    pipeIn = op === "|" || op === "|&" ? stage.out : [];
+    // A group's output flows on: (Get-Content x) | Set-Content y, (cat a) > b (re-probe 3, D1).
+    pipeIn = op === "|" || op === "|&" || op === ")" ? stage.out : [];
     words = [];
     stageWords = [];
     writes = [];
@@ -1359,8 +1367,10 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   const args = words.slice(1);
   const operands = args.filter((a) => !a.startsWith("-") && !(ctx.dialect === "cmd" && CMD_SWITCH.test(a)));
 
-  // sed deletes and grep: what they write is computed (BUG-044).
-  const lines = ctx.dialect === "cmd" ? null : lineFilter(name, args);
+  // sed deletes and grep: what they write is computed (BUG-044). An empty
+  // grep pattern is an argument too, and passes every line (re-probe 3, D1).
+  const grepArgs = ["grep", "egrep", "fgrep"].includes(name) ? allWords.slice(allWords.indexOf(words[0]) + 1) : args;
+  const lines = ctx.dialect === "cmd" ? null : lineFilter(name, grepArgs);
   if (lines) {
     ctx.quiet.push(...lines.texts);
     if (lines.inPlace) {
@@ -1667,7 +1677,7 @@ function psParam(cmdlet, typed) {
 }
 const PS_DOWNLOADERS = new Set(["invoke-webrequest", "iwr", "invoke-restmethod", "irm", "curl", "wget"]);
 const PS_EVALUATORS  = new Set(["invoke-expression", "iex"]);
-const DOTNET_FILE_WRITE = /\[(?:system\.)?io\.file\]::(?:write|append|create|delete|copy|move|replace)\w*\s*\(([^)]*)\)/gi;
+const DOTNET_FILE_WRITE = /\[(?:system\.)?io\.file\]::((?:write|append|create|delete|copy|move|replace)\w*)\s*\(([^)]*)\)/gi;
 
 /**
  * Named parameters of `cmdlet` (bound with psParam(), comma lists split)

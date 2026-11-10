@@ -2345,6 +2345,39 @@ describe("PreToolUse hook - a command naming a guarded file asks unless it only 
     });
   }
 
+  // D1, second half: copy forms into a watched instruction file the readers
+  // now read, so the payload they carry is judged (T19, T20).
+  const PAYLOAD_NOTE = { "notes/x.md": `${CRITICAL_PAYLOAD}\n` };
+  const runWith = (tool, command, files) => withTempProject((dir) => {
+    for (const [rel, text] of Object.entries({ ".claude/settings.json": "{}", ...files })) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), text);
+    }
+    return runHook(PRE_HOOK, { tool_name: tool, cwd: dir, tool_input: { command } });
+  });
+  for (const [tool, command] of [
+    ["Bash", "grep '' notes/x.md > CLAUDE.md"],
+    ["Bash", `grep -e "" notes/x.md > CLAUDE.md`],
+    ["PowerShell", String.raw`(Get-Content notes\x.md) | Set-Content CLAUDE.md`],
+    ["PowerShell", String.raw`[IO.File]::Copy('notes\x.md', 'CLAUDE.md')`],
+    ["PowerShell", String.raw`[System.IO.File]::Copy("notes/x.md", "AGENTS.md", $true)`],
+  ]) {
+    stagedOnly(`${tool}: a copy of a payload into a watched file is denied (D1): ${command}`, () => {
+      const out = runWith(tool, command, PAYLOAD_NOTE);
+      assert.equal(decisionOf(out), "deny", out.slice(0, 300));
+      expectWarning(out, "GUARD-INJ-001");
+    });
+  }
+  for (const [tool, command] of [
+    ["Bash", "grep '' notes/x.md > CLAUDE.md"],
+    ["PowerShell", String.raw`(Get-Content notes\x.md) | Set-Content CLAUDE.md`],
+    ["PowerShell", String.raw`[IO.File]::Copy('notes\x.md', 'CLAUDE.md')`],
+  ]) {
+    test(`${tool}: the same copy of clean notes is silent (D1): ${command}`, () => {
+      expectSilent(runWith(tool, command, { "notes/x.md": "Use pnpm.\n" }));
+    });
+  }
+
   stagedOnly("the ask names the guarded file and is a deny in bypass mode (D1)", () => {
     const out = run("Bash", `bash <<EOF\nrm -f .claude/settings.json\nEOF`, "bypassPermissions");
     assert.equal(decisionOf(out), "deny", out.slice(0, 300));

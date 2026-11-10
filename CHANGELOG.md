@@ -201,6 +201,13 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Three more copy forms into instruction files are read (BUG-075,
+  re-probe 3 D1).** `grep '' notes.md > CLAUDE.md`, `(Get-Content
+  notes.md) | Set-Content CLAUDE.md` and `[IO.File]::Copy('notes.md',
+  'CLAUDE.md')` copied a payload without it being read. The empty grep
+  pattern is kept, a parenthesized group's output flows into the next
+  pipe or redirect, and a .NET copy or move carries its source's content.
+
 - **A command that names Guardian's files asks unless it only reads
   (BUG-075, re-probe 3 D1).** Three re-probes each found shell forms that
   delete or rewrite the settings, the hook files or the scanner past the
