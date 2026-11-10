@@ -286,6 +286,7 @@
 <li>content encoded or assembled in the shell: <code>printf</code> octal escapes, <code>rev</code>, <code>tr</code> rot13, <code>base64 -d</code>, variable concatenation, words split by quotes (BUG-047);</li>
 <li>git operations that replace files without naming them: branch switches, <code>reset</code>, <code>stash</code>, <code>merge</code> (the <code>gitWrites()</code> comment says so);</li>
 <li>from the code, not in SECURITY.md: non-PowerShell commands typed into the PowerShell tool (<a href="#hk-shell">above</a>), and <code>cmd /c</code>, which no reader handles (both BUG-048, reproduced);</li>
+<li>a payload obfuscated with markdown (<code>ig**no**re all previous instructions</code>) or written as base64, moved from a code fence onto a live line: only the views that keep lines in place tell quoted from live, so the move is not seen, though the same text in a new file is denied (re-probe 2, S7);</li>
 <li>a reworded instruction that matches no known pattern, since detection is pattern-based.</li>
 </ul>
 <p>Two smaller approximations from the code: the directory set by <code>cd</code> inside <code>( ... )</code> carries past the closing parenthesis, and a CRITICAL match anywhere in a command that writes a watched path triggers the ask, even if the match sits in a part of the command that writes elsewhere. An agent that is already compromised can use any of these routes. They are left to the planned hard-no hook, hosted by DevNeural, which judges a command by its effect instead of its text (<code>TODO.md</code>, "Self-Growing Gate spec").</p>

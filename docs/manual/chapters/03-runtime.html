@@ -251,7 +251,7 @@
 
 <h4>Known limits</h4>
 <ul>
-<li><b>Moving is not adding (BUG-042, fix staged in staging/, not yet live).</b> The judgement is a count. Cutting an already-quoted pattern out of a data context (an example block) and pasting it into a live instruction in the same window leaves every count unchanged, so nothing is reported.</li>
+<li><b>Moving is not adding (BUG-042, fix staged in staging/, not yet live).</b> The judgement is a count. Cutting an already-quoted pattern out of a data context (an example block) and pasting it into a live instruction in the same window leaves every count unchanged, so nothing is reported. The staged fix classifies matches only in the views that keep lines in place, so a payload obfuscated with markdown (<code>ig**no**re ...</code>) or written as base64 can still be moved out of a fence silently (re-probe 2, S7; documented, not fixed).</li>
 <li><b>The window can be crossed (BUG-046, fix staged in staging/, not yet live).</b> The multi-word rules allow any run of whitespace between words. If the existing half of a phrase sits more than 2048 characters of whitespace away from the added half, the window cuts the old half off and neither window holds the whole match.</li>
 <li>A new window over 1,000,000 characters always yields <code>GUARD-INJ-OVERSIZE</code> (MEDIUM), which the hook treats as advisory.</li>
 </ul>

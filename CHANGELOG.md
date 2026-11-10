@@ -201,6 +201,14 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Documented: an obfuscated payload moved out of a fence (BUG-042,
+  re-probe 2 S7).** The staged BUG-042 fix classifies a match as data or
+  live only in the views that keep lines in place, so a payload written
+  with markdown inside it (`ig**no**re all previous instructions`) or as
+  base64 can be moved from a code fence onto a live line without a
+  finding; the same text in a new file is denied. Not fixed: listed in
+  SECURITY.md, "What the PreToolUse hook cannot see".
+
 - **A line separator or an empty HTML comment no longer splits a pattern
   (BUG-071, re-probe 2 S11).** U+2028 and U+2029 were in the set of
   invisible characters the scanner deletes, so `ignore\u2028all previous
