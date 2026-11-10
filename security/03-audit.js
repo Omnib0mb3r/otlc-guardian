@@ -687,11 +687,28 @@ const PY_OBJECT_ID_PATTERNS = [
   /\brequest\.(?:args|form|json|query_params|path_params)[\w.]*(?:\.get\s*\(|\[)\s*["']\w*id["']/i,
 ];
 
+// Ownership evidence must tie the object to the authenticated caller.
+// An owner or tenant column on its own proves nothing: `user_id` and
+// `org_id` arrive as path or signature parameters, i.e. from the caller,
+// and `filter(Document.user_id == user_id)` scopes by an attacker-chosen
+// value. A 404 says the row is missing, not whose it is. Both used to
+// count (BUG-030), so a textbook IDOR passed.
+const PY_PRINCIPAL = String.raw`(?:current_user|request\.state\.user|request\.user|g\.user|user|principal|identity|caller)`;
+const PY_OWNER_FIELD = String.raw`(?:owner|user|author|creator|tenant|team|account|customer|org(?:anization)?|workspace|company)(?:_id|Id|_uuid)?`;
+
 const PY_OWNERSHIP_PATTERNS = [
-  ...OWNERSHIP_PATTERNS,
-  /\bcustomer(?:Id|_id)\b/i, /\borg(?:anization)?(?:Id|_id)\b/i, /\bworkspace(?:Id|_id)\b/i,
+  // A column compared with, or bound to, the caller:
+  //   Document.customer_id == user.customer_id, filter_by(owner_id=current_user.id),
+  //   get_object_or_404(Doc, pk=pk, owner=request.user)
+  new RegExp(String.raw`\b${PY_OWNER_FIELD}\s*(?:==|!=|=)\s*${PY_PRINCIPAL}\b(?!_)`),
+  // The caller on the left: `if user.id != doc.owner_id:`
+  new RegExp(String.raw`\b${PY_PRINCIPAL}\.\w+\s*(?:==|!=)`),
+  // Authorization helpers and policy objects.
+  /\bauthorize\w*\s*\(/, /\b(?:can_access|has_access|check_access|ensure_owner|assert_owner|is_owner|require_owner)\w*\s*\(/i,
+  /\bpermission\b/i, /\bmembership\b/i, /\bcollaborator\b/i, /\bassign(?:ment|ed|ee)\b/i, /\brole\b/i,
   /\btenan(?:t|cy)\b/i, /\bscope[ds]?\b/i,
-  /\bstatus_code\s*=\s*40[34]\b/, /\bHTTP_40[34]\w*/, /\babort\s*\(\s*40[34]\b/,
+  // An explicit refusal.
+  /\bforbidden\b/i, /\bPermissionDenied\b/, /\bstatus_code\s*=\s*403\b/, /\bHTTP_403\w*/, /\babort\s*\(\s*403\b/,
 ];
 
 /** Drop `#` comments so a "# TODO: add auth" note does not count as auth. */

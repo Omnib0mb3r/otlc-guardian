@@ -2647,6 +2647,69 @@ describe("BUG-039: DEP-002 reports a .env that git does not keep out", () => {
 });
 
 // ---------------------------------------------------------------------------
+// BUG-030: AUTHZ-013 needs an ownership check tied to the caller
+// ---------------------------------------------------------------------------
+//
+// A 404 says the row is missing, not whose it is, and a user_id or org_id
+// path parameter is supplied by the caller. Neither is an ownership check.
+
+describe("BUG-030: AUTHZ-013 catches the textbook IDOR", () => {
+  const handler = (decorator, signature, ...body) => [decorator, signature, ...body.map((l) => "    " + l), ""].join("\n");
+  const fires = (src) => auditFires({ "portal/documents.py": src }, "AUTHZ-013");
+  const authed = "db = Depends(get_db), user = Depends(get_current_user)";
+
+  test("fires when the only check is a 404 for a missing row", () => {
+    assert.ok(fires(handler(
+      `@router.delete("/documents/{doc_id}")`,
+      `async def remove(doc_id: int, ${authed}):`,
+      `doc = db.get(Document, doc_id)`,
+      `if doc is None:`,
+      `    raise HTTPException(status_code=404)`,
+      `db.delete(doc)`,
+      `db.commit()`,
+    )));
+  });
+
+  test("fires when user_id comes from the path", () => {
+    assert.ok(fires(handler(
+      `@router.delete("/users/{user_id}/documents/{doc_id}")`,
+      `async def remove(user_id: int, doc_id: int, ${authed}):`,
+      `doc = db.query(Document).filter(Document.user_id == user_id, Document.id == doc_id).first()`,
+      `db.delete(doc)`,
+      `db.commit()`,
+    )));
+  });
+
+  test("fires when org_id comes from the path", () => {
+    assert.ok(fires(handler(
+      `@router.put("/orgs/{org_id}/documents/{doc_id}")`,
+      `async def replace(org_id: int, doc_id: int, body: DocBody, ${authed}):`,
+      `doc = db.query(Document).filter_by(org_id=org_id, id=doc_id).first()`,
+      `doc.content = body.content`,
+      `db.commit()`,
+    )));
+  });
+
+  for (const [label, check] of [
+    ["filter_by(owner_id=current_user.id)", `doc = db.query(Document).filter_by(id=doc_id, owner_id=current_user.id).first()`],
+    ["a comparison with the caller, then 403", `doc = db.get(Document, doc_id)\n    if doc.owner_id != user.id:\n        raise HTTPException(status_code=403)`],
+    ["the caller on the left", `doc = db.get(Document, doc_id)\n    if user.id != doc.owner_id:\n        abort(403)`],
+    ["a tenant column scoped to the caller", `doc = db.query(Document).filter(Document.id == doc_id, Document.tenant_id == user.tenant_id).first()`],
+    ["an authorize() helper", `doc = db.get(Document, doc_id)\n    authorize(user, "delete", doc)`],
+  ]) {
+    test(`silent with ${label}`, () => {
+      assert.ok(!fires(handler(
+        `@router.delete("/documents/{doc_id}")`,
+        `async def remove(doc_id: int, ${authed}):`,
+        check,
+        `db.delete(doc)`,
+        `db.commit()`,
+      )));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

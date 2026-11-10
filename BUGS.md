@@ -41,7 +41,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-027 | IN-PROGRESS | Hook files and scanner are writable by the agent they guard (only settings.json is protected) |
 | BUG-028 | OPEN | Hook command path is cwd-relative; `$CLAUDE_PROJECT_DIR` form untested on Windows |
 | BUG-029 | OPEN | Scanner bypasses: base64 candidate cap can be spent, chained encodings pass, confusables gaps |
-| BUG-030 | OPEN | `AUTHZ-013` misses a textbook IDOR: a 404 and a `user_id` path parameter count as ownership checks |
+| BUG-030 | SMOKE-TESTING | `AUTHZ-013` misses a textbook IDOR: a 404 and a `user_id` path parameter count as ownership checks |
 | BUG-031 | OPEN | `AUTHZ-011` blind spots: router-level `Depends(get_db)`, substring public-route list, bare `api_key` mention |
 | BUG-032 | OPEN | `AUTHZ-011` flags reads: `GET` plus `db.execute(select(...))` reports HIGH |
 | BUG-033 | OPEN | `WEB-001` misses token constants and JSON-wrapped tokens; flags `refreshCount` |
@@ -504,12 +504,14 @@ Review finding 6 (MEDIUM). Source: `C:/dev/data/skill-connections/brainstorms/16
 
 ### BUG-030: `AUTHZ-013` misses a textbook IDOR: a 404 and a `user_id` path parameter count as ownership checks
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 Review finding 7 (HIGH). Source: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`. Logged when 1.5.0 landed; not fixed in it.
 
 - A handler that returns 404 when the row is missing is treated as checking ownership (`security/03-audit.js` around line 690), though a 404 says nothing about whose row it is.
 - A `user_id:` path parameter also counts as an ownership check (around line 662), though it is caller-supplied.
+
+**Fix (2026-11-10).** `PY_OWNERSHIP_PATTERNS` in `security/03-audit.js` no longer spreads the JS `OWNERSHIP_PATTERNS` and no longer holds the 404 forms. An owner, user, tenant, team, account, customer, org or workspace column counts only when compared with or bound to the caller (`PY_OWNER_FIELD` and `PY_PRINCIPAL`: `current_user`, `user`, `request.user`, `request.state.user`, `g.user`, `principal`, `identity`, `caller`), or with the caller on the left (`user.id != doc.owner_id`). Kept: authorization helpers, permission, membership, role, tenancy and scope signals, and 403 refusals. The same caller-supplied `org_id` path parameter case was in the same blast radius and is covered. Tests: `tests/audit.test.js`, "BUG-030" block (404 only, `user_id` from the path, `org_id` from the path fire and failed before the fix; five owned forms stay silent); the existing AUTHZ-013 tests pass unchanged. Manual chapter 02 and docs/coverage.md updated. Smoke test: `guardian audit` on a FastAPI project with `@router.delete("/documents/{doc_id}")` that only 404s gives AUTHZ-013. The JS twin (AUTHZ-003 and the shared `OWNERSHIP_PATTERNS`) is checked separately.
 
 ### BUG-031: `AUTHZ-011` blind spots: router-level `Depends(get_db)`, substring public-route list, bare `api_key` mention
 

@@ -52,7 +52,7 @@ shell scripts, SQL files, Dockerfiles, CI workflow files, Terraform.
 | V5 File Handling | not covered | none | Upload type, size and path checks |
 | V6 Authentication | partial | AUTHZ-001 (JS/TS), AUTHZ-011 (Python): side effect with no authentication check; AUTHZ-004 (secret compared with `===`) | Password storage, MFA, credential recovery. BUG-031, BUG-032 |
 | V7 Session Management | partial | WEB-001 (session token in localStorage or sessionStorage) | Session lifetime, rotation, logout |
-| V8 Authorization | partial | AUTHZ-002 (identity from request), AUTHZ-003 and AUTHZ-013 (IDOR, no ownership check), AUTHZ-005 (cache key not scoped to the user) | Per-file analyzers cannot see authorization wired in another file. BUG-030 (AUTHZ-013 misses a textbook IDOR) |
+| V8 Authorization | partial | AUTHZ-002 (identity from request), AUTHZ-003 and AUTHZ-013 (IDOR, no ownership check), AUTHZ-005 (cache key not scoped to the user) | Per-file analyzers cannot see authorization wired in another file. |
 | V9 Self-contained Tokens | not covered | none | JWT algorithm, expiry and audience checks |
 | V10 OAuth and OIDC | not covered | none | |
 | V11 Cryptography | partial | AUTHZ-004 (non constant-time comparison of a secret) | Weak algorithms, key sizes, random sources. Which V11 section AUTHZ-004 maps to needs check |
@@ -70,7 +70,7 @@ shell scripts, SQL files, Dockerfiles, CI workflow files, Terraform.
 | 1 | CWE-79 | Cross-site Scripting | partial | INJ-002, INJ-003 | `innerHTML` and `dangerouslySetInnerHTML` sinks in JS/TS; no template engine or Python sinks |
 | 2 | CWE-89 | SQL Injection | partial | INJ-004, INJ-005, INJ-005b, INJ-006; `security/04-sql-guard.js` as the safe path | String-built SQL in JS/TS and Python; ORM raw-query escapes not all seen |
 | 3 | CWE-352 | Cross-Site Request Forgery | not covered | none | |
-| 4 | CWE-862 | Missing Authorization | partial | AUTHZ-003, AUTHZ-013, AUTHZ-005 | Per-file analyzers; BUG-030 |
+| 4 | CWE-862 | Missing Authorization | partial | AUTHZ-003, AUTHZ-013, AUTHZ-005 | Per-file analyzers |
 | 5 | CWE-787 | Out-of-bounds Write | not covered | none | Memory safety; no C or C++ rules |
 | 6 | CWE-22 | Path Traversal | not covered | none | |
 | 7 | CWE-416 | Use After Free | not covered | none | Memory safety |
@@ -90,7 +90,7 @@ shell scripts, SQL files, Dockerfiles, CI workflow files, Terraform.
 | 21 | CWE-306 | Missing Authentication for Critical Function | partial | AUTHZ-001, AUTHZ-011 | BUG-031, BUG-032 |
 | 22 | CWE-918 | Server-Side Request Forgery | not covered | none | |
 | 23 | CWE-77 | Command Injection | not covered | none | |
-| 24 | CWE-639 | Authorization Bypass Through User-Controlled Key | partial | AUTHZ-003, AUTHZ-013 | BUG-030 |
+| 24 | CWE-639 | Authorization Bypass Through User-Controlled Key | partial | AUTHZ-003, AUTHZ-013 | AUTHZ-013 requires the check to name the caller (BUG-030) |
 | 25 | CWE-770 | Allocation of Resources Without Limits | not covered | none | The runtime guard caps its own input (`GUARD-INJ-OVERSIZE`); no rule checks the application |
 
 Totals: 0 covered, 10 partial, 15 not covered. Seven of the 15 (the six

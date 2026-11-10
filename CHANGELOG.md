@@ -172,6 +172,14 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **AUTHZ-013 catches the textbook IDOR (BUG-030).** A 404 for a missing
+  row and a caller-supplied `user_id` or `org_id` (path or signature
+  parameter) counted as ownership checks, so a handler that deletes any
+  document by id passed. Python ownership evidence must now tie the
+  object to the authenticated caller (`Document.owner_id == user.id`,
+  `filter_by(owner_id=current_user.id)`, `user.id != doc.owner_id`), or be
+  an authorization helper, a permission or tenancy signal, or a 403.
+
 - **INJ-001 matches `eval(` as a word, and `new Function(` (BUG-040).**
   The pattern had no boundary, so `retrieval(query)` was reported
   CRITICAL, and the description claimed a user-input check the rule does
