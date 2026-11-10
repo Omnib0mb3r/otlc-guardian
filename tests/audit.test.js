@@ -2710,6 +2710,78 @@ describe("BUG-030: AUTHZ-013 catches the textbook IDOR", () => {
 });
 
 // ---------------------------------------------------------------------------
+// BUG-031: AUTHZ-011 blind spots
+// ---------------------------------------------------------------------------
+
+describe("BUG-031: AUTHZ-011 router dependencies, public routes, api_key", () => {
+  const fires = (src) => auditFires({ "api/routes.py": src }, "AUTHZ-011");
+  const write = (decorator, signature = "def handle(payload: dict, db = Depends(get_db)):") =>
+    [decorator, signature, "    db.add(Item(**payload))", "    db.commit()", ""].join("\n");
+
+  test("a router-level Depends(get_db) is not auth", () => {
+    assert.ok(fires([`router = APIRouter(dependencies=[Depends(get_db)])`, "", write(`@router.post("/items")`)].join("\n")));
+  });
+
+  test("an auth dependency on one router does not cover another router's handlers", () => {
+    const src = [
+      `admin = APIRouter(dependencies=[Depends(require_admin)])`,
+      `public = APIRouter()`,
+      "",
+      write(`@admin.post("/admin/items")`),
+      write(`@public.post("/items")`),
+    ].join("\n");
+    const report = withTempProject({ "api/routes.py": src }, (dir) => runAuditOn(dir));
+    const lines = report.findings.filter((f) => f.rule.id === "AUTHZ-011").map((f) => f.line);
+    assert.deepEqual(lines, [9]);
+  });
+
+  test("a router-level auth dependency nested in a call still counts", () => {
+    assert.ok(!fires([`router = APIRouter(prefix="/x", dependencies=[Depends(require_role(["admin"]))])`, "", write(`@router.post("/items")`)].join("\n")));
+  });
+
+  test("a route decorator's dependencies=[Depends(get_db)] does not silence the file", () => {
+    const src = [
+      write(`@router.post("/a", dependencies=[Depends(get_db)])`),
+      write(`@router.post("/b")`),
+    ].join("\n");
+    assert.ok(fires(src));
+  });
+
+  test("a route decorator's auth dependency covers that route", () => {
+    assert.ok(!fires(write(`@router.post("/a", dependencies=[Depends(verify_token)])`)));
+  });
+
+  test("/api/tokens/{token_id} is not a public route", () => {
+    assert.ok(fires(write(`@router.delete("/api/tokens/{token_id}")`, "def revoke(token_id: int, payload: dict, db = Depends(get_db)):")));
+  });
+
+  for (const route of ["/auth/login", "/token", "/webhooks/stripe", "/users/verify-email", "/password/reset", "/sign-up"]) {
+    test(`${route} is still public on purpose`, () => {
+      assert.ok(!fires(write(`@router.post("${route}")`)));
+    });
+  }
+
+  test("a bare api_key mention is not auth", () => {
+    assert.ok(fires([
+      `@router.post("/keys")`,
+      `def create_key(payload: dict, db = Depends(get_db)):`,
+      `    db.add(ApiKey(api_key=secrets.token_hex(16), name=payload["name"]))`,
+      `    db.commit()`,
+      ``,
+    ].join("\n")));
+  });
+
+  for (const [label, signature] of [
+    ["Depends(get_api_key)", "def handle(payload: dict, db = Depends(get_db), key = Depends(get_api_key)):"],
+    ["an APIKeyHeader security dependency", "def handle(payload: dict, db = Depends(get_db), key: str = Security(APIKeyHeader(name=\"X-API-Key\"))):"],
+  ]) {
+    test(`${label} is auth`, () => {
+      assert.ok(!fires(write(`@router.post("/items")`, signature)));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

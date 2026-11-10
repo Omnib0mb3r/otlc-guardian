@@ -172,6 +172,15 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **AUTHZ-011 blind spots closed (BUG-031).** A router-level
+  `Depends(get_db)` (or any `dependencies=[Depends(` in the file, a route
+  decorator's included) silenced every Python handler in the file; now
+  only a router built in the file whose dependency list is auth counts,
+  and only for that router's handlers. Public routes are judged per path
+  segment, so `/api/tokens/{token_id}` is no longer public. A bare
+  `api_key` mention no longer counts as auth; `APIKeyHeader` and
+  `Depends(get_api_key)` do.
+
 - **AUTHZ-013 catches the textbook IDOR (BUG-030).** A 404 for a missing
   row and a caller-supplied `user_id` or `org_id` (path or signature
   parameter) counted as ownership checks, so a handler that deletes any

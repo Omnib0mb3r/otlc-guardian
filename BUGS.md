@@ -42,7 +42,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-028 | OPEN | Hook command path is cwd-relative; `$CLAUDE_PROJECT_DIR` form untested on Windows |
 | BUG-029 | OPEN | Scanner bypasses: base64 candidate cap can be spent, chained encodings pass, confusables gaps |
 | BUG-030 | SMOKE-TESTING | `AUTHZ-013` misses a textbook IDOR: a 404 and a `user_id` path parameter count as ownership checks |
-| BUG-031 | OPEN | `AUTHZ-011` blind spots: router-level `Depends(get_db)`, substring public-route list, bare `api_key` mention |
+| BUG-031 | SMOKE-TESTING | `AUTHZ-011` blind spots: router-level `Depends(get_db)`, substring public-route list, bare `api_key` mention |
 | BUG-032 | OPEN | `AUTHZ-011` flags reads: `GET` plus `db.execute(select(...))` reports HIGH |
 | BUG-033 | OPEN | `WEB-001` misses token constants and JSON-wrapped tokens; flags `refreshCount` |
 | BUG-034 | OPEN | Bash in the PreToolUse matcher makes BUG-028 worse: hook error on every Bash call after a `cd` |
@@ -517,13 +517,15 @@ Review finding 7 (HIGH). Source: `C:/dev/data/skill-connections/brainstorms/16f2
 
 ### BUG-031: `AUTHZ-011` blind spots: router-level `Depends(get_db)`, substring public-route list, bare `api_key` mention
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 Review finding 8 (HIGH). Source: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`. Logged when 1.5.0 landed; not fixed in it.
 
 - A router-level `Depends(get_db)` silences the whole file, though a database dependency is not auth.
 - The public-route list matches substrings, so `/api/tokens/{id}` is treated as public.
 - Any mention of `api_key` counts as auth.
+
+**Fix (2026-11-10).** In `security/03-audit.js`: `PY_ROUTER_LEVEL_AUTH` is gone. `pyAuthedRouters()` finds `name = APIRouter(...)` / `FastAPI(...)` in the file, reads each `dependencies=[...]` list in its arguments (`pyListEnd()`, quote- and bracket-aware) and keeps the name only when the list matches `PY_AUTH_PATTERNS`; `findPythonHandlers()` records each handler's router name (`PY_ROUTE_DECORATOR` now captures it) and AUTHZ-011 and AUTHZ-013 honor router auth per handler. A route decorator's own `dependencies=[...]` was already in that handler's head and no longer silences the file. `isPublicPyRoute()` replaces the substring `PY_PUBLIC_ROUTE` with a per-segment match (`PY_PUBLIC_SEGMENT`, adds `healthz`, `healthcheck`, `webhooks`). The bare `api[_-]?key` auth pattern is removed; `APIKey(Header|Query|Cookie)` and `api_key` in a `Depends(...)` name are added. Tests: `tests/audit.test.js`, "BUG-031" block (16 cases; router-level `get_db`, two routers, a decorator's `get_db`, `/api/tokens/{token_id}`, a bare `api_key` and `Depends(get_api_key)` failed before the fix). Manual chapter 02 and docs/coverage.md updated. Smoke test: `guardian audit` on a FastAPI app whose `APIRouter(dependencies=[Depends(get_db)])` handlers write with no auth reports AUTHZ-011.
 
 ### BUG-032: `AUTHZ-011` flags reads: `GET` plus `db.execute(select(...))` reports HIGH
 

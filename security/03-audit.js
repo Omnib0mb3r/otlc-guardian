@@ -648,22 +648,69 @@ function checkUnvalidatedBody(content) {
 //   - This finds a handler that never mentions an owner or tenant. It does
 //     not prove that a tenant check that IS present is correct.
 
-const PY_ROUTE_DECORATOR = /^([ \t]*)@[\w.]+\.(?:get|post|put|patch|delete|route|api_route)\s*\(/;
+const PY_ROUTE_DECORATOR = /^([ \t]*)@([\w.]+)\.(?:get|post|put|patch|delete|route|api_route)\s*\(/;
 const PY_DEF_LINE        = /^[ \t]*(?:async\s+)?def\s+\w+/;
 const PY_MAX_DECORATOR_SPAN = 40;
 
 const PY_AUTH_PATTERNS = [
-  /\bDepends\s*\(\s*[\w.]*(?:user|auth|token|session|principal|customer|staff|login|require|verify|permission|role|identity|account|tenant)\w*/i,
-  /\bSecurity\s*\(/, /\bHTTPBearer\b/, /\bOAuth2PasswordBearer\b/, /\boauth2_scheme\b/,
+  /\bDepends\s*\(\s*[\w.]*(?:user|auth|token|session|principal|customer|staff|login|require|verify|permission|role|identity|account|tenant|api_?key)\w*/i,
+  /\bSecurity\s*\(/, /\bHTTPBearer\b/, /\bOAuth2PasswordBearer\b/, /\boauth2_scheme\b/, /\bAPIKey(?:Header|Query|Cookie)\b/,
   /@[\w.]*(?:login_required|jwt_required|auth_required|requires_auth|permission_required|token_required|authenticated)\b/,
   /@[\w.]*require[sd]?_\w+/,
   /\bcurrent_user\b/, /\brequest\.user\b/, /\bg\.user\b/, /\bget_current_\w+/,
   /\bverify_(?:token|jwt|session|api_key|signature)\b/, /\bcheck_(?:auth|token|session|api_key)\w*/,
   /\bjwt\.decode\s*\(/, /\bauthenticate\w*\s*\(/,
-  /\bheaders(?:\.get\s*\(\s*|\s*\[\s*)["']authorization/i, /\bx-api-key\b/i, /\bapi[_-]?key\b/i,
+  // An API key counts when it is read from the request or verified, not
+  // on a bare mention: `ApiKey(api_key=secrets.token_hex())` creates one
+  // (BUG-031).
+  /\bheaders(?:\.get\s*\(\s*|\s*\[\s*)["']authorization/i, /\bx-api-key\b/i,
 ];
 
-const PY_ROUTER_LEVEL_AUTH = /\bdependencies\s*=\s*\[\s*Depends\s*\(/;
+// Router-level auth: `name = APIRouter(..., dependencies=[...])` or
+// `FastAPI(...)` in the same file. Only a dependency list that is itself
+// auth counts (Depends(get_db) is not), and it covers only the handlers
+// decorated with that router's name. A route decorator's own
+// `dependencies=[...]` is part of that handler's head. Before BUG-031 any
+// `dependencies=[Depends(` anywhere silenced the whole file.
+const PY_ROUTER_CTOR = /^[ \t]*(\w+)\s*(?::\s*[\w.]+\s*)?=\s*(?:fastapi\.)?(?:APIRouter|FastAPI)\s*\(/gm;
+const PY_DEPENDENCIES_LIST = /\bdependencies\s*=\s*\[/g;
+
+/** Index just past the `]` that closes the `[` at `open`, quote-aware; -1 if unbalanced. */
+function pyListEnd(text, open) {
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"' || ch === "'") {
+      const close = text.indexOf(ch, i + 1);
+      if (close === -1) return -1;
+      i = close;
+    } else if (ch === "[" || ch === "(") {
+      depth++;
+    } else if (ch === "]" || ch === ")") {
+      depth--;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return -1;
+}
+
+/** Names of the routers in this file whose own dependencies are auth. */
+function pyAuthedRouters(content) {
+  const text = stripPyComments(content);
+  const names = new Set();
+  for (const ctor of text.matchAll(PY_ROUTER_CTOR)) {
+    const open = ctor.index + ctor[0].length - 1;
+    const end = skipParenGroup(text, open);
+    if (end === -1) continue;
+    const args = text.slice(open, end);
+    for (const deps of args.matchAll(PY_DEPENDENCIES_LIST)) {
+      const listOpen = deps.index + deps[0].length - 1;
+      const listEnd = pyListEnd(args, listOpen);
+      if (listEnd !== -1 && matchesAny(PY_AUTH_PATTERNS, args.slice(listOpen, listEnd))) names.add(ctor[1]);
+    }
+  }
+  return names;
+}
 
 const PY_SIDE_EFFECT_PATTERNS = [
   /\b(?:db|session|conn|connection|cursor|cur|tx|engine|database)\w*\.(?:add|add_all|delete|merge|commit|execute|executemany|flush|bulk_\w+)\s*\(/i,
@@ -677,8 +724,16 @@ const PY_SIDE_EFFECT_PATTERNS = [
 ];
 
 // Routes that are public on purpose. Flagging a login endpoint for having
-// no auth check is noise that teaches people to ignore the rule.
-const PY_PUBLIC_ROUTE = /["'][^"']*(?:login|logout|sign-?in|sign-?up|register|health|ping|metrics|token|magic|otp|verify|reset|callback|webhook)[^"']*["']/i;
+// no auth check is noise that teaches people to ignore the rule. Judged
+// per path segment ("/auth/login", "/users/verify-email"), not as a
+// substring, so "/api/tokens/{token_id}" is not public (BUG-031).
+const PY_PUBLIC_SEGMENT = /^(?:[a-z0-9]+[-_])?(?:login|logout|signin|sign-in|signup|sign-up|register|health|healthz|healthcheck|ping|metrics|token|magic|otp|verify|reset|callback|webhooks?)(?:[-_][a-z0-9]+)*$/i;
+const PY_ROUTE_PATH = /\(\s*[rbuf]*["']([^"']*)["']/i;
+
+function isPublicPyRoute(decoratorLine) {
+  const routePath = PY_ROUTE_PATH.exec(decoratorLine)?.[1];
+  return routePath != null && routePath.split("/").some((segment) => PY_PUBLIC_SEGMENT.test(segment));
+}
 
 const PY_OBJECT_ID_PATTERNS = [
   /\{\w*id\w*\}/i,                     // FastAPI/Starlette path param: "/docs/{doc_id}"
@@ -764,6 +819,7 @@ function findPythonHandlers(content) {
 
     handlers.push({
       signature: lines[i].trim(),
+      router: decorator[2],
       line: i + 1,
       head: stripPyComments(lines.slice(start, sigEnd + 1).join("\n")),
       body: stripPyComments(lines.slice(sigEnd + 1, end).join("\n")),
@@ -775,10 +831,11 @@ function findPythonHandlers(content) {
 }
 
 function checkPyMissingAuth(content) {
-  if (PY_ROUTER_LEVEL_AUTH.test(content)) return [];
+  const authedRouters = pyAuthedRouters(content);
   const findings = [];
   for (const handler of findPythonHandlers(content)) {
-    if (PY_PUBLIC_ROUTE.test(handler.signature)) continue;
+    if (authedRouters.has(handler.router)) continue;
+    if (isPublicPyRoute(handler.signature)) continue;
     if (!matchesAny(PY_SIDE_EFFECT_PATTERNS, handler.body)) continue;
     if (matchesAny(PY_AUTH_PATTERNS, `${handler.head}\n${handler.body}`)) continue;
     findings.push({ line: handler.line, content: handler.signature.slice(0, 120) });
@@ -787,9 +844,10 @@ function checkPyMissingAuth(content) {
 }
 
 function checkPyMissingObjectAuthz(content) {
-  const routerAuth = PY_ROUTER_LEVEL_AUTH.test(content);
+  const authedRouters = pyAuthedRouters(content);
   const findings = [];
   for (const handler of findPythonHandlers(content)) {
+    const routerAuth = authedRouters.has(handler.router);
     const whole = `${handler.head}\n${handler.body}`;
     if (!routerAuth && !matchesAny(PY_AUTH_PATTERNS, whole)) continue; // AUTHZ-011 reports that case
     if (!matchesAny(PY_OBJECT_ID_PATTERNS, whole)) continue;

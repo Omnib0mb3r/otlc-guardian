@@ -50,7 +50,7 @@ shell scripts, SQL files, Dockerfiles, CI workflow files, Terraform.
 | V3 Web Frontend Security | partial | WEB-001 (token in browser storage), WEB-002 (no CSP, nginx), REP-003, REP-004, INJ-002, INJ-003 | CSP is only checked for nginx; no cookie flag, frame, CORS or subresource-integrity rules. BUG-033, BUG-038 |
 | V4 API and Web Service | needs check | API-001 (no `/api/v1` prefix) | API-001 is a house style rule; whether any ASVS V4 requirement maps to it needs check. No rules for HTTP method handling, GraphQL or WebSocket |
 | V5 File Handling | not covered | none | Upload type, size and path checks |
-| V6 Authentication | partial | AUTHZ-001 (JS/TS), AUTHZ-011 (Python): side effect with no authentication check; AUTHZ-004 (secret compared with `===`) | Password storage, MFA, credential recovery. BUG-031, BUG-032 |
+| V6 Authentication | partial | AUTHZ-001 (JS/TS), AUTHZ-011 (Python): side effect with no authentication check; AUTHZ-004 (secret compared with `===`) | Password storage, MFA, credential recovery. BUG-032 |
 | V7 Session Management | partial | WEB-001 (session token in localStorage or sessionStorage) | Session lifetime, rotation, logout |
 | V8 Authorization | partial | AUTHZ-002 (identity from request), AUTHZ-003 and AUTHZ-013 (IDOR, no ownership check), AUTHZ-005 (cache key not scoped to the user) | Per-file analyzers cannot see authorization wired in another file. |
 | V9 Self-contained Tokens | not covered | none | JWT algorithm, expiry and audience checks |
@@ -87,7 +87,7 @@ shell scripts, SQL files, Dockerfiles, CI workflow files, Terraform.
 | 18 | CWE-20 | Improper Input Validation | partial | VAL-001; runtime `guardInput` for AI model input | JS/TS only for VAL-001 |
 | 19 | CWE-284 | Improper Access Control | partial | AUTHZ family | Parent of 862 and 863; same gaps |
 | 20 | CWE-200 | Exposure of Sensitive Information | partial | SEC family (secrets in source), WEB-001, runtime `guardOutput` | Error detail sent to clients is not checked |
-| 21 | CWE-306 | Missing Authentication for Critical Function | partial | AUTHZ-001, AUTHZ-011 | BUG-031, BUG-032 |
+| 21 | CWE-306 | Missing Authentication for Critical Function | partial | AUTHZ-001, AUTHZ-011 | BUG-032, BUG-070 |
 | 22 | CWE-918 | Server-Side Request Forgery | not covered | none | |
 | 23 | CWE-77 | Command Injection | not covered | none | |
 | 24 | CWE-639 | Authorization Bypass Through User-Controlled Key | partial | AUTHZ-003, AUTHZ-013 | AUTHZ-013 requires the check to name the caller (BUG-030) |
