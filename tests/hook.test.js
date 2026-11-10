@@ -1532,6 +1532,70 @@ describe("PreToolUse hook - copies of folders and sort/uniq outputs are judged b
   }
 });
 
+describe("PreToolUse hook - PowerShell parameter prefixes and encoded scripts (BUG-067)", () => {
+  const run = (tool, command, mode, files = {}) => withTempProject((dir) => {
+    for (const [rel, text] of Object.entries({ ".claude/settings.json": "{}", ...files })) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), text);
+    }
+    return runHook(PRE_HOOK, { tool_name: tool, cwd: dir, tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) });
+  });
+  const DISABLE = '{"disableAllHooks":true}';
+  const encoded = (script) => Buffer.from(script, "utf16le").toString("base64");
+
+  // Re-probe R5: PowerShell binds any unambiguous prefix of a parameter name.
+  for (const command of [
+    `Set-Content -LiteralP .claude/settings.local.json -Val '${DISABLE}'`,
+    `Set-Content -LP .claude\\settings.local.json -Value x`,
+    `Set-Content -PSPath .claude\\settings.local.json -Value x`,
+    `sc -Pat .claude\\settings.json -Va x`,
+    `Remove-Item -LiteralPa .claude\\settings.json`,
+    `Rename-Item -Pat .claude\\settings.json -NewN old.json`,
+    `Move-Item -Pat .claude\\settings.json -Dest x.json`,
+    `New-Item -Path .claude -Name settings.local.json -Value x -Force`,
+    `New-Item -Pa .claude -Na settings.local.json -Val x -Fo`,
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = run("PowerShell", command);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    });
+  }
+
+  for (const [command, files] of [
+    [`Set-Content -Pat CLAUDE.md -Val '${CRITICAL_PAYLOAD}'`],
+    [`'${CRITICAL_PAYLOAD}' | Out-File -Fi AGENTS.md -Ap`],
+    [`Copy-Item -Pat notes\\x.md -Dest CLAUDE.md`, { "notes/x.md": `${CRITICAL_PAYLOAD}\n` }],
+    [`Get-Content -Pa notes\\x.md | Set-Content -Pat CLAUDE.md`, { "notes/x.md": `${CRITICAL_PAYLOAD}\n` }],
+  ]) {
+    stagedOnly(`denied in bypass: ${command}`, () => {
+      const out = run("PowerShell", command, "bypassPermissions", files);
+      assert.equal(decisionOf(out), "deny", out.slice(0, 200));
+    });
+  }
+
+  test("an ambiguous prefix binds nothing, as in PowerShell (-P is Path or PassThru)", () => {
+    expectSilent(run("PowerShell", "Set-Content -P notes.md -Value x"));
+  });
+
+  // Re-probe R5: the decoded script was read for targets but never scanned.
+  for (const [tool, command] of [
+    ["Bash", `powershell -enc ${encoded(`Add-Content CLAUDE.md '${CRITICAL_PAYLOAD}'`)}`],
+    ["Bash", `pwsh -NoProfile -EncodedCommand ${encoded(`Set-Content .planning/STATE.md '${CRITICAL_PAYLOAD}'`)}`],
+    ["PowerShell", `powershell.exe -e ${encoded(`Add-Content AGENTS.md '${CRITICAL_PAYLOAD}'`)}`],
+  ]) {
+    stagedOnly(`${tool}: a payload inside -EncodedCommand is caught: asks, denied in bypass`, () => {
+      const asked = run(tool, command);
+      assert.equal(decisionOf(asked), "ask", asked.slice(0, 200));
+      expectWarning(asked, "GUARD-INJ");
+      assert.equal(decisionOf(run(tool, command, "bypassPermissions")), "deny");
+    });
+  }
+
+  test("a clean -EncodedCommand script is silent", () => {
+    expectSilent(run("Bash", `powershell -enc ${encoded("Add-Content CLAUDE.md 'Use pnpm.'")}`, "bypassPermissions"));
+  });
+});
+
 describe("Web content guard - 1.5.0 hardening", () => {
   test("payload behind 64 KB of filler is caught (old scan window)", () => {
     const out = runHook(POST_HOOK, {

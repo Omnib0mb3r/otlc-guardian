@@ -538,13 +538,16 @@ function pathLikeWords(text) {
  *
  * @param {string} command
  * @param {string} cwd - the session's working directory
+ * @param {string[]} decoded - collects the text of each script the command
+ *   carries encoded (powershell -EncodedCommand), so it is scanned with
+ *   the command text (BUG-067)
  * @returns {Map<string, { sources: Set<string>, append: boolean }>}
  *   absolute target -> absolute source files. A source prefixed "patch:"
  *   is a patch file, of which only the added lines land. `append` is true
  *   when the write adds to the file (>>, tee -a, a patch) instead of
  *   replacing it.
  */
-function shellWriteTargets(command, cwd, depth = 0, dialect = "bash") {
+function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", decoded = []) {
   const targets = new Map();
   if (depth > MAX_SHELL_DEPTH) return targets;
   const abs = (dir, p) => path.resolve(dir, p.replace(/^~(?=$|[\\/])/, os.homedir())).replace(/\\/g, "/");
@@ -557,14 +560,14 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash") {
     targets.set(key, entry);
   };
   const recurse = (text, dir, inner = dialect) => {
-    for (const [key, entry] of shellWriteTargets(text, dir, depth + 1, inner)) {
+    for (const [key, entry] of shellWriteTargets(text, dir, depth + 1, inner, decoded)) {
       const mine = targets.get(key) ?? { sources: new Set(), append: false };
       for (const s of entry.sources) mine.sources.add(s);
       mine.append ||= entry.append;
       targets.set(key, mine);
     }
   };
-  const ctx = { add, abs, recurse, dialect };
+  const ctx = { add, abs, recurse, dialect, decoded };
 
   const { tokens, subs } = lexShell(command, dialect);
   for (const sub of subs) recurse(sub, cwd);
@@ -637,7 +640,7 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   // else is an external program (git, bash, node, curl) and is read the
   // same way whichever shell runs it (BUG-048).
   if (ctx.dialect === "powershell" && (powershellWrites(name, args, dir, ctx, stdin) || PS_CONTENT_PASSERS.has(name))) {
-    return { dir, out: PS_CONTENT_PASSERS.has(name) ? [...out, ...psPaths(args, ["path", "literalpath"], 0).map((p) => abs(dir, p))] : out };
+    return { dir, out: PS_CONTENT_PASSERS.has(name) ? [...out, ...psPaths(args, name, ["path", "literalpath"], 0).map((p) => abs(dir, p))] : out };
   }
   if (ctx.dialect === "cmd" && cmdWrites(name, operands, dir, ctx)) return { dir, out };
   if (CMD_SHELLS.has(name)) {
@@ -645,7 +648,8 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     if (script !== null) recurse(script, dir, "cmd");
   } else if (POWERSHELLS.has(name)) {
     const script = powershellScript(args);
-    if (script !== null) recurse(script, dir, "powershell");
+    if (script?.encoded) ctx.decoded.push(script.text);
+    if (script !== null) recurse(script.text, dir, "powershell");
   } else if (SHELLS.has(name)) {
     const flag = args.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a));
     if (flag >= 0 && args[flag + 1] !== undefined) recurse(args[flag + 1], dir, "bash");
@@ -854,7 +858,9 @@ function unzipWrites(args, dir, ctx) {
 //
 // Cmdlets and their common aliases. Parameters are read by name (-Path,
 // -LiteralPath, -FilePath, -Destination, "-Path:x") or by position, the
-// way PowerShell binds them. Like the Bash reader, it does not expand
+// way PowerShell binds them. A name may be any prefix that matches one
+// parameter of that cmdlet, or one of its aliases (-LP, -PSPath), as in
+// PowerShell (BUG-067). Like the Bash reader, it does not expand
 // variables, wildcards or script blocks.
 
 const PS_WRITERS = new Set(["set-content", "sc", "add-content", "ac", "out-file", "tee-object", "tee", "new-item", "ni", "clear-content", "clc"]);
@@ -863,29 +869,92 @@ const PS_MOVERS  = new Set(["move-item", "mv", "move", "mi"]);
 const PS_REMOVERS = new Set(["remove-item", "rm", "del", "erase", "ri", "rd", "rmdir"]);
 const PS_RENAMERS = new Set(["rename-item", "ren", "rni"]);
 const PS_CONTENT_PASSERS = new Set(["get-content", "gc", "cat", "type", "select-string", "sls"]);
-const PS_SWITCHES = new Set(["force", "recurse", "append", "nonewline", "noclobber", "passthru", "confirm", "whatif", "verbose", "debug", "raw", "asbytestream", "container"]);
+const PS_SWITCHES = new Set(["force", "recurse", "append", "nonewline", "noclobber", "passthru", "confirm", "whatif", "verbose", "debug", "raw", "asbytestream", "container",
+  "wait", "simplematch", "casesensitive", "quiet", "list", "noemphasis", "notmatch", "allmatches", "usetransaction",
+  "usebasicparsing", "usedefaultcredentials", "disablekeepalive", "proxyusedefaultcredentials", "skipcertificatecheck", "resume", "skipheadervalidation", "followrellink"]);
+
+// Each cmdlet's parameters and parameter aliases, for prefix binding.
+// Every cmdlet also has the common parameters.
+const PS_COMMON = ["verbose", "debug", "erroraction", "warningaction", "informationaction", "progressaction", "errorvariable",
+  "warningvariable", "informationvariable", "outvariable", "outbuffer", "pipelinevariable", "whatif", "confirm"];
+const PS_COMMON_ALIASES = { vb: "verbose", db: "debug", ea: "erroraction", wa: "warningaction", infa: "informationaction", proga: "progressaction",
+  ev: "errorvariable", wv: "warningvariable", iv: "informationvariable", ov: "outvariable", ob: "outbuffer", pv: "pipelinevariable", wi: "whatif", cf: "confirm" };
+const LITERAL_ALIASES = { pspath: "literalpath", lp: "literalpath" };
+const WEB_PARAMS = ["uri", "outfile", "method", "body", "headers", "usebasicparsing", "websession", "sessionvariable", "credential", "usedefaultcredentials",
+  "certificate", "certificatethumbprint", "useragent", "disablekeepalive", "timeoutsec", "proxy", "proxycredential", "proxyusedefaultcredentials", "infile",
+  "transferencoding", "contenttype", "maximumredirection", "passthru", "form", "skipcertificatecheck", "authentication", "token", "resume",
+  "skipheadervalidation", "retryintervalsec", "maximumretrycount", "sslprotocol", "custommethod"];
+const PS_PARAMS = {
+  "set-content":       { params: ["path", "literalpath", "value", "passthru", "filter", "include", "exclude", "force", "credential", "nonewline", "encoding", "asbytestream", "stream", "usetransaction"], aliases: LITERAL_ALIASES },
+  "clear-content":     { params: ["path", "literalpath", "filter", "include", "exclude", "force", "credential", "stream", "usetransaction"], aliases: LITERAL_ALIASES },
+  "out-file":          { params: ["filepath", "literalpath", "encoding", "append", "force", "noclobber", "width", "nonewline", "inputobject"], aliases: { path: "filepath", ...LITERAL_ALIASES } },
+  "tee-object":        { params: ["filepath", "literalpath", "append", "variable", "inputobject", "encoding"], aliases: { path: "filepath", ...LITERAL_ALIASES } },
+  "new-item":          { params: ["path", "name", "itemtype", "value", "force", "credential", "usetransaction"], aliases: { type: "itemtype" } },
+  "copy-item":         { params: ["path", "literalpath", "destination", "container", "force", "filter", "include", "exclude", "recurse", "passthru", "credential", "fromsession", "tosession", "usetransaction"], aliases: LITERAL_ALIASES },
+  "move-item":         { params: ["path", "literalpath", "destination", "force", "filter", "include", "exclude", "passthru", "credential", "usetransaction"], aliases: LITERAL_ALIASES },
+  "remove-item":       { params: ["path", "literalpath", "filter", "include", "exclude", "recurse", "force", "credential", "stream", "usetransaction"], aliases: LITERAL_ALIASES },
+  "rename-item":       { params: ["path", "literalpath", "newname", "force", "passthru", "credential", "usetransaction"], aliases: LITERAL_ALIASES },
+  "get-content":       { params: ["path", "literalpath", "readcount", "totalcount", "tail", "filter", "include", "exclude", "force", "credential", "delimiter", "wait", "raw", "encoding", "asbytestream", "stream", "usetransaction"], aliases: { first: "totalcount", head: "totalcount", last: "tail", ...LITERAL_ALIASES } },
+  "select-string":     { params: ["pattern", "path", "literalpath", "inputobject", "simplematch", "casesensitive", "quiet", "list", "noemphasis", "include", "exclude", "notmatch", "allmatches", "encoding", "context", "raw", "culture"], aliases: LITERAL_ALIASES },
+  "invoke-webrequest": { params: WEB_PARAMS, aliases: {} },
+  "invoke-restmethod": { params: [...WEB_PARAMS, "statuscodevariable", "responseheadersvariable", "followrellink", "maximumfollowrellink"], aliases: {} },
+  "invoke-expression": { params: ["command"], aliases: {} },
+};
+PS_PARAMS["add-content"] = PS_PARAMS["set-content"];
+const PS_CMDLET_ALIASES = {
+  sc: "set-content", ac: "add-content", clc: "clear-content", tee: "tee-object", ni: "new-item",
+  cp: "copy-item", copy: "copy-item", cpi: "copy-item", mv: "move-item", move: "move-item", mi: "move-item",
+  rm: "remove-item", del: "remove-item", erase: "remove-item", ri: "remove-item", rd: "remove-item", rmdir: "remove-item",
+  ren: "rename-item", rni: "rename-item", gc: "get-content", cat: "get-content", type: "get-content", sls: "select-string",
+  iwr: "invoke-webrequest", curl: "invoke-webrequest", wget: "invoke-webrequest", irm: "invoke-restmethod", iex: "invoke-expression",
+};
+
+/**
+ * The parameter a typed name binds to on `cmdlet`: an exact name or alias,
+ * else the one parameter it is a prefix of. An ambiguous prefix binds
+ * nothing (PowerShell refuses the command); an unknown cmdlet keeps the
+ * name as typed.
+ */
+function psParam(cmdlet, typed) {
+  const t = typed.toLowerCase();
+  const spec = PS_PARAMS[PS_CMDLET_ALIASES[cmdlet] ?? cmdlet];
+  if (!spec) return t;
+  const aliases = { ...PS_COMMON_ALIASES, ...spec.aliases };
+  const names = [...spec.params, ...PS_COMMON];
+  if (names.includes(t)) return t;
+  if (aliases[t]) return aliases[t];
+  const hits = new Set([...names.filter((n) => n.startsWith(t)), ...Object.keys(aliases).filter((a) => a.startsWith(t)).map((a) => aliases[a])]);
+  return hits.size === 1 ? [...hits][0] : `?${t}`;
+}
 const PS_DOWNLOADERS = new Set(["invoke-webrequest", "iwr", "invoke-restmethod", "irm", "curl", "wget"]);
 const PS_EVALUATORS  = new Set(["invoke-expression", "iex"]);
 const DOTNET_FILE_WRITE = /\[(?:system\.)?io\.file\]::(?:write|append|create|delete|copy|move|replace)\w*\s*\(([^)]*)\)/gi;
 
-/** Named parameters (lowercased, comma lists split) and positional arguments. */
-function psParse(args) {
+/**
+ * Named parameters of `cmdlet` (bound with psParam(), comma lists split)
+ * and positional arguments.
+ */
+function psParse(args, cmdlet) {
   const named = new Map();
   const positional = [];
   const put = (key, value) => named.set(key, [...(named.get(key) ?? []), ...String(value).split(",").filter(Boolean)]);
   for (let k = 0; k < args.length; k++) {
     const m = /^-([A-Za-z]+)(?::(.*))?$/.exec(args[k]);
-    if (!m) positional.push(args[k]);
-    else if (m[2] !== undefined) put(m[1].toLowerCase(), m[2]);
-    else if (PS_SWITCHES.has(m[1].toLowerCase()) || args[k + 1] === undefined) named.set(m[1].toLowerCase(), named.get(m[1].toLowerCase()) ?? []);
-    else put(m[1].toLowerCase(), args[++k]);
+    if (!m) {
+      positional.push(args[k]);
+      continue;
+    }
+    const key = psParam(cmdlet, m[1]);
+    if (m[2] !== undefined) put(key, m[2]);
+    else if (PS_SWITCHES.has(key) || args[k + 1] === undefined) named.set(key, named.get(key) ?? []);
+    else put(key, args[++k]);
   }
   return { named, positional };
 }
 
 /** Values of the first named parameter present, else the positional argument at `position`. */
-function psPaths(args, names, position) {
-  const { named, positional } = psParse(args);
+function psPaths(args, cmdlet, names, position) {
+  const { named, positional } = psParse(args, cmdlet);
   for (const n of names) if (named.get(n)?.length) return named.get(n);
   return position !== null && positional[position] !== undefined ? [positional[position]] : [];
 }
@@ -898,7 +967,7 @@ function psPaths(args, names, position) {
  */
 function powershellWrites(name, args, dir, ctx, stdin) {
   const { add, abs } = ctx;
-  const { named, positional } = psParse(args);
+  const { named, positional } = psParse(args, name);
   if (PS_DOWNLOADERS.has(name)) {
     for (const p of named.get("outfile") ?? []) add(dir, p);
     // In PowerShell 7 curl and wget are the real programs, not aliases,
@@ -911,10 +980,13 @@ function powershellWrites(name, args, dir, ctx, stdin) {
   }
   if (PS_WRITERS.has(name)) {
     const append = name === "add-content" || name === "ac" || named.has("append");
-    for (const p of psPaths(args, ["path", "literalpath", "filepath"], 0)) add(dir, p, stdin, append);
+    // New-Item -Name puts the item under -Path (the current folder when absent).
+    const itemName = (name === "new-item" || name === "ni") ? named.get("name")?.[0] : undefined;
+    const paths = psPaths(args, name, ["path", "literalpath", "filepath"], 0);
+    for (const p of itemName ? (paths.length > 0 ? paths : ["."]).map((p) => `${p}/${itemName}`) : paths) add(dir, p, stdin, append);
   } else if (PS_COPIERS.has(name)) {
-    const sources = psPaths(args, ["path", "literalpath"], 0);
-    const dest = psPaths(args, ["destination"], 1)[0];
+    const sources = psPaths(args, name, ["path", "literalpath"], 0);
+    const dest = psPaths(args, name, ["destination"], 1)[0];
     if (dest) {
       const intoDir = sources.length > 1 || /[\\/]$/.test(dest) || Boolean(statSync(abs(dir, dest), { throwIfNoEntry: false })?.isDirectory());
       const recursive = PS_MOVERS.has(name) || named.has("recurse");
@@ -924,8 +996,8 @@ function powershellWrites(name, args, dir, ctx, stdin) {
   } else if (PS_REMOVERS.has(name)) {
     for (const p of [...(named.get("path") ?? []), ...(named.get("literalpath") ?? []), ...positional]) add(dir, p);
   } else if (PS_RENAMERS.has(name)) {
-    const [target] = psPaths(args, ["path", "literalpath"], 0);
-    const [newName] = psPaths(args, ["newname"], 1);
+    const [target] = psPaths(args, name, ["path", "literalpath"], 0);
+    const [newName] = psPaths(args, name, ["newname"], 1);
     if (target) add(dir, target);
     if (target && newName) add(dir, path.join(path.dirname(target), newName));
   } else {
@@ -938,19 +1010,25 @@ function powershellWrites(name, args, dir, ctx, stdin) {
  * The script a powershell / pwsh invocation runs, or null for -File (a
  * script file the hook cannot read). A bare argument is judged as a
  * command: powershell.exe runs it as one, and pwsh would run it as a file.
+ * The host takes any prefix of an option name (-enc, -EncodedC, -nop,
+ * -exec), so options are read by prefix; a prefix shared by an option that
+ * runs code and one that does not is read as the one that runs code.
+ * @returns {{ text: string, encoded: boolean } | null}
  */
+const PS_HOST_VALUE_OPTIONS = ["executionpolicy", "windowstyle", "inputformat", "outputformat", "configurationname", "configurationfile",
+  "workingdirectory", "settingsfile", "custompipename", "version", "psconsolefile", "encodedarguments"];
 function powershellScript(args) {
-  const VALUE_OPTIONS = new Set(["-executionpolicy", "-ex", "-ep", "-windowstyle", "-w", "-inputformat", "-if", "-outputformat", "-of", "-o",
-    "-configurationname", "-workingdirectory", "-wd", "-settingsfile", "-custompipename", "-version", "-v", "-psconsolefile"]);
+  const prefixOf = (word, option, min = 1) => word.length >= min && option.startsWith(word);
   for (let k = 0; k < args.length; k++) {
     const a = args[k].toLowerCase();
-    if (["-command", "-c", "-commandwithargs", "-cwa"].includes(a)) return args.slice(k + 1).join(" ");
-    if (["-encodedcommand", "-ec", "-e", "-enc"].includes(a)) {
-      return args[k + 1] ? Buffer.from(args[k + 1], "base64").toString("utf16le") : null;
+    if (!a.startsWith("-")) return { text: args.slice(k).join(" "), encoded: false };
+    const opt = a.replace(/^--?/, "");
+    if (["cwa", "commandwithargs"].includes(opt) || prefixOf(opt, "command")) return { text: args.slice(k + 1).join(" "), encoded: false };
+    if (opt === "ec" || prefixOf(opt, "encodedcommand")) {
+      return args[k + 1] ? { text: Buffer.from(args[k + 1], "base64").toString("utf16le"), encoded: true } : null;
     }
-    if (a === "-file" || a === "-f") return null;
-    if (VALUE_OPTIONS.has(a)) k++;
-    else if (!a.startsWith("-")) return args.slice(k).join(" ");
+    if (prefixOf(opt, "file")) return null;
+    if (["ep", "ex", "wd", "if", "of", "o", "v", "w"].includes(opt) || PS_HOST_VALUE_OPTIONS.some((o) => prefixOf(opt, o, 2))) k++;
   }
   return null;
 }
@@ -1275,9 +1353,11 @@ process.stdin.on("end", () => {
       ? " Denied because this session runs with permission prompts bypassed; make this change by hand or leave bypass mode."
       : "";
 
-    // Paths a Bash command writes, resolved against the session cwd.
+    // Paths a Bash command writes, resolved against the session cwd, and
+    // the scripts it carries encoded, which are scanned with its text.
     const sessionCwd = (typeof data.cwd === "string" && data.cwd) || projectRoot;
-    const bashTargets = write.kind === "bash" ? shellWriteTargets(write.content, sessionCwd, 0, write.dialect) : new Map();
+    const decodedScripts = [];
+    const bashTargets = write.kind === "bash" ? shellWriteTargets(write.content, sessionCwd, 0, write.dialect, decodedScripts) : new Map();
     const bashWrites = [...bashTargets.keys()];
 
     // ── Self-protection: settings changes that weaken Guardian ────────
@@ -1393,9 +1473,9 @@ process.stdin.on("end", () => {
     //                     place is judged as appended text.
     //   NotebookEdit      the new cell source alone (cells are JSON strings
     //                     on disk, so a pattern cannot run across them).
-    // Bash is judged on its command text.
+    // Bash is judged on its command text and any script it carries encoded.
     let before = "";
-    let after = write.content;
+    let after = [write.content, ...decodedScripts].join("\n");
     if (toolName === "Write") {
       before = readCurrent(resolve(watched[0]));
     } else if (toolName === "Edit" || toolName === "MultiEdit") {

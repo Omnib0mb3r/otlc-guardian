@@ -78,7 +78,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-064 | IN-PROGRESS | Windows path aliases dodge the watch and protected sets: `::$INDEX_ALLOCATION` on a folder, and 8.3 short names (`CLAUDE~1`) |
 | BUG-065 | IN-PROGRESS | Settings and guard-file protection miss explicit deletes and replaces: `find -delete`, `rsync --delete`, `tar -x`, `cmd /c rd` and `del` |
 | BUG-066 | IN-PROGRESS | Copies into watched paths not judged: directory sources (`cp -r dir/. .claude/agents/`), `sort -o`, `cmd /c copy` |
-| BUG-067 | OPEN | PowerShell parameter prefixes (`-LiteralP`, `-Pat`, `-Val`) are not recognized; `-EncodedCommand` payload text is never scanned |
+| BUG-067 | IN-PROGRESS | PowerShell parameter prefixes (`-LiteralP`, `-Pat`, `-Val`) are not recognized; `-EncodedCommand` payload text is never scanned |
 | BUG-068 | SMOKE-TESTING | `guardian scan` exits 0 when it finds injection or secret patterns, so a script or pipeline cannot act on the result |
 | BUG-069 | SMOKE-TESTING | `AUTHZ-003` (JS IDOR) counts caller-supplied ids as ownership: `userId: req.params.userId`, a `:teamId` path parameter |
 | BUG-070 | SMOKE-TESTING | `AUTHZ-001` ignores route-level middleware: `router.delete(path, requireAuth, handler)` is reported CRITICAL as unauthenticated |
@@ -894,13 +894,15 @@ Re-probe R4 (variants of verifier P1), all allowed: `cp -r staged/. .claude/agen
 
 ### BUG-067: PowerShell parameter prefixes and encoded command payloads
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** IN-PROGRESS · **Found:** 2026-11-10
 
 Re-probe R5 (variants of verifier P6), both confirmed to write in real PowerShell:
 - PowerShell accepts any unambiguous prefix of a parameter name; `psParse()` knows full names only. `Set-Content -LiteralP .claude/settings.local.json -Val '{"disableAllHooks":true}'` passes silently; `Set-Content -Pat CLAUDE.md -Val '<payload>'` gets an advisory only.
 - `powershell -enc <base64>`: the decoded script is read for write targets, but its text is never scanned for patterns, so a payload inside it passes. The CHANGELOG line "`-EncodedCommand` is decoded" overstated this (corrected 2026-11-10).
 
 Hook edit; waits.
+
+**Fix in staging (2026-11-10), not yet live.** Staging commit: recorded in `staging/APPLY.md`. In `staging/hooks/injection-guard-hook.mjs`: `psParse(args, cmdlet)` binds each named parameter through the new `psParam()`: an exact name or alias, else the single parameter (or alias) of that cmdlet the typed name is a prefix of, using per-cmdlet tables (`PS_PARAMS` for the cmdlets the reader knows, plus `PS_COMMON` and `PS_COMMON_ALIASES`, `LITERAL_ALIASES` for `-LP`/`-PSPath`, and `PS_CMDLET_ALIASES`); an ambiguous prefix binds nothing, which matches PowerShell refusing the command. `psPaths()` takes the cmdlet too. `New-Item -Name` now puts the item under `-Path` (the manual had noted it under BUG-044). `powershellScript()` reads the host's options by prefix (`-enc`, `-e`, `-ec`, `-EncodedC`, `-c`, `-Comm`, `-f`, and the value options such as `-exec`, `-w`), preferring the code-running reading for a shared prefix, and returns `{ text, encoded }`; `shellWriteTargets()` collects each decoded script into `decodedScripts`, and the main handler scans the command text joined with them. Tests: `tests/hook.test.js`, group "PowerShell parameter prefixes and encoded scripts (BUG-067)": 16 staged tests, 15 failing against the staged hook before the fix (`New-Item -Path .claude -Name ...` already asked, through the `.claude` folder); three spellings then turned out to be wrong tests (`-Pa` is ambiguous on `Copy-Item`, `Rename-Item` and `Set-Content`, which PowerShell refuses) and were respelled `-Pat`; an "ambiguous prefix binds nothing" test and a clean encoded script pass on both. The bug stays IN-PROGRESS until Michael applies the staged hook. Smoke test after applying, on Windows with prompts on: through the PowerShell tool run `Set-Content -LiteralP .claude/settings.local.json -Val '{}'` and see a Guardian prompt.
 
 ### BUG-068: `guardian scan` exits 0 on a finding
 

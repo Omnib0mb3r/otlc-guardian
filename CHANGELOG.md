@@ -201,6 +201,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **PowerShell parameter prefixes and encoded scripts (BUG-067).**
+  Parameters bind the way PowerShell binds them: any unambiguous prefix
+  of a cmdlet's parameter or alias (`-LiteralP`, `-Pat`, `-Val`, `-LP`,
+  `-PSPath`), from per-cmdlet tables; an ambiguous prefix binds nothing,
+  as PowerShell refuses it. `New-Item -Name` is read under `-Path`. The
+  `powershell`/`pwsh` host options are read by prefix too (`-enc`,
+  `-EncodedC`, `-Comm`), and the script inside `-EncodedCommand` is now
+  scanned with the command text, so a payload there asks (denied in
+  bypass mode) instead of passing.
+
 - **Copies of folders, and `sort -o` and `uniq` outputs, are judged by
   content (BUG-066).** A folder copied into a watched path (`cp -r
   staged/. .claude/agents/`, `mv`, `rsync`, `Copy-Item -Recurse`,

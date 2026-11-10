@@ -53,8 +53,8 @@ Specifically:
   - deletes and replaces it does not parse: `find -delete`, `rsync --delete`, `tar -x` members (BUG-065; fix staged in `staging/`, not yet live);
   - `cmd /c` and `cmd.exe /c` are read by neither shell reader, so `rd`, `del`, `copy` and redirects through them pass (BUG-048, BUG-065, BUG-066; the BUG-048 fix is staged in `staging/`, not yet live);
   - a PowerShell tool command is read only for redirections and Guardian's list of cmdlets, so `git`, `bash -c`, `node -e` and `curl -o` typed into the PowerShell tool are not read (BUG-048; fix staged in `staging/`, not yet live);
-  - PowerShell parameter prefixes (`-LiteralP`, `-Pat`, `-Val`) are not recognized as the parameters they abbreviate (BUG-067);
-  - the script inside `powershell -EncodedCommand` is decoded and read for write targets, but its text is not scanned for patterns (BUG-067);
+  - PowerShell parameter prefixes (`-LiteralP`, `-Pat`, `-Val`) are not recognized as the parameters they abbreviate (BUG-067; fix staged in `staging/`, not yet live);
+  - the script inside `powershell -EncodedCommand` is decoded and read for write targets, but its text is not scanned for patterns (BUG-067; fix staged in `staging/`, not yet live);
   - copies whose content is not read: a directory source (`cp -r staged/. .claude/agents/`), `sort -o`, `cmd /c copy` (BUG-066; fix staged in `staging/`, not yet live);
   - `security/package.json`, which keeps the scanner loadable in a CommonJS project, is not in the protected set, so a write that changes its `type` switches the scanner off (BUG-063; fix staged in `staging/`, not yet live).
 
