@@ -60,6 +60,13 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-046 | OPEN | `scanChange()` context window: whitespace padding can cross the 2 KB window |
 | BUG-047 | OPEN | Encoded Bash content passes the hook: `printf` octal, `rev`, `tr` rot13, variable concatenation, quote-split words |
 | BUG-048 | OPEN | PowerShell tool commands are not read for `git`, `bash -c`, `node -e` or `curl -o` writes, and `cmd /c` is read by neither shell reader |
+| BUG-049 | OPEN | Runtime `scan()` with an unknown `mode` runs no rules and returns clean (fails open on a typo) |
+| BUG-050 | OPEN | `guardInput` with `blockOnSecrets: false` still throws on a secret, with a "prompt injection" message (Node only; Python differs) |
+| BUG-051 | OPEN | Audit of a path that does not exist scans 0 files and exits 0, even with `--fail-on-error` |
+| BUG-052 | OPEN | Audit: a project inside a folder named `test`, `tests` or `spec` loses every rule that skips test files |
+| BUG-053 | OPEN | Importing `security/03-audit.js` (package export `./audit`) runs an audit of the cwd as a side effect |
+| BUG-054 | OPEN | Audit secret rules lag the runtime guard: SEC-003 matches only `ghp_`, SEC-004 misses OpenSSH, EC and encrypted keys |
+| BUG-055 | OPEN | `DEP-001` reads files with no error handling, so one unreadable file crashes the audit |
 
 <!-- INDEX END -->
 
@@ -666,5 +673,53 @@ Found by the manual writer reading `commandWrites()` in `.claude/hooks/injection
 - Cause: for the PowerShell dialect `commandWrites()` returns right after `powershellWrites()`, so the readers the Bash path runs (`gitWrites()`, nested `bash -c`/`sh -c`, inline interpreter code, `curl -o`) never see a PowerShell tool command. Only redirections and the listed cmdlets are read. No reader handles `cmd /c` or `cmd.exe /c`.
 - Impact: HIGH on this machine, where PowerShell is the primary shell. Verifier P2 (git checkout of the settings) and P1-class copies are closed for Bash only. The P3 guard-file protection has the same hole through the PowerShell tool.
 - The fix is in the hook, which is now protected (cc9182f), so it must be made in a session that prompts, not in bypass mode. Tests first in `tests/hook.test.js`: the table above for both tools, plus the guard files.
+
+### BUG-049: Runtime `scan()` with an unknown `mode` fails open
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Found by the manual writer reading `scan()` in `security/01-injection-guard.js` (about line 375 at `0fa32ce`); reproduced: `scan(textWithAnAnthropicKey, "nosuchmode")` returns `{ violations: [], hasSecrets: false, hasCritical: false }`, while mode `"secrets"` reports GUARD-SEC-010 CRITICAL.
+
+- `scan()` runs the injection rules only for `"injection"` or `"all"` and the secret rules only for `"secrets"` or `"all"`. Any other string runs nothing and reports clean. A caller's typo turns the guard off with no error. `scanChange()` takes the same `mode` and needs the same check.
+- Fix direction: reject an unknown mode with `GuardianError` (Python: `ValueError`), with tests in both suites. The scanner is a protected file (cc9182f), so the fix is made in a session that prompts.
+
+### BUG-050: `guardInput` ignores `blockOnSecrets: false` and names a secret as an injection
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Found by the manual writer; reproduced: `guardInput(textWithAnAnthropicKey, { blockOnSecrets: false, blockOnCritical: true })` throws `GuardianError` "Critical prompt injection attempt detected. Blocked."
+
+- `scan()` sets `hasCritical` for any CRITICAL finding, and every secret pattern is CRITICAL, so the `blockOnCritical` branch blocks a secret that the caller asked not to block on, and its message calls it an injection. The Python port keeps the two apart (needs a parity test either way).
+- Fix direction: decide the block on injection findings for `blockOnCritical` and on secret findings for `blockOnSecrets`, with the message naming which. Protected file; session that prompts.
+
+### BUG-051: Audit of a missing path passes
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Found by the manual writer; reproduced: `node security/03-audit.js ./does-not-exist --fail-on-error` exits 0. The target is taken as given (`args.find((a) => !a.startsWith("--"))` in the CLI entry point), no file is collected, and a clean report results. A typo in a CI path, or `-h` taken as a path, turns the gate into a pass. Fix: a target that does not exist is an error (exit 2, message on stderr), tested in `tests/audit.test.js`. Related: there is no `--help`; unknown `--` flags are ignored.
+
+### BUG-052: Audit: projects under a test-named folder lose the test-skipping rules
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Found by the manual writer; reproduced: the same `console.log` file reports ERR-003 at `scratch/proj/src/a.js` and nothing at `scratch/tests/proj/src/a.js`. The test-file check runs on the absolute path, so any project whose parent folders include `test`, `tests` or `spec` is treated as test code throughout. Fix: judge the path relative to the project root.
+
+### BUG-053: Importing the audit module runs an audit
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+From code: the CLI entry point at the bottom of `security/03-audit.js` calls `runAudit(targetDir, ...)` at module load, and `package.json` exports the file as `./audit`. `import { runAudit } from "otlc-guardian/audit"` audits the cwd and can call `process.exit`. Fix: run the CLI block only when the file is the entry point (compare `import.meta.url` with `process.argv[1]`).
+
+### BUG-054: Audit secret rules lag the runtime guard
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+From code: SEC-003 is `/ghp_[a-zA-Z0-9]{36}/` and SEC-004 matches only `BEGIN PRIVATE KEY` and `BEGIN RSA PRIVATE KEY`. BUG-026 (1.5.0) widened the runtime guard to `github_pat_`, `ghs_`, OpenSSH and EC keys, Slack, Stripe live and Anthropic OAuth, but not the audit, though a comment says the two are kept in step. A committed fine-grained GitHub token or OpenSSH key passes the audit. Fix: one shared secret table, or a test that fails when the two sets differ.
+
+### BUG-055: `DEP-001` can crash the audit
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+From code: DEP-001's `checkFn` calls `fs.readFileSync(f, "utf8")` for every file with no try/catch (about line 1203), unlike every other read in the engine. A file that disappears or cannot be read mid-scan throws out of `runAudit`. Fix: the same guarded read the other checks use, with the unreadable file reported.
 
 <!-- DETAILS END -->

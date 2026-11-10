@@ -108,7 +108,9 @@ support of each component.
 Wraps every call into your AI API. Scans user input before it reaches the model (blocks
 critical injections, sanitizes delimiters, normalizes Unicode) and scans AI output
 before it reaches your user (blocks leaked API keys, catches reflected injection).
-**Both Node and Python implementations** — same patterns, same normalizer, same shape.
+**Node and Python implementations** share the pattern set. They differ in places: Python has no
+`scanChange()`, its `scan()` returns a list instead of an object, and the decode passes differ
+(see the manual, chapter 03).
 
 - **28 injection patterns** — classic override, role hijack, prompt extraction, delimiter
   injection, jailbreak classics, HTML/block-comment context poisoning
@@ -120,7 +122,7 @@ before it reaches your user (blocks leaked API keys, catches reflected injection
 - **Unicode / encoding bypass defense** — NFKC normalization (fullwidth attacks),
   invisible-character stripping (zero-width space attacks), URL-decode, base64-decode —
   before the pattern scan runs
-- **Input length cap** (1.1.1) — `scan()` hard-caps input at 100 KB to prevent CPU burn
+- **Input length cap** (1.1.1) - `scan()` hard-caps input at 1,000,000 characters to prevent CPU burn
   from crafted mega-payloads
 - **Express middleware** (Node) and **FastAPI dependency** (Python) both included
 - The Python module uses `logging` from the standard library — **no `structlog` or
@@ -306,8 +308,8 @@ Claude Code.
   legacy `sk-`, Google, GitHub, AWS, private keys, and connection strings with embedded
   credentials)
 - Rate limiter, secure headers, structured logger, health check endpoint
-- Works identically in Node (`security/01-injection-guard.js`) and Python
-  (`security/injection_guard.py`)
+- Node (`security/01-injection-guard.js`) and Python (`security/injection_guard.py`), with
+  the differences listed in the manual, chapter 03
 
 **Audit CLI — scan any codebase:**
 - `guardian audit` scans for hardcoded secrets, silent errors, raw SQL, console.log in

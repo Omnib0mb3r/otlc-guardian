@@ -156,9 +156,9 @@ PRINTABLE_PATTERN     = re.compile(r"^[\x20-\x7E\s]{10,}$")
 # `max_length` (default 4000), but `scan()` is imported and used directly
 # by test code and third-party callers. Without a cap, a huge payload
 # through a direct caller can burn CPU inside the normalizer (which
-# appends URL-decoded + base64-decoded copies onto the original). 100 KB
-# is well above any legitimate injection payload and stays in the
-# millisecond range on modern hardware.
+# appends URL-decoded + base64-decoded copies onto the original). The cap
+# is 1,000,000 characters, the same as the Node module; input past it is
+# reported as GUARD-INJ-OVERSIZE, not dropped silently.
 MAX_SCAN_LENGTH = 1_000_000
 
 # ---------------------------------------------------------------------------
