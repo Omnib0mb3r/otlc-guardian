@@ -276,6 +276,7 @@
 <tr><td>Change scanner</td><td><code>scanChange()</code></td><td>None. Only the Node hooks need it.</td></tr>
 <tr><td><code>scan()</code> return</td><td><code>{ violations, hasSecrets, hasCritical }</code></td><td><code>list[Violation]</code>; callers compute the flags.</td></tr>
 <tr><td>Violation fields</td><td><code>type id legacyId severity matched pattern|label timestamp</code></td><td>dataclass <code>type id severity matched description timestamp legacy_id</code>; no <code>pattern</code> or <code>label</code>, the rule description or secret label goes in <code>description</code>.</td></tr>
+<tr><td>Unknown <code>mode</code>, or a non-string, to <code>scan()</code></td><td>scans nothing and returns clean (BUG-049; fix staged)</td><td>raises <code>ValueError</code> or <code>TypeError</code> (BUG-049, 2026-11-10)</td></tr>
 <tr><td>Non-string to the guards</td><td>throws <code>GuardianError</code></td><td>raises <code>TypeError</code></td></tr>
 <tr><td>Critical block</td><td>any CRITICAL, secrets included</td><td>injection CRITICAL only, so <code>block_on_secrets=False</code> really lets a secret through</td></tr>
 <tr><td>Percent view</td><td>per-run decode, invalid runs left as written</td><td><code>urllib.parse.unquote(base)</code> on the whole string; invalid UTF-8 becomes U+FFFD (standard library default)</td></tr>
@@ -395,8 +396,8 @@
 <p><b>BUG-046 (OPEN).</b> Whitespace padding longer than the 2 KB <code>CHANGE_CONTEXT</code> window separates the old half of a phrase from the added half, and neither window sees the whole match.</p>
 <p><b>BUG-043 (OPEN).</b> False denies from the hook on scanner matches: <code>### System: Billing</code>, <code>### Prompt:</code>, a <code>--- System ---</code> line, prose that mentions wrapping text in a user role tag, and a CLAUDE.md line that quotes a pattern as data. Rules 015, 019 and 020 match these by design; the fix belongs to the rules or to the hook.</p>
 <p><b>BUG-023, BUG-024, BUG-026 (SMOKE-TESTING).</b> The cubic comment rules, the eight normalizer bypasses and the missed secret formats are fixed in the 1.5.0 tree and covered by tests; they stay open until verified in a real project.</p>
-<p><b>BUG-049 (OPEN).</b> <code>scan()</code> with an unknown <code>mode</code> runs no rules and returns clean, so a typo turns the guard off.</p>
-<p><b>BUG-050 (OPEN).</b> <code>guardInput</code> with <code>blockOnSecrets: false</code> still throws on a secret, because <code>hasCritical</code> counts secret findings, and the message calls it an injection.</p>
+<p><b>BUG-049 (IN-PROGRESS).</b> <code>scan()</code> with an unknown <code>mode</code> runs no rules and returns clean, so a typo turns the guard off; a non-string returns clean too. Fixed in the Python port (live: <code>ValueError</code>, <code>TypeError</code>); the Node fix is staged, not yet live (chapter 04, <a href="#hk-staged">Staged fixes</a>).</p>
+<p><b>BUG-050 (OPEN).</b> <code>guardInput</code> with <code>blockOnSecrets: false</code> still throws on a secret, because <code>hasCritical</code> counts secret findings, and the message calls it an injection. The fix is staged, not yet live (chapter 04, <a href="#hk-staged">Staged fixes</a>); the Python port already keeps the two apart, and a parity test now checks it.</p>
 <p><b>BUG-027 (IN-PROGRESS).</b> The hook now protects the scanner file and itself; the remaining half sits outside this chapter.</p>
 <p>Detection is pattern-based. A reworded instruction that matches none of the 28 rules passes, and the substring rules (023, 024, 028 and others) fire on ordinary mentions. Neither has a bug entry. CHANGELOG.md lists the first under known limits; the second follows from the regexes having no word boundaries.</p>
 </div>

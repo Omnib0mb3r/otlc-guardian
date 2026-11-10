@@ -363,6 +363,8 @@ const MAX_SCAN_LENGTH = 1_000_000;
  * @param {string} text
  * @param {'injection'|'secrets'|'all'} mode
  * @returns {{ violations: Array, hasSecrets: boolean, hasCritical: boolean }}
+ *   hasCritical: any CRITICAL finding, injection or secret
+ * @throws {GuardianError} for a mode other than the three, or text that is not a string (BUG-049)
  */
 /**
  * Rule ids carry the engine prefix GUARD- (1.5.0) so they cannot be
@@ -372,8 +374,24 @@ const MAX_SCAN_LENGTH = 1_000_000;
  */
 const legacyId = (id) => id.replace(/^GUARD-/, "");
 
+const SCAN_MODES = new Set(["injection", "secrets", "all"]);
+
+/**
+ * A mode that is not one of the three, or text that is not a string, would
+ * scan nothing and report clean, so a caller's typo would switch the guard
+ * off. Both are errors instead (BUG-049).
+ */
+function assertScanArgs(fn, text, mode) {
+  if (!SCAN_MODES.has(mode)) {
+    throw new GuardianError(`${fn}() mode must be "injection", "secrets" or "all"; got ${JSON.stringify(mode) ?? String(mode)}.`, []);
+  }
+  if (typeof text !== "string") {
+    throw new GuardianError(`${fn}() requires a string; got ${text === null ? "null" : typeof text}.`, []);
+  }
+}
+
 export function scan(text, mode = "all") {
-  if (typeof text !== "string") return { violations: [], hasSecrets: false, hasCritical: false };
+  assertScanArgs("scan", text, mode);
 
   // Hard cap BEFORE normalization — the normalizer concatenates
   // URL-decoded and base64-decoded copies onto the original, so a
@@ -531,9 +549,11 @@ function firstAddedMatch(rule, beforeViews, afterViews) {
  * @param {string} after  - text as it will be
  * @param {'injection'|'secrets'|'all'} mode
  * @returns {{ violations: Array, hasSecrets: boolean, hasCritical: boolean }}
+ *   hasCritical: any CRITICAL finding, injection or secret
+ * @throws {GuardianError} for a mode other than the three, or text that is not a string (BUG-049)
  */
 export function scanChange(before, after, mode = "all") {
-  if (typeof after !== "string") return { violations: [], hasSecrets: false, hasCritical: false };
+  assertScanArgs("scanChange", after, mode);
   const [oldWindow, newWindow] = changedWindows(typeof before === "string" ? before : "", after);
 
   const { violations } = scan(newWindow, mode);
@@ -630,7 +650,7 @@ export function sanitize(input) {
  * @param {string} input - Raw user input
  * @param {object} options
  * @param {number}   options.maxLength        - Max allowed input length (default: 4000)
- * @param {boolean}  options.blockOnCritical  - Throw on CRITICAL violations (default: true)
+ * @param {boolean}  options.blockOnCritical  - Throw on CRITICAL injection findings (default: true)
  * @param {boolean}  options.blockOnSecrets   - Throw if secrets detected (default: true)
  * @param {function} options.onViolation      - Callback for custom logging/alerting
  * @param {string}   options.context          - Label for log output
@@ -656,8 +676,11 @@ export function guardInput(input, options = {}) {
     input = input.slice(0, maxLength);
   }
 
-  // Scan
-  const { violations, hasSecrets, hasCritical } = scan(input, "all");
+  // Scan. Every secret rule is CRITICAL, so scan()'s hasCritical covers
+  // secrets too; blockOnCritical is decided on injection findings alone,
+  // or blockOnSecrets: false would not let a secret through (BUG-050).
+  const { violations, hasSecrets } = scan(input, "all");
+  const hasCriticalInjection = violations.some((v) => v.type === "injection" && v.severity === "CRITICAL");
 
   // Report visibly
   reportViolations(violations, context);
@@ -673,7 +696,7 @@ export function guardInput(input, options = {}) {
   }
 
   // Block on critical injection
-  if (hasCritical && blockOnCritical) {
+  if (hasCriticalInjection && blockOnCritical) {
     throw new GuardianError("Critical prompt injection attempt detected. Blocked.", violations);
   }
 

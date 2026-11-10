@@ -201,6 +201,18 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **`scan()` fails closed (BUG-049).** `scan()` and `scanChange()` throw
+  `GuardianError` for a mode other than `"injection"`, `"secrets"` or
+  `"all"`, and for text that is not a string, instead of scanning nothing
+  and reporting clean. A caller that passed `null` or a typo and relied on
+  the empty result now gets an error. The Python port's half is live (see
+  "Fixed").
+- **`guardInput` keeps secrets and injections apart (BUG-050).**
+  `blockOnCritical` is decided on CRITICAL injection findings only, so
+  `blockOnSecrets: false` lets a secret through as documented, and a block
+  names its real cause. `scan()`'s `hasCritical` keeps its meaning (any
+  CRITICAL finding).
+
 - **PowerShell parameter prefixes and encoded scripts (BUG-067).**
   Parameters bind the way PowerShell binds them: any unambiguous prefix
   of a cmdlet's parameter or alias (`-LiteralP`, `-Pat`, `-Val`, `-LP`,
@@ -257,6 +269,15 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
   of silently switching the scanner off.
 
 ### Fixed
+
+- **Python `scan()` fails closed (BUG-049, Python half).** In
+  `security/injection_guard.py`, `scan()` raises `ValueError` for a mode
+  other than `'injection'`, `'secrets'` or `'all'` and `TypeError` for
+  text that is not a string, instead of returning no findings. The Node
+  half is staged. `tests/injection-guard.test.js` now runs a Python parity
+  check when `python` is on PATH (and lists it as skipped when not),
+  including `guard_input(block_on_secrets=False)` letting a secret through
+  (BUG-050).
 
 - **INJ-003 on shadcn `chart.jsx` resolved without a rule change
   (BUG-003).** The finding is right: `ChartStyle` writes the `id` prop and

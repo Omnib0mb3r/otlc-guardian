@@ -60,8 +60,8 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-046 | OPEN | `scanChange()` context window: whitespace padding can cross the 2 KB window |
 | BUG-047 | OPEN | Encoded Bash content passes the hook: `printf` octal, `rev`, `tr` rot13, variable concatenation, quote-split words |
 | BUG-048 | IN-PROGRESS | PowerShell tool commands are not read for `git`, `bash -c`, `node -e` or `curl -o` writes, and `cmd /c` is read by neither shell reader |
-| BUG-049 | OPEN | Runtime `scan()` with an unknown `mode` runs no rules and returns clean (fails open on a typo) |
-| BUG-050 | OPEN | `guardInput` with `blockOnSecrets: false` still throws on a secret, with a "prompt injection" message (Node only; Python differs) |
+| BUG-049 | IN-PROGRESS | Runtime `scan()` with an unknown `mode` runs no rules and returns clean (fails open on a typo) |
+| BUG-050 | IN-PROGRESS | `guardInput` with `blockOnSecrets: false` still throws on a secret, with a "prompt injection" message (Node only; Python differs) |
 | BUG-051 | SMOKE-TESTING | Audit of a path that does not exist scans 0 files and exits 0, even with `--fail-on-error` |
 | BUG-052 | SMOKE-TESTING | Audit: a project inside a folder named `test`, `tests` or `spec` loses every rule that skips test files |
 | BUG-053 | SMOKE-TESTING | Importing `security/03-audit.js` (package export `./audit`) runs an audit of the cwd as a side effect |
@@ -735,7 +735,7 @@ Found by the manual writer reading `commandWrites()` in `.claude/hooks/injection
 
 ### BUG-049: Runtime `scan()` with an unknown `mode` fails open
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** IN-PROGRESS · **Found:** 2026-11-10
 
 Found by the manual writer reading `scan()` in `security/01-injection-guard.js` (about line 375 at `0fa32ce`); reproduced: `scan(textWithAnAnthropicKey, "nosuchmode")` returns `{ violations: [], hasSecrets: false, hasCritical: false }`, while mode `"secrets"` reports GUARD-SEC-010 CRITICAL.
 
@@ -743,14 +743,18 @@ Found by the manual writer reading `scan()` in `security/01-injection-guard.js` 
 - Same class: `scan()` returns `{ violations: [], hasSecrets: false, hasCritical: false }` for non-string input (about line 376), so a caller that passes an object or a Buffer is told it is clean. `guardInput` checks the type itself; a direct `scan()` caller does not get that check.
 - Fix direction: reject an unknown mode with `GuardianError` (Python: `ValueError`), with tests in both suites. The scanner is a protected file (cc9182f), so the fix is made in a session that prompts.
 
+**Fix in staging (2026-11-10), not yet live; Python half live.** Staging commit: recorded in `staging/APPLY.md`. In `staging/security/01-injection-guard.js`, the new `assertScanArgs()` (with `SCAN_MODES`) makes `scan()` and `scanChange()` throw `GuardianError` for a mode other than the three and for text that is not a string (for `scanChange()`, the `after` text; a non-string `before` is still read as a new file). This is a deliberate behavior change: `scan(null)` used to return an empty result, and the existing test that asserted it is now `liveOnly()` and goes when the fix is applied. Every caller inside Guardian (both hooks, `guardInput`, `guardOutput`, `guardian scan`) passes a valid mode and a string. Python (not a protected file, so live now): `scan()` in `security/injection_guard.py` raises `ValueError` for an unknown mode and `TypeError` for a non-string (`SCAN_MODES`). Tests: `tests/injection-guard.test.js`, groups "BUG-049: an unknown mode or a non-string is an error" (3 staged tests, all failing against the staged scanner before the fix; one test of the three valid modes passes on both) and "the Python port agrees" (2 Python checks, both failing before the Python fix, run through `python -I` when `python` or `python3` is on PATH, listed as skipped otherwise). The bug stays IN-PROGRESS until Michael applies the staged scanner. Smoke test after applying: `node -e "import('./security/01-injection-guard.js').then(m => m.scan('x', 'nosuchmode'))"` in an installed project fails with the `GuardianError` naming the three modes.
+
 ### BUG-050: `guardInput` ignores `blockOnSecrets: false` and names a secret as an injection
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** IN-PROGRESS · **Found:** 2026-11-10
 
 Found by the manual writer; reproduced: `guardInput(textWithAnAnthropicKey, { blockOnSecrets: false, blockOnCritical: true })` throws `GuardianError` "Critical prompt injection attempt detected. Blocked."
 
 - `scan()` sets `hasCritical` for any CRITICAL finding, and every secret pattern is CRITICAL, so the `blockOnCritical` branch blocks a secret that the caller asked not to block on, and its message calls it an injection. The Python port keeps the two apart (needs a parity test either way).
 - Fix direction: decide the block on injection findings for `blockOnCritical` and on secret findings for `blockOnSecrets`, with the message naming which. Protected file; session that prompts.
+
+**Fix in staging (2026-11-10), not yet live.** Staging commit: recorded in `staging/APPLY.md`. In `staging/security/01-injection-guard.js`, `guardInput()` decides `blockOnCritical` on `hasCriticalInjection` (a CRITICAL finding of type `injection`), not on `scan()`'s `hasCritical`, which keeps its documented meaning of any CRITICAL finding. The messages were already distinct ("secret-shaped content" for secrets, "Critical prompt injection" for injections); with the fix each block now has the right one. The JSDoc for `blockOnCritical` says injection findings. Tests: `tests/injection-guard.test.js`, group "BUG-050: guardInput blocks on secrets and on injection separately": 1 staged test (a secret passes with `blockOnSecrets: false`), failing against the staged scanner before the fix; three guard tests (an injection still blocks and is named as one, a secret blocks by default, `blockOnCritical: false` still blocks a secret) pass on both. Python parity: `guard_input(block_on_secrets=False)` letting a secret through is checked in the Python group (it passed before; the Python port was already right). The bug stays IN-PROGRESS until Michael applies the staged scanner. Smoke test after applying: in a project, `guardInput("deploy with sk-ant-api03-...", { blockOnSecrets: false })` returns the text instead of throwing.
 
 ### BUG-051: Audit of a missing path passes
 

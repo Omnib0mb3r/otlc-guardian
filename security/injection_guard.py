@@ -290,6 +290,9 @@ def _normalize_for_scan(text: str) -> str:
     return "\n".join(views)
 
 
+SCAN_MODES = frozenset({"injection", "secrets", "all"})
+
+
 def scan(text: str, mode: str = "all") -> list[Violation]:
     """
     Scans text for injection patterns and (optionally) secret leaks.
@@ -304,9 +307,17 @@ def scan(text: str, mode: str = "all") -> list[Violation]:
 
     Returns:
         list of Violation objects (empty if clean)
+
+    Raises:
+        ValueError: mode is not one of the three. Any other mode would scan
+            nothing and report clean, so a typo would switch the guard off
+            (BUG-049).
+        TypeError: text is not a string, for the same reason.
     """
+    if mode not in SCAN_MODES:
+        raise ValueError(f"scan() mode must be 'injection', 'secrets' or 'all'; got {mode!r}.")
     if not isinstance(text, str):
-        return []
+        raise TypeError(f"scan() requires a string; got {type(text).__name__}.")
 
     unscanned = 0
     if len(text) > MAX_SCAN_LENGTH:
