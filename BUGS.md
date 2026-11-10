@@ -74,7 +74,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-060 | SMOKE-TESTING | `guardian init` copies Guardian's own `.github/` (CODEOWNERS naming Guardian's maintainer, templates) and allowlist into every project |
 | BUG-061 | SMOKE-TESTING | `guardian init` and `update` on an invalid `.claude/settings.json` stop with a raw stack trace after earlier steps are written |
 | BUG-062 | SMOKE-TESTING | `guardian check` passes (exit 0, "correctly installed") when the hook smoke test fails, and never checks the hook is registered |
-| BUG-063 | OPEN | HIGH: the PreToolUse hook fails open in every CommonJS project: the ESM scanner cannot load under `"type": "commonjs"` |
+| BUG-063 | IN-PROGRESS | HIGH: the PreToolUse hook fails open in every CommonJS project: the ESM scanner cannot load under `"type": "commonjs"` |
 | BUG-064 | OPEN | Windows path aliases dodge the watch and protected sets: `::$INDEX_ALLOCATION` on a folder, and 8.3 short names (`CLAUDE~1`) |
 | BUG-065 | OPEN | Settings and guard-file protection miss explicit deletes and replaces: `find -delete`, `rsync --delete`, `tar -x`, `cmd /c rd` and `del` |
 | BUG-066 | OPEN | Copies into watched paths not judged: directory sources (`cp -r dir/. .claude/agents/`), `sort -o`, `cmd /c copy` |
@@ -795,7 +795,7 @@ BUG-063 to BUG-067 are from the independent re-probe against `4fd3ef8`: `C:/dev/
 
 ### BUG-063: The PreToolUse hook fails open in CommonJS projects
 
-**Status:** OPEN · **Found:** 2026-11-10 · **Severity:** HIGH
+**Status:** IN-PROGRESS · **Found:** 2026-11-10 · **Severity:** HIGH
 
 Re-probe R1. `guardian init` copies the ESM scanner to `<project>/security/01-injection-guard.js`. npm 11's `npm init -y` writes `"type": "commonjs"`, and with that the scanner cannot load: the hook reports "scanner failed to load (Unexpected token 'export'). This tool call was NOT scanned." and exits 1, which Claude Code treats as a non-blocking error. Every later write goes through unscanned. A Write of `security/package.json` containing `{"type":"commonjs"}` does the same in any project, and that file is not protected.
 
