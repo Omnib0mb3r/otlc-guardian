@@ -201,6 +201,15 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Fewer false denies on headings, separators and prose (BUG-043).**
+  `GUARD-INJ-019` matches only a prompt-template delimiter (the colon ends
+  the line, or the keyword sits against the hashes), so `### System:
+  Billing` and `### Prompt: how to...` headings pass. `GUARD-INJ-020`
+  needs an upper-case bare `SYSTEM` (`--- SYSTEM ---`); qualified forms
+  such as `--- system message ---` still match in any case. `GUARD-INJ-015`
+  skips a role tag named as a noun (`wrap in <user> tags`). The Python
+  port's rules are live (see "Fixed").
+
 - **`scan()` fails closed (BUG-049).** `scan()` and `scanChange()` throw
   `GuardianError` for a mode other than `"injection"`, `"secrets"` or
   `"all"`, and for text that is not a string, instead of scanning nothing
@@ -269,6 +278,12 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
   of silently switching the scanner off.
 
 ### Fixed
+
+- **Python delimiter rules stop matching headings, separators and prose
+  (BUG-043, Python half).** `GUARD-INJ-019`, `GUARD-INJ-020` and
+  `GUARD-INJ-015` in `security/injection_guard.py` match as the staged
+  Node rules do; a parity check in `tests/injection-guard.test.js` runs
+  the same fixtures through both.
 
 - **Python `scan()` fails closed (BUG-049, Python half).** In
   `security/injection_guard.py`, `scan()` raises `ValueError` for a mode

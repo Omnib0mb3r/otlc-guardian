@@ -97,14 +97,18 @@ INJECTION_PATTERNS: list[InjectionPattern] = [
     InjectionPattern("GUARD-INJ-012", re.compile(r"(?:print|output|reveal|show|display|repeat)\s+(?:your\s+)?(?:system\s+)?(?:prompt|instructions)", re.I), "HIGH", "Prompt extraction"),
     InjectionPattern("GUARD-INJ-013", re.compile(r"what\s+(?:are|were)\s+your\s+(?:original\s+)?instructions", re.I), "HIGH", "Instruction extraction"),
     InjectionPattern("GUARD-INJ-014", re.compile(r"tell\s+me\s+your\s+(?:system\s+)?prompt",    re.I), "HIGH",     "System prompt extraction"),
-    InjectionPattern("GUARD-INJ-015", re.compile(r"</?(?:system|assistant|human|user)>",        re.I), "CRITICAL", "Delimiter injection"),
+    # BUG-043: a role tag named as a noun ("wrap in <user> tags") is prose.
+    InjectionPattern("GUARD-INJ-015", re.compile(r"</?(?:system|assistant|human|user)>(?![ \t]*(?:tags?|elements?|blocks?)\b)", re.I), "CRITICAL", "Delimiter injection"),
     InjectionPattern("GUARD-INJ-016", re.compile(r"\[SYSTEM\]",                                 re.I), "CRITICAL", "SYSTEM tag injection"),
     InjectionPattern("GUARD-INJ-017", re.compile(r"\[INST\]",                                   re.I), "CRITICAL", "INST tag injection"),
     InjectionPattern("GUARD-INJ-018", re.compile(r"<<\s*SYS\s*>>",                              re.I), "CRITICAL", "SYS tag injection"),
     # GUARD-INJ-019 / GUARD-INJ-020 match prompt-template delimiters ("### Instruction:",
     # "--- SYSTEM ---"), not ordinary headings or YAML front matter.
-    InjectionPattern("GUARD-INJ-019", re.compile(r"#{3,6}[ \t]*(?:system(?:[ \t]+prompt)?|instructions?|prompt)[ \t]*:", re.I), "CRITICAL", "Markdown system tag"),
-    InjectionPattern("GUARD-INJ-020", re.compile(r"-{3,}[ \t]*system(?:[ \t]+(?:prompt|message|instructions?))?[ \t]*(?:-{3,}|:|$)", re.I | re.M), "CRITICAL", "YAML system override"),
+    # BUG-043: a delimiter ends its line or sits against the hashes, so
+    # "### System: Billing" is a heading; a bare "system" separator is upper
+    # case, so "--- System ---" between sections is not one.
+    InjectionPattern("GUARD-INJ-019", re.compile(r"#{3,6}(?:[ \t]*(?:system(?:[ \t]+prompt)?|instructions?|prompt)[ \t]*:[ \t]*$|(?:system(?:[ \t]+prompt)?|instructions?|prompt)[ \t]*:)", re.I | re.M), "CRITICAL", "Markdown system tag"),
+    InjectionPattern("GUARD-INJ-020", re.compile(r"-{3,}[ \t]*(?:SYSTEM|(?i:system)[ \t]+(?i:prompt|message|instructions?))[ \t]*(?:-{3,}|:|$)", re.M), "CRITICAL", "YAML system override"),
     InjectionPattern("GUARD-INJ-021", re.compile(r"do\s+anything\s+now",                        re.I), "HIGH",     "DAN variant"),
     InjectionPattern("GUARD-INJ-022", re.compile(r"DAN\s+mode",                                 re.I), "HIGH",     "DAN mode"),
     InjectionPattern("GUARD-INJ-023", re.compile(r"developer\s+mode",                           re.I), "HIGH",     "Developer mode jailbreak"),

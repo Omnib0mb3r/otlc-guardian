@@ -44,7 +44,8 @@ export const INJECTION_PATTERNS = [
   { pattern: /tell\s+me\s+your\s+(?:system\s+)?prompt/i,            severity: "HIGH",     id: "GUARD-INJ-014" },
 
   // Token/delimiter injection (LLM-specific)
-  { pattern: /<\/?(?:system|assistant|human|user)>/i,                severity: "CRITICAL", id: "GUARD-INJ-015" },
+  // BUG-043: a role tag named as a noun ("wrap in <user> tags") is prose.
+  { pattern: /<\/?(?:system|assistant|human|user)>(?![ \t]*(?:tags?|elements?|blocks?)\b)/i, severity: "CRITICAL", id: "GUARD-INJ-015" },
   { pattern: /\[SYSTEM\]/i,                                          severity: "CRITICAL", id: "GUARD-INJ-016" },
   { pattern: /\[INST\]/i,                                            severity: "CRITICAL", id: "GUARD-INJ-017" },
   { pattern: /<<\s*SYS\s*>>/i,                                       severity: "CRITICAL", id: "GUARD-INJ-018" },
@@ -53,8 +54,12 @@ export const INJECTION_PATTERNS = [
   // 1.4 forms matched "### System Overview", "### Instructions" and any
   // YAML front matter whose first key starts with "system", which made
   // the hook deny legitimate writes to planning files.
-  { pattern: /#{3,6}[ \t]*(?:system(?:[ \t]+prompt)?|instructions?|prompt)[ \t]*:/i, severity: "CRITICAL", id: "GUARD-INJ-019" },
-  { pattern: /-{3,}[ \t]*system(?:[ \t]+(?:prompt|message|instructions?))?[ \t]*(?:-{3,}|:|$)/im, severity: "CRITICAL", id: "GUARD-INJ-020" },
+  // BUG-043: a delimiter ends its line ("### Instruction:") or sits against
+  // the hashes ("###System:"), so "### System: Billing" is a heading; a
+  // bare "system" separator is upper case ("--- SYSTEM ---"), so
+  // "--- System ---" between sections is not one.
+  { pattern: /#{3,6}(?:[ \t]*(?:system(?:[ \t]+prompt)?|instructions?|prompt)[ \t]*:[ \t]*$|(?:system(?:[ \t]+prompt)?|instructions?|prompt)[ \t]*:)/im, severity: "CRITICAL", id: "GUARD-INJ-019" },
+  { pattern: /-{3,}[ \t]*(?:SYSTEM|[Ss][Yy][Ss][Tt][Ee][Mm][ \t]+(?:[Pp][Rr][Oo][Mm][Pp][Tt]|[Mm][Ee][Ss][Ss][Aa][Gg][Ee]|[Ii][Nn][Ss][Tt][Rr][Uu][Cc][Tt][Ii][Oo][Nn][Ss]?))[ \t]*(?:-{3,}|:|$)/m, severity: "CRITICAL", id: "GUARD-INJ-020" },
 
   // Jailbreak classics
   { pattern: /do\s+anything\s+now/i,                                 severity: "HIGH",     id: "GUARD-INJ-021" },
