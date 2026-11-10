@@ -48,7 +48,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-034 | SMOKE-TESTING | Bash in the PreToolUse matcher makes BUG-028 worse: hook error on every Bash call after a `cd` |
 | BUG-035 | OPEN | "ask" stalls unattended workers in default and acceptEdits modes |
 | BUG-036 | IN-PROGRESS | Web guard MCP tool names (`mcp__firecrawl__crawl`, `mcp__exa__search`) are probably wrong |
-| BUG-037 | OPEN | `guardian update` hook migration overrides a custom wider matcher and duplicates the `$CLAUDE_PROJECT_DIR` form |
+| BUG-037 | SMOKE-TESTING | `guardian update` hook migration overrides a custom wider matcher and duplicates the `$CLAUDE_PROJECT_DIR` form |
 | BUG-038 | OPEN | Small hook and audit defects: deny message loses the file name, NGINX check cost, CSP comment suppresses WEB-002 |
 | BUG-039 | SMOKE-TESTING | `DEP-002` can never fire: the walker never collects a bare `.env` file |
 | BUG-040 | SMOKE-TESTING | Audit `INJ-001` (eval) fires on any call whose name ends in `eval`, e.g. `retrieval(` |
@@ -610,7 +610,7 @@ Review finding 13 (LOW). Source: `C:/dev/data/skill-connections/brainstorms/16f2
 
 ### BUG-037: `guardian update` hook migration overrides a custom wider matcher and duplicates the `$CLAUDE_PROJECT_DIR` form
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 Review finding 14 (LOW). Source: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`. Logged when 1.5.0 landed; not fixed in it.
 
@@ -618,6 +618,8 @@ Review finding 14 (LOW). Source: `C:/dev/data/skill-connections/brainstorms/16f2
 - An entry written in the `"$CLAUDE_PROJECT_DIR"/.claude/hooks/...` form is not recognized as Guardian's, so a second entry is added.
 
 **Second bullet fixed (2026-11-10) with BUG-028**, which needed it: once Guardian writes the anchored form, every existing relative entry would otherwise have been duplicated. `guardianHookCommand()` reads every spelling as Guardian's entry. The first bullet is still open.
+
+**First bullet fixed (2026-11-10).** In `bin/guardian.js` (live), `mergeClaudeSettings()` first looks for a block that already holds Guardian's entry under a matcher covering every tool the hook needs (`tools` in `GUARDIAN_HOOKS`, tested with `matcherCovers()`; a web server is stood for by its bare `mcp__<server>__` prefix, so only a matcher covering all its tools counts) and keeps the entry there, anchoring its command; only when none exists does it use the block for the current matcher. Every other block loses Guardian's entry, so a narrow and a wide registration together end as one, under the wide matcher. `WEB_GUARD_MATCHER` is now built from `WEB_SERVERS`. Tests: `tests/init.test.js`, group "BUG-037": 8 tests, 7 failing before the fix (`*`, empty, `.*`, two longer lists, a wide and a narrow registration together, a wide web-guard regex); "a narrower matcher still moves to the current one" passes on both. Smoke test: in a project whose PreToolUse block for Guardian's hook has matcher `*`, run `guardian update` and see the matcher unchanged and the command anchored.
 
 ### BUG-038: Small hook and audit defects: deny message loses the file name, NGINX check cost, CSP comment suppresses WEB-002
 

@@ -964,11 +964,16 @@ function mergeMd(existingPath, guardianSrcPath, label, { refresh = false } = {})
  * that return third-party web content, by server prefix (BUG-036). It
  * must list the same servers as WEB_SERVERS in web-content-guard.mjs.
  */
-const WEB_GUARD_MATCHER =
-  "^(?:WebFetch|WebSearch|mcp__(?:firecrawl|exa|claude-in-chrome|chrome-devtools|playwright|car-browser|context7)__.*)$";
+const WEB_SERVERS = ["firecrawl", "exa", "claude-in-chrome", "chrome-devtools", "playwright", "car-browser", "context7"];
+const WEB_GUARD_MATCHER = `^(?:WebFetch|WebSearch|mcp__(?:${WEB_SERVERS.join("|")})__.*)$`;
+const PRE_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "PowerShell"];
+// `tools`: what a matcher must cover to host the hook (BUG-037); a web
+// server is stood for by its bare prefix, which only a matcher covering
+// all of that server's tools matches.
 const GUARDIAN_HOOKS = [
-  { event: "PreToolUse",  matcher: "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell", file: "injection-guard-hook.mjs" },
-  { event: "PostToolUse", matcher: WEB_GUARD_MATCHER,                                  file: "web-content-guard.mjs" },
+  { event: "PreToolUse",  matcher: PRE_TOOLS.join("|"), tools: PRE_TOOLS, file: "injection-guard-hook.mjs" },
+  { event: "PostToolUse", matcher: WEB_GUARD_MATCHER,
+    tools: ["WebFetch", "WebSearch", ...WEB_SERVERS.map((s) => `mcp__${s}__`)], file: "web-content-guard.mjs" },
 ].map((h) => ({ ...h, command: `node "\${CLAUDE_PROJECT_DIR}/.claude/hooks/${h.file}"` }));
 
 // `node` on one of Guardian's hook files and nothing else, relative or
@@ -1058,17 +1063,25 @@ function mergeClaudeSettings(existingPath, guardianSrcPath) {
     const eventArr = existing.hooks[hook.event];
     const isGuardians = (h) => guardianHookCommand(h?.command)?.file === hook.file;
 
+    // Where Guardian's entry belongs: a block that already holds it under
+    // a matcher covering every tool the hook needs, which is the current
+    // matcher or a wider one the user chose ("*", ".*", more tools), and
+    // is kept (BUG-037); else the block for the current matcher (compared
+    // as a token set).
+    const holdsMine = (b) => Array.isArray(b?.hooks) && b.hooks.some(isGuardians);
+    const coversAll = (b) => hook.tools.every((tool) => matcherCovers(b?.matcher, tool));
+    let block = eventArr.find((b) => holdsMine(b) && coversAll(b)) ?? findMatcherBlock(eventArr, hook.matcher);
+
     // Migration (1.5.0): the matchers above grew (Bash, MultiEdit,
-    // NotebookEdit, the MCP web tools). A project initialized by an older
-    // Guardian has the same command under the old, narrower matcher.
-    // Take Guardian's own entry out of any block with a different matcher
-    // so the command is registered once, under the current matcher. Only
-    // Guardian's entry is touched; the user's hooks in that block stay,
-    // and the block itself is dropped only if Guardian's was the last one.
+    // NotebookEdit, the MCP web servers). A project initialized by an
+    // older Guardian has the same command under the old, narrower matcher.
+    // Take Guardian's own entry out of every other block so the command is
+    // registered once. Only Guardian's entry is touched; the user's hooks
+    // in that block stay, and the block itself is dropped only if
+    // Guardian's was the last one.
     for (let i = eventArr.length - 1; i >= 0; i--) {
       const candidate = eventArr[i];
-      if (!Array.isArray(candidate?.hooks)) continue;
-      if (canonicalMatcher(candidate.matcher) === canonicalMatcher(hook.matcher)) continue;
+      if (candidate === block || !Array.isArray(candidate?.hooks)) continue;
       const kept = candidate.hooks.filter((h) => !isGuardians(h));
       if (kept.length === candidate.hooks.length) continue;
       moved++;
@@ -1076,8 +1089,6 @@ function mergeClaudeSettings(existingPath, guardianSrcPath) {
       else candidate.hooks = kept;
     }
 
-    // Find or create the matcher block (set-based comparison)
-    let block = findMatcherBlock(eventArr, hook.matcher);
     if (!block) {
       block = { matcher: hook.matcher, hooks: [] };
       eventArr.push(block);
@@ -1109,7 +1120,7 @@ function mergeClaudeSettings(existingPath, guardianSrcPath) {
 
   writeFile(existingPath, JSON.stringify(existing, null, 2) + "\n");
   const notes = [
-    moved > 0 ? `${moved} moved to the current matcher` : "",
+    moved > 0 ? `${moved} taken off a narrower or duplicate matcher block` : "",
     anchored > 0 ? `${anchored} command(s) anchored to the project root` : "",
   ].filter(Boolean);
   ok(`.claude/settings.json - merged ${added} Guardian hook(s) into existing config` +

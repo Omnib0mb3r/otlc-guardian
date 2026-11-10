@@ -328,6 +328,14 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
 ### Fixed
 
+- **`update` keeps a wider matcher the user chose (BUG-037).** The
+  1.5.0 migration took Guardian's hook out of every block whose matcher
+  differed from the default, so a registration under `*`, `.*` or a
+  list with more tools was moved back under the narrower default. A
+  block that already holds Guardian's hook under a matcher covering every
+  tool the hook needs now keeps it (its command is anchored in place);
+  only narrower or duplicate registrations are removed.
+
 - **The web guard is registered for every web content server (BUG-036,
   registration half).** `guardian init` and `update` register the web
   content guard on `^(?:WebFetch|WebSearch|mcp__(?:firecrawl|exa|claude-in-chrome|chrome-devtools|playwright|car-browser|context7)__.*)$`: WebFetch, WebSearch, and every tool of the

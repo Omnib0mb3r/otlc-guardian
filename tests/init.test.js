@@ -70,7 +70,7 @@ function describe(group, fn) {
 function withTempDir(fn) {
   const dir = mkdtempSync(path.join(tmpdir(), "guardian-test-"));
   try {
-    fn(dir);
+    return fn(dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -980,6 +980,50 @@ describe("BUG-028 / BUG-034: Guardian's hook commands do not depend on the sessi
         assert.equal(JSON.parse(r.stdout).hookSpecificOutput?.permissionDecision, "deny", r.stdout.slice(0, 200));
       });
     });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-037: a wider matcher the user chose is kept
+// ---------------------------------------------------------------------------
+
+describe("BUG-037: update keeps Guardian's hook under a wider matcher the user chose", () => {
+  const PRE = ANCHORED("injection-guard-hook.mjs");
+  const merge = (hooks) => withTempDir((dir) => {
+    const userPath = path.join(dir, "settings.json");
+    writeFileSync(userPath, JSON.stringify({ hooks }));
+    mergeClaudeSettings(userPath, path.join(dir, "unused.json"));
+    return JSON.parse(readFileSync(userPath, "utf8")).hooks;
+  });
+  const where = (hooks, event, needle) => hooks[event]
+    .flatMap((b) => b.hooks.filter((h) => h.command.includes(needle)).map(() => b.matcher));
+
+  for (const wide of ["*", "", ".*", "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|Read|Grep", "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|mcp__.*"]) {
+    test(`a PreToolUse registration under "${wide}" stays there, once`, () => {
+      const hooks = merge({ PreToolUse: [{ matcher: wide, hooks: [{ type: "command", command: "node .claude/hooks/injection-guard-hook.mjs" }] }] });
+      assert.deepEqual(where(hooks, "PreToolUse", "injection-guard-hook"), [wide]);
+      assert.equal(hooks.PreToolUse.find((b) => b.matcher === wide).hooks[0].command, PRE, "and its command is anchored");
+    });
+  }
+
+  test("a narrower matcher still moves to the current one (the 1.5.0 migration)", () => {
+    const hooks = merge({ PreToolUse: [{ matcher: "Write|Edit", hooks: [{ type: "command", command: "node .claude/hooks/injection-guard-hook.mjs" }] }] });
+    assert.deepEqual(where(hooks, "PreToolUse", "injection-guard-hook"), ["Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell"]);
+  });
+
+  test("with both a wide and a narrow registration, the wide one is kept and the narrow one removed", () => {
+    const hooks = merge({ PreToolUse: [
+      { matcher: "Write|Edit", hooks: [{ type: "command", command: "node .claude/hooks/injection-guard-hook.mjs" }, { type: "command", command: "node mine.js" }] },
+      { matcher: "*", hooks: [{ type: "command", command: "node .claude/hooks/injection-guard-hook.mjs" }] },
+    ] });
+    assert.deepEqual(where(hooks, "PreToolUse", "injection-guard-hook"), ["*"]);
+    assert.deepEqual(hooks.PreToolUse.find((b) => b.matcher === "Write|Edit").hooks, [{ type: "command", command: "node mine.js" }]);
+  });
+
+  test("a web guard registration under a regex that covers every web server stays there", () => {
+    const wide = "^(?:WebFetch|WebSearch|mcp__.*)$";
+    const hooks = merge({ PostToolUse: [{ matcher: wide, hooks: [{ type: "command", command: "node .claude/hooks/web-content-guard.mjs" }] }] });
+    assert.deepEqual(where(hooks, "PostToolUse", "web-content-guard"), [wide]);
+  });
 });
 
 // ---------------------------------------------------------------------------
