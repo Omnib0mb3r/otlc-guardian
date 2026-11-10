@@ -14,6 +14,17 @@ Points to weigh:
 - Signed Lex Phone approvals are the biggest piece: their own phase, after the hard-no hook. The same phone key may serve car box authentication, which DevNeural is designing.
 - A hard no fails closed and must not disturb unattended workers that never touch the list.
 
+### Inputs for the hard-no hook: routes the content hook does not chase (2026-11-10)
+
+The content hook (`.claude/hooks/injection-guard-hook.mjs`) judges a shell command by the paths it spells out and the text it carries. These routes are left out of it on purpose (decision of 2026-11-10, 1.5.0 verifier pass) and are inputs for the hard-no hook, which judges a command by its effect:
+
+- Targets the command does not spell out: a variable (`f=.claude/settings.local.json; echo ... > $f`), a computed path (`node -e` with `path.join`), a glob (`.claude/settings.loc*.json`). Verifier P2.
+- Inline interpreter code (`node -e`, `python -c`) beyond its literal path words, script files that write a target, PowerShell `-File` scripts. Today every path-like word in inline code counts as written, which over-denies (BUG-044).
+- Encoded or assembled content: `printf` octal, `rev`, `tr` rot13, `base64 -d`, variable concatenation, quote-split words (BUG-047, verifier P12).
+- Git operations that replace files without naming them: branch switches, `reset`, `stash`, `merge`.
+- Writes from a process the hook does not parse, including `guardian update` and any script that rewrites the hook files or the scanner (the out-of-hook half of BUG-027).
+- Documented for users in `SECURITY.md`, "What the PreToolUse hook cannot see".
+
 ## SPEC: Guardian keeps itself current (threat feed)
 
 Added 2026-11-08 by Lex (White Board brainstorm), from Michael's ask: "write up a little spec for OTLC Guardian to check those known sources against itself, so whenever Guardian is called it is as up to date as we can make it." Not started. Start after the plan-usage hold lifts (2026-11-10 08:00 EST).
