@@ -180,6 +180,25 @@ a coverage gap with a marketing claim attached, not merely a missing feature.
 
 Proposed rule shape and file globs in `HANDOFF-AUDIT-IMPROVEMENTS.md` § Item 2.
 
+**Claim inventory (2026-11-10).** Every place the docs state what the audit covers, checked against `AUDIT_RULES` in `security/03-audit.js` (45 rules: SEC, CFG, ERR, API, INJ, DEP, AUTHZ, VAL, WEB, TS, REP families; none reads agent configuration, Claude Code settings or instruction files).
+
+| Where | Claim | Backed by |
+|---|---|---|
+| `README.md` line 3 | "Protects your running app from AI security attacks." | The runtime guard (injection scanner, output secret scanner), not the audit. Backed as worded: it names the running app. |
+| `README.md` line 32 (Runtime layer row) | The runtime layer, which lists `03-audit.js` among its files, "protects your running application from prompt injection, leaked secrets, and common API vulnerabilities" | Injection and secrets: the runtime guard. API vulnerabilities: the audit's AUTHZ, VAL, WEB, INJ rules. Nothing here claims agent-permission coverage. |
+| `README.md` lines 249 to 251, 318; `skill/SKILL.md` line 3; manual `00-cover.html` line 11, `01-what.html` line 43, `02-audit.html` lines 1, 120, 143, 264; `07-connections.html` line 9 | 45 rules: 37 pattern, 5 analyzer, 3 project | Matches `AUDIT_RULES` today. Every new BUG-002 rule changes these. |
+| `README.md` lines 320 to 324 | AUTHZ-001 and AUTHZ-003 catch "the two bugs AI coding tools generate most" | Backed: that is code an AI wrote, not an attack on an AI. |
+| `SECURITY.md` line 44; `FAQ.md` line 174 | Runtime guard: 28 injection patterns, 16 secret patterns | Backed: `INJECTION_PATTERNS.length` is 28, `SECRET_PATTERNS` has 16 entries. |
+| `SECURITY.md` lines 37 to 66 (threat model) | Layers: runtime guard, hooks, audit, standards files | No audit claim about agents. The hook section is the only agent-write coverage, and it is runtime, Claude Code only. |
+| `FAQ.md` line 42 | Runtime code "protects your production app from prompt injection attacks, secret leaks, and common API vulnerabilities" | Same as README line 32. |
+| `SETUP.md` | No audit coverage claim beyond setup steps | Nothing to back. |
+| Manual `02-audit.html` line 375 (Known open bugs box) | Names BUG-002 as open | True until this bug closes. |
+| Manual `01-what.html` line 69 | Suite sizes: "injection-guard 106, init 30, hook 165, agents-md 14, audit 140, sql-guard 40" | Stale already (init alone has 82 tests); corrected with the first BUG-002 rule commit. |
+
+Finding: the README does not claim, in so many words, that the audit covers what AI agents may write to; it claims protection from AI attacks for the running app, which the runtime guard backs. The gap this bug records is real all the same (the Zion CMMS case passed the audit), so the fix is new rules where a static check is sound, and the counts above move with them.
+
+Side finding, design-level, decided by Lex (2026-11-10): Guardian's own `CLAUDE.md` quoted a CRITICAL pattern in its VISIBLE AUDIT OUTPUT example, and `guardian init` merges that file into every project's `CLAUDE.md`, so the planned instruction-file rule would fire on Guardian and every init'd project. Lex: reword it, no exemption. The reword and an init test are written and held in `git stash` (`BUG-002 CLAUDE.md reword`): the reword breaks a precondition in `tests/hook.test.js` ("Guardian's CLAUDE.md fails the whole-file scan"), whose group uses Guardian's `CLAUDE.md` as its fixture of a file that already quotes a pattern, and the hook tests are frozen until Lex's third re-probe reports. Proposed fix for Lex: that group builds its own fixture (a short file quoting the pattern, assembled at run time like `CRITICAL_PAYLOAD`), so it keeps testing the disk comparison instead of passing trivially.
+
 ---
 
 ### BUG-003 - `INJ-003` fires on stock shadcn boilerplate
