@@ -1597,6 +1597,29 @@ describe("PreToolUse hook - copies of folders and sort/uniq outputs are judged b
     });
   }
 
+  // Re-probe 2, S1: past the file cap the rest is not judged, so a copy
+  // into a watched path fails closed.
+  const many = { "big/zzzz.md": `${CRITICAL_PAYLOAD}\n` };
+  for (let i = 0; i < 1005; i++) many[`big/f${String(i).padStart(4, "0")}.md`] = "ok\n";
+  for (const [mode, decision] of [["default", "ask"], ["bypassPermissions", "deny"]]) {
+    stagedOnly(`a folder copy past the file cap into a watched path fails closed (${mode}, S1)`, () => {
+      const out = withTempProject((dir) => {
+        for (const [rel, text] of Object.entries(many)) {
+          mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+          writeFileSync(path.join(dir, rel), text);
+        }
+        mkdirSync(path.join(dir, ".claude", "agents"), { recursive: true });
+        return runHook(PRE_HOOK, { tool_name: "Bash", cwd: dir, permission_mode: mode, tool_input: { command: "cp -r big/. .claude/agents/" } });
+      });
+      assert.equal(decisionOf(out), decision, out.slice(0, 200));
+      expectWarning(out, "1000 files");
+    });
+  }
+
+  test("a folder copy past the file cap into an unwatched path stays silent (S1)", () => {
+    expectSilent(run("Bash", "cp -r big/. backup/", many));
+  });
+
   for (const [command, files, existing] of [
     ["cp -r staged/. .claude/agents/", GOOD, [".claude/agents"]],
     ["cp -r staged backup", BAD, []],

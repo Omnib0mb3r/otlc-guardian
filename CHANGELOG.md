@@ -201,6 +201,14 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A folder copy Guardian cannot read in full fails closed (BUG-066,
+  re-probe 2 S1).** Past 1,000 files, or when a subfolder cannot be
+  listed, the rest of a copied folder was only reported on stderr, so a
+  payload placed after the first 1,000 files landed in `.claude/agents/`
+  silently. A copy into a watched path whose source was not read in full
+  now asks (denied in bypass mode), after the files that were read are
+  judged, so a payload among them is still a deny.
+
 - **`ignorePaths` matches whole path segments from the project root
   (BUG-058).** An entry was a substring of the target path, so `docs`
   also exempted `src/docs-loader/CLAUDE.md` and `spec.md` exempted

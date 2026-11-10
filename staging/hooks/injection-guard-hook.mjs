@@ -324,11 +324,14 @@ function readSource(absPath) {
 
 /**
  * The regular files under a folder, as paths relative to it: every level
- * when `deep`, else the top level only. At most MAX_TREE_FILES; the rest
- * is reported on stderr and not judged. Links are not followed. null when
- * `absDir` is not a folder.
+ * when `deep`, else the top level only. At most MAX_TREE_FILES; past that,
+ * or when a subfolder cannot be listed, the list is marked `unjudged`
+ * and a copy into a watched path fails closed (re-probe 2, S1). Links are
+ * not followed. null when `absDir` is not a folder.
  */
 const MAX_TREE_FILES = 1000;
+// A source marker: this folder's files were not all read.
+const UNJUDGED = "unjudged:";
 function treeFiles(absDir, deep) {
   if (!statSync(absDir, { throwIfNoEntry: false })?.isDirectory()) return null;
   const files = [];
@@ -340,6 +343,7 @@ function treeFiles(absDir, deep) {
       entries = readdirSync(path.join(absDir, rel), { withFileTypes: true });
     } catch (err) {
       process.stderr.write(`${TAG} could not list copy source ${path.join(absDir, rel)} (${err?.message ?? "unknown"}); its files are not judged.\n`);
+      files.unjudged = true;
       continue;
     }
     for (const entry of entries) {
@@ -348,6 +352,7 @@ function treeFiles(absDir, deep) {
       else if (entry.isFile()) files.push(child);
       if (files.length >= MAX_TREE_FILES) {
         process.stderr.write(`${TAG} copy source ${absDir} holds more than ${MAX_TREE_FILES} files; the rest are not judged.\n`);
+        files.unjudged = true;
         return files;
       }
     }
@@ -377,7 +382,7 @@ function addCopy(dir, ctx, src, dest, { intoDir, recursive, slashMeansContents }
     return;
   }
   const base = contents || !intoDir ? dest : `${dest}/${path.posix.basename(folder)}`;
-  add(dir, base);
+  add(dir, base, tree.unjudged ? [`${UNJUDGED}${abs(dir, folder)}`] : []);
   for (const rel of tree) add(dir, `${base}/${rel}`, [abs(dir, `${folder}/${rel}`)]);
 }
 
@@ -1874,11 +1879,14 @@ process.stdin.on("end", () => {
     // cp, cat > file, tee, git apply: the payload is in the source file,
     // not in the command text, so the sources are read and judged the
     // way a Write of the result would be.
+    let unjudgedTarget = null;
     for (const target of written) {
       const { sources, append } = bashTargets.get(target);
       if (sources.size === 0) continue;
+      if ([...sources].some((s) => s.startsWith(UNJUDGED))) unjudgedTarget ??= target;
       const sourceText = (s) => {
         if (s.startsWith("patch:")) return addedLines(readSource(s.slice(6)));
+        if (s.startsWith(UNJUDGED)) return "";
         if (s.startsWith("filter:")) {
           const { inputs, apply } = shellRead.filters[Number(s.slice(7))];
           return apply(inputs.map(sourceText).join("\n").replace(/\r\n/g, "\n"));
@@ -1902,6 +1910,19 @@ process.stdin.on("end", () => {
           `    Details  : ${details}\n` +
           `    Action   : Denied, as a Write of the same content would be. Do not retry through another\n` +
           `               route. Tell the user what was blocked.`,
+      });
+    }
+
+    // Copied content that was read and is clean still leaves the files
+    // past the cap unjudged, so the copy fails closed (re-probe 2, S1).
+    if (unjudgedTarget) {
+      const target = unjudgedTarget;
+      emit({
+        permissionDecision: confirmOrDeny,
+        permissionDecisionReason:
+          `${TAG} This command copies a folder into ${safeEchoPath(target, 120)}, which agents load as instructions, ` +
+          `and Guardian could not read all of it (more than ${MAX_TREE_FILES} files, or a folder it cannot list), ` +
+          `so the files past that are not judged. Approve only if you know what the folder holds.${bypassNote}`,
       });
     }
 
