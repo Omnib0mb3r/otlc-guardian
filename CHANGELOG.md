@@ -523,6 +523,24 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
 ### Fixed
 
+- **Hook commands are anchored to the project root (BUG-028, BUG-034).**
+  `guardian init` and `update` register `node "${CLAUDE_PROJECT_DIR}/.claude/hooks/injection-guard-hook.mjs"` and the same form for
+  the web content guard. The relative form (`node .claude/hooks/...`)
+  stopped resolving once a session changed directory, and with Bash in
+  the matcher every Bash call after a `cd` raised a hook error and went
+  unscanned. `update` rewrites an existing relative registration in
+  place, keeping the user's other fields on it, and reads every spelling
+  of Guardian's own command (relative, `$CLAUDE_PROJECT_DIR`,
+  `${CLAUDE_PROJECT_DIR}`, quoted or not) as one entry, so none is added
+  twice. A project with no settings file gets one written from Guardian's
+  hook list instead of a copy of Guardian's own repo settings.
+  `guardian check` warns on a relative command. Tested under Git Bash
+  from a subfolder; under the PowerShell fallback the form relies on
+  Claude Code substituting `${CLAUDE_PROJECT_DIR}`, which its hooks
+  reference documents. This repo's own `.claude/settings.json` is a
+  protected file and moves to the form when the maintainer applies
+  `staging/APPLY.md`.
+
 - **Python delimiter rules stop matching headings, separators and prose
   (BUG-043, Python half).** `GUARD-INJ-019`, `GUARD-INJ-020` and
   `GUARD-INJ-015` in `security/injection_guard.py` match as the staged

@@ -561,7 +561,7 @@ On Windows, also confirm the variables are set in System Environment Variables i
 **Claude Code hook not activating**
 
 Confirm `.claude/settings.json` is in the **project root** (not a subdirectory).  
-The command `node .claude/hooks/injection-guard-hook.mjs` must resolve from the project root.  
+The command `node "${CLAUDE_PROJECT_DIR}/.claude/hooks/injection-guard-hook.mjs"` resolves from the project root, which Claude Code substitutes for `${CLAUDE_PROJECT_DIR}`. A registration written by Guardian before 1.5.0 is relative (`node .claude/hooks/...`), works only while the session sits in the project root, and `guardian check` warns about it; `guardian update` rewrites it.  
 `guardian check` confirms the hook files exist, pipes a test payload through the
 PreToolUse hook, and reads `.claude/settings.json` and `settings.local.json` for both
 registrations (the PreToolUse hook on a matcher that covers `Write`, the web content guard
@@ -690,7 +690,7 @@ Remove from `hooks.PreToolUse`:
 {
   "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell",
   "hooks": [
-    { "type": "command", "command": "node .claude/hooks/injection-guard-hook.mjs" }
+    { "type": "command", "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/injection-guard-hook.mjs\"" }
   ]
 }
 ```
@@ -701,12 +701,14 @@ Remove from `hooks.PostToolUse`:
 {
   "matcher": "WebFetch|WebSearch|mcp__firecrawl__crawl|mcp__exa__search",
   "hooks": [
-    { "type": "command", "command": "node .claude/hooks/web-content-guard.mjs" }
+    { "type": "command", "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/web-content-guard.mjs\"" }
   ]
 }
 ```
 
-If the matcher block had other hooks
+A project installed before 1.5.0 has the relative form of the same
+commands (`node .claude/hooks/injection-guard-hook.mjs`); remove those the
+same way. If the matcher block had other hooks
 in it, **leave those other hooks in place** and remove only Guardian's
 command entry from the `hooks` array. If the matcher block becomes empty after
 removing Guardian's entry, you can drop the empty block.

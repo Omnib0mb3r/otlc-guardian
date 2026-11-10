@@ -865,6 +865,122 @@ describe("BUG-068: guardian scan exits non-zero on a finding", () => {
 });
 
 // ---------------------------------------------------------------------------
+// BUG-028 / BUG-034: hook commands anchored to the project root
+// ---------------------------------------------------------------------------
+//
+// A relative command (`node .claude/hooks/...`) only runs while the session
+// sits in the project root; after a `cd` every hooked tool call, every Bash
+// call included, failed to launch the hook.
+
+const ANCHORED = (file) => `node "\${CLAUDE_PROJECT_DIR}/.claude/hooks/${file}"`;
+const guardianCommands = (settings) => Object.values(settings.hooks ?? {})
+  .flat()
+  .flatMap((b) => (b.hooks ?? []).map((h) => h.command))
+  .filter((cmd) => /injection-guard-hook|web-content-guard/.test(cmd));
+
+describe("BUG-028 / BUG-034: Guardian's hook commands do not depend on the session's directory", () => {
+  test("a fresh init registers both hooks in the anchored form", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      const settings = JSON.parse(readFileSync(path.join(dir, ".claude", "settings.json"), "utf8"));
+      assert.deepEqual(guardianCommands(settings).sort(), [ANCHORED("injection-guard-hook.mjs"), ANCHORED("web-content-guard.mjs")]);
+      assert.deepEqual(settings.otlcGuardian, { extendDefaults: true, watchPaths: [], ignorePaths: [] });
+    });
+  });
+
+  test("merging into a relative registration rewrites it in place, once, keeping its other fields", () => {
+    withTempDir((dir) => {
+      const userPath = path.join(dir, "settings.json");
+      writeFileSync(userPath, JSON.stringify({
+        hooks: {
+          PreToolUse: [{
+            matcher: "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell",
+            hooks: [
+              { type: "command", command: "node my-existing-hook.js" },
+              { type: "command", command: "node .claude/hooks/injection-guard-hook.mjs", timeout: 30 },
+            ],
+          }],
+          PostToolUse: [{
+            matcher: "WebFetch|WebSearch|mcp__firecrawl__crawl|mcp__exa__search",
+            hooks: [{ type: "command", command: "node ./.claude/hooks/web-content-guard.mjs" }],
+          }],
+        },
+      }));
+      mergeClaudeSettings(userPath, path.join(dir, "unused.json"));
+      const result = JSON.parse(readFileSync(userPath, "utf8"));
+      assert.deepEqual(result.hooks.PreToolUse[0].hooks, [
+        { type: "command", command: "node my-existing-hook.js" },
+        { type: "command", command: ANCHORED("injection-guard-hook.mjs"), timeout: 30 },
+      ]);
+      assert.deepEqual(guardianCommands(result).sort(), [ANCHORED("injection-guard-hook.mjs"), ANCHORED("web-content-guard.mjs")]);
+    });
+  });
+
+  test("every spelling of the anchored form is Guardian's own entry, so none is added twice", () => {
+    for (const spelled of [
+      'node "$CLAUDE_PROJECT_DIR/.claude/hooks/injection-guard-hook.mjs"',
+      'node "$CLAUDE_PROJECT_DIR"/.claude/hooks/injection-guard-hook.mjs',
+      "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/injection-guard-hook.mjs",
+    ]) {
+      withTempDir((dir) => {
+        const userPath = path.join(dir, "settings.json");
+        writeFileSync(userPath, JSON.stringify({ hooks: { PreToolUse: [{
+          matcher: "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell",
+          hooks: [{ type: "command", command: spelled }],
+        }] } }));
+        mergeClaudeSettings(userPath, path.join(dir, "unused.json"));
+        const pre = guardianCommands(JSON.parse(readFileSync(userPath, "utf8"))).filter((cmd) => cmd.includes("injection-guard-hook"));
+        assert.deepEqual(pre, [ANCHORED("injection-guard-hook.mjs")], spelled);
+      });
+    }
+  });
+
+  test("a command that only names the hook file (extra arguments, || true) is the user's and is left alone", () => {
+    withTempDir((dir) => {
+      const userPath = path.join(dir, "settings.json");
+      const mine = "node .claude/hooks/injection-guard-hook.mjs || true";
+      writeFileSync(userPath, JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: mine }] }] } }));
+      mergeClaudeSettings(userPath, path.join(dir, "unused.json"));
+      const result = JSON.parse(readFileSync(userPath, "utf8"));
+      assert.deepEqual(result.hooks.PreToolUse.find((b) => b.matcher === "Bash").hooks, [{ type: "command", command: mine }]);
+    });
+  });
+
+  test("guardian check warns on a relative hook command and passes on the anchored one", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      const clean = runCheck(dir);
+      assert.equal(clean.status, 0, (clean.stdout + clean.stderr).slice(-400));
+      assert.ok(!/session's directory/.test(clean.stdout + clean.stderr), "no warning for the anchored form");
+      const file = path.join(dir, ".claude", "settings.json");
+      writeFileSync(file, readFileSync(file, "utf8").replaceAll('\\"${CLAUDE_PROJECT_DIR}/.claude/hooks/', ".claude/hooks/").replaceAll('.mjs\\"', ".mjs"));
+      const relative = runCheck(dir);
+      assert.equal(relative.status, 0, "a relative command still runs from the root, so check does not fail");
+      assert.ok(/session's directory/.test(relative.stdout + relative.stderr), (relative.stdout + relative.stderr).slice(-400));
+    });
+  });
+
+  const bash = spawnSync("bash", ["-c", "exit 0"], { encoding: "utf8" }).status === 0;
+  (bash ? test : (name) => console.log(`  ⏸  ${name} (bash is not on PATH)`))(
+    "the registered command runs the hook from a subfolder, as Claude Code runs it under Git Bash", () => {
+      withTempDir((dir) => {
+        runCli(dir, "init");
+        const settings = JSON.parse(readFileSync(path.join(dir, ".claude", "settings.json"), "utf8"));
+        const command = guardianCommands(settings).find((cmd) => cmd.includes("injection-guard-hook"));
+        const sub = path.join(dir, "src", "deep");
+        mkdirSync(sub, { recursive: true });
+        const r = spawnSync("bash", ["-c", command], {
+          cwd: sub, encoding: "utf8", timeout: 10_000,
+          env: { ...HOOK_ENV, CLAUDE_PROJECT_DIR: dir },
+          input: JSON.stringify({ tool_name: "Write", cwd: sub, tool_input: { file_path: path.join(dir, ".planning", "notes.md"), content: OVERRIDE_PAYLOAD } }),
+        });
+        assert.equal(r.status, 0, r.stderr.slice(0, 300));
+        assert.equal(JSON.parse(r.stdout).hookSpecificOutput?.permissionDecision, "deny", r.stdout.slice(0, 200));
+      });
+    });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

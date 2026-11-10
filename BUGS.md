@@ -39,13 +39,13 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-025 | SMOKE-TESTING | `guardian update` never overwrote anything, so fixes never reached existing installs |
 | BUG-026 | SMOKE-TESTING | Secret rules missed OpenSSH/EC keys, `github_pat_`, `ghs_`, Slack, Stripe live, Anthropic OAuth |
 | BUG-027 | IN-PROGRESS | Hook files and scanner are writable by the agent they guard (only settings.json is protected) |
-| BUG-028 | OPEN | Hook command path is cwd-relative; `$CLAUDE_PROJECT_DIR` form untested on Windows |
+| BUG-028 | SMOKE-TESTING | Hook command path is cwd-relative; `$CLAUDE_PROJECT_DIR` form untested on Windows |
 | BUG-029 | OPEN | Scanner bypasses: base64 candidate cap can be spent, chained encodings pass, confusables gaps |
 | BUG-030 | SMOKE-TESTING | `AUTHZ-013` misses a textbook IDOR: a 404 and a `user_id` path parameter count as ownership checks |
 | BUG-031 | SMOKE-TESTING | `AUTHZ-011` blind spots: router-level `Depends(get_db)`, substring public-route list, bare `api_key` mention |
 | BUG-032 | SMOKE-TESTING | `AUTHZ-011` flags reads: `GET` plus `db.execute(select(...))` reports HIGH |
 | BUG-033 | SMOKE-TESTING | `WEB-001` misses token constants and JSON-wrapped tokens; flags `refreshCount` |
-| BUG-034 | OPEN | Bash in the PreToolUse matcher makes BUG-028 worse: hook error on every Bash call after a `cd` |
+| BUG-034 | SMOKE-TESTING | Bash in the PreToolUse matcher makes BUG-028 worse: hook error on every Bash call after a `cd` |
 | BUG-035 | OPEN | "ask" stalls unattended workers in default and acceptEdits modes |
 | BUG-036 | OPEN | Web guard MCP tool names (`mcp__firecrawl__crawl`, `mcp__exa__search`) are probably wrong |
 | BUG-037 | OPEN | `guardian update` hook migration overrides a custom wider matcher and duplicates the `$CLAUDE_PROJECT_DIR` form |
@@ -515,12 +515,14 @@ hard-no hook (Lane 5, hosted by DevNeural).
 
 ### BUG-028 - Hook command path is cwd-relative
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 `.claude/settings.json` registers `node .claude/hooks/injection-guard-hook.mjs`. Claude
 Code's documented form is `"$CLAUDE_PROJECT_DIR"/.claude/hooks/...`. Not changed in 1.5.0
 because the expansion was not tested on Windows. The hook itself now resolves the project
 root from `CLAUDE_PROJECT_DIR`, so only the launch path is affected.
+
+**Fixed (2026-11-10), with BUG-034.** `bin/guardian.js` (not a protected file, so live): `GUARDIAN_HOOKS` registers `node "${CLAUDE_PROJECT_DIR}/.claude/hooks/injection-guard-hook.mjs"` and the same form for `web-content-guard.mjs`. Facts behind the form, from the Claude Code hooks reference (https://code.claude.com/docs/en/hooks, read through the docs agent): hook commands run in Git Bash on Windows (PowerShell when Git Bash is missing), in the session's current directory, and `${CLAUDE_PROJECT_DIR}` is a placeholder Claude Code substitutes in `command`; the docs advise double quotes. Checked here: under Git Bash from `C:\` with `CLAUDE_PROJECT_DIR` holding either slash style, the command runs the hook (exit 0). `mergeClaudeSettings()` reads Guardian's entry in every spelling that only runs `node` on its hook file (`guardianHookCommand()`), rewrites a relative one in place keeping its other fields, and drops duplicates; a command with extra arguments or a chained command is the user's and is left alone. A project with no settings file gets one written from `GUARDIAN_HOOKS` (`newClaudeSettings()`) instead of a copy of this repo's own settings, which are protected and would have kept new installs on the relative form. `guardian check` warns on a relative command (`relativeHookCommands()`; settings reading shared through `settingsLayers()`). The staged hook already reads the new form as the same hook (BUG-045). Tests: `tests/init.test.js`, group "BUG-028 / BUG-034": 6 tests, 5 failing before the fix (fresh init form, in-place rewrite, three spellings recognized, check warning, the registered command run through `bash -c` from a subfolder denies a payload); the sixth, a user's `|| true` command left alone, passes on both. The subfolder test first wrote its payload to CLAUDE.md, which init's merged CLAUDE.md already quotes, so the hook was rightly silent; it was a wrong test and now writes a new watched file. Left for Michael: this repo's own `.claude/settings.json` (protected) moves to the form when he applies `staging/APPLY.md`, after the staged hook, since the live hook asks on the command change. Smoke test: in a project after `guardian update`, in a Claude Code session, `cd src` and then ask for a Write of a CRITICAL payload to `.planning/x.md`; see the deny and no hook error.
 
 ### BUG-029: Scanner bypasses: base64 candidate cap can be spent, chained encodings pass, confusables gaps
 
@@ -578,11 +580,13 @@ Review finding 10 (MEDIUM). Source: `C:/dev/data/skill-connections/brainstorms/1
 
 ### BUG-034: Bash in the PreToolUse matcher makes BUG-028 worse: hook error on every Bash call after a `cd`
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 Review finding 11 (MEDIUM). Related: BUG-028. Source: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`. Logged when 1.5.0 landed; not fixed in it.
 
 - The hook command path is cwd-relative (`node .claude/hooks/injection-guard-hook.mjs`). With Bash in the matcher, every Bash call made after the session changes directory fails to launch the hook and shows a hook error, so the hook does not run for those calls.
+
+**Fixed (2026-11-10), with BUG-028.** The anchored command removes the cause; see BUG-028's fix paragraph for the change, the tests (the `bash -c` run from a subfolder is this bug's case) and the smoke test. Bash stays in the matcher.
 
 ### BUG-035: "ask" stalls unattended workers in default and acceptEdits modes
 
@@ -608,6 +612,8 @@ Review finding 14 (LOW). Source: `C:/dev/data/skill-connections/brainstorms/16f2
 
 - The migration replaces a matcher the user had widened on purpose.
 - An entry written in the `"$CLAUDE_PROJECT_DIR"/.claude/hooks/...` form is not recognized as Guardian's, so a second entry is added.
+
+**Second bullet fixed (2026-11-10) with BUG-028**, which needed it: once Guardian writes the anchored form, every existing relative entry would otherwise have been duplicated. `guardianHookCommand()` reads every spelling as Guardian's entry. The first bullet is still open.
 
 ### BUG-038: Small hook and audit defects: deny message loses the file name, NGINX check cost, CSP comment suppresses WEB-002
 

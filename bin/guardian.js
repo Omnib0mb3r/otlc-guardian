@@ -456,22 +456,7 @@ const REQUIRED_HOOK_REGISTRATIONS = [
 ];
 
 function hookRegistrationProblems(root) {
-  const problems = [];
-  const layers = [];
-  for (const name of ["settings.json", "settings.local.json"]) {
-    const file = path.join(root, ".claude", name);
-    if (!existsSync(file)) continue;
-    try {
-      const parsed = JSON.parse(readFileSync(file, "utf8"));
-      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-        problems.push(`.claude/${name} is not a JSON object, so Claude Code registers no hooks from it`);
-      } else {
-        layers.push(parsed);
-      }
-    } catch (e) {
-      problems.push(`.claude/${name} is not valid JSON (${e.message}), so Claude Code registers no hooks from it`);
-    }
-  }
+  const { layers, problems } = settingsLayers(root);
   if (layers.some((s) => s.disableAllHooks === true)) {
     problems.push("disableAllHooks is true, so no Guardian hook runs");
   }
@@ -489,6 +474,50 @@ function hookRegistrationProblems(root) {
     if (!registered) problems.push(`${req.file} is not registered under ${req.event} for ${req.tool}`);
   }
   return problems;
+}
+
+/**
+ * Guardian hook commands that resolve from the session's directory instead
+ * of the project root (BUG-028). They work until the session changes
+ * directory, so check warns rather than fails.
+ * @returns {string[]} one line per relative command
+ */
+function relativeHookCommands(root) {
+  const notes = [];
+  for (const settings of settingsLayers(root).layers) {
+    for (const blocks of Object.values(settings?.hooks ?? {})) {
+      for (const block of Array.isArray(blocks) ? blocks : []) {
+        for (const h of Array.isArray(block?.hooks) ? block.hooks : []) {
+          const mine = guardianHookCommand(h?.command);
+          if (mine && !mine.anchored) {
+            notes.push(`"${h.command}" runs from the session's directory, so it stops finding ${mine.file} after a cd`);
+          }
+        }
+      }
+    }
+  }
+  return notes;
+}
+
+/** The two settings layers Claude Code merges, parsed, and why any could not be read. */
+function settingsLayers(root) {
+  const problems = [];
+  const layers = [];
+  for (const name of ["settings.json", "settings.local.json"]) {
+    const file = path.join(root, ".claude", name);
+    if (!existsSync(file)) continue;
+    try {
+      const parsed = JSON.parse(readFileSync(file, "utf8"));
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        problems.push(`.claude/${name} is not a JSON object, so Claude Code registers no hooks from it`);
+      } else {
+        layers.push(parsed);
+      }
+    } catch (e) {
+      problems.push(`.claude/${name} is not valid JSON (${e.message}), so Claude Code registers no hooks from it`);
+    }
+  }
+  return { layers, problems };
 }
 
 // Build a per-editor coverage summary based on which Guardian artifacts
@@ -767,6 +796,12 @@ function runCheck() {
       log(`     ${c.dim}Run ${c.reset}${c.cyan}guardian update${c.dim} to restore the registrations.${c.reset}`);
       failed += problems.length;
     }
+    const relative = relativeHookCommands(CWD);
+    for (const note of relative) warn(`Hook registration: ${note}`);
+    if (relative.length > 0) {
+      log(`     ${c.dim}Run ${c.reset}${c.cyan}guardian update${c.dim} to anchor them to the project root.${c.reset}`);
+      warnings += relative.length;
+    }
   }
 
   // ── Editor coverage - what this install means for each agent ───────
@@ -905,6 +940,42 @@ function mergeMd(existingPath, guardianSrcPath, label, { refresh = false } = {})
 }
 
 /**
+ * The hooks Guardian registers in .claude/settings.json. The command is
+ * anchored to the project root through ${CLAUDE_PROJECT_DIR}, which Claude
+ * Code substitutes in a hook command (and exports to the hook's shell): a
+ * relative path stops resolving once the session changes directory, and
+ * with Bash in the matcher that is every Bash call after a cd (BUG-028,
+ * BUG-034). The double quotes keep a path with spaces in one word.
+ */
+const GUARDIAN_HOOKS = [
+  { event: "PreToolUse",  matcher: "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell",          file: "injection-guard-hook.mjs" },
+  { event: "PostToolUse", matcher: "WebFetch|WebSearch|mcp__firecrawl__crawl|mcp__exa__search", file: "web-content-guard.mjs" },
+].map((h) => ({ ...h, command: `node "\${CLAUDE_PROJECT_DIR}/.claude/hooks/${h.file}"` }));
+
+// `node` on one of Guardian's hook files and nothing else, relative or
+// anchored, quoted or not. A command that adds arguments or chains another
+// command (`|| true`) is the user's own and is left alone.
+const GUARDIAN_HOOK_COMMAND = /^node\s+"?((?:\$\{CLAUDE_PROJECT_DIR\}|\$CLAUDE_PROJECT_DIR)"?[\\/])?(?:\.[\\/])?\.claude[\\/]hooks[\\/](injection-guard-hook\.mjs|web-content-guard\.mjs)"?$/;
+
+/**
+ * Reads a hook command as one of Guardian's registrations.
+ * @returns {{ file: string, anchored: boolean } | null}
+ */
+function guardianHookCommand(command) {
+  const m = typeof command === "string" ? GUARDIAN_HOOK_COMMAND.exec(command.trim()) : null;
+  return m ? { file: m[2], anchored: Boolean(m[1]) } : null;
+}
+
+/** The .claude/settings.json init writes when a project has none. */
+function newClaudeSettings() {
+  const hooks = {};
+  for (const h of GUARDIAN_HOOKS) {
+    (hooks[h.event] ??= []).push({ matcher: h.matcher, hooks: [{ type: "command", command: h.command }] });
+  }
+  return { hooks, otlcGuardian: { extendDefaults: true, watchPaths: [], ignorePaths: [] } };
+}
+
+/**
  * Normalize a matcher string into a canonical sorted token form.
  * "Write|Edit" and "Edit|Write" both become "Edit|Write" - so we can
  * compare two matchers as sets without caring about order.
@@ -946,20 +1017,6 @@ function findMatcherBlock(arr, targetMatcher) {
  *   - Idempotent - running a second time is a no-op.
  */
 function mergeClaudeSettings(existingPath, guardianSrcPath) {
-  // Hooks Guardian wants to register. Each entry: { event, matcher, command }
-  const GUARDIAN_HOOKS = [
-    {
-      event:   "PreToolUse",
-      matcher: "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell",
-      command: "node .claude/hooks/injection-guard-hook.mjs",
-    },
-    {
-      event:   "PostToolUse",
-      matcher: "WebFetch|WebSearch|mcp__firecrawl__crawl|mcp__exa__search",
-      command: "node .claude/hooks/web-content-guard.mjs",
-    },
-  ];
-
   // Parse the user's settings - refuse to touch the file if we can't.
   const problem = settingsFileProblem(existingPath);
   if (problem) {
@@ -975,10 +1032,12 @@ function mergeClaudeSettings(existingPath, guardianSrcPath) {
   let added = 0;
   let already = 0;
   let moved = 0;
+  let anchored = 0;
 
   for (const hook of GUARDIAN_HOOKS) {
     existing.hooks[hook.event] = existing.hooks[hook.event] ?? [];
     const eventArr = existing.hooks[hook.event];
+    const isGuardians = (h) => guardianHookCommand(h?.command)?.file === hook.file;
 
     // Migration (1.5.0): the matchers above grew (Bash, MultiEdit,
     // NotebookEdit, the MCP web tools). A project initialized by an older
@@ -991,7 +1050,7 @@ function mergeClaudeSettings(existingPath, guardianSrcPath) {
       const candidate = eventArr[i];
       if (!Array.isArray(candidate?.hooks)) continue;
       if (canonicalMatcher(candidate.matcher) === canonicalMatcher(hook.matcher)) continue;
-      const kept = candidate.hooks.filter((h) => h.command !== hook.command);
+      const kept = candidate.hooks.filter((h) => !isGuardians(h));
       if (kept.length === candidate.hooks.length) continue;
       moved++;
       if (kept.length === 0) eventArr.splice(i, 1);
@@ -1006,24 +1065,36 @@ function mergeClaudeSettings(existingPath, guardianSrcPath) {
     }
     block.hooks = block.hooks ?? [];
 
-    // Skip if Guardian's hook command is already registered in this block
-    if (block.hooks.some((h) => h.command === hook.command)) {
+    // Guardian's entry in any spelling (relative, or anchored through
+    // CLAUDE_PROJECT_DIR) is kept once, in the current anchored form, with
+    // any other fields the user set on it (BUG-028, BUG-037).
+    const [mine, ...duplicates] = block.hooks.filter(isGuardians);
+    if (!mine) {
+      block.hooks.push({ type: "command", command: hook.command });
+      added++;
+      continue;
+    }
+    if (mine.command === hook.command && duplicates.length === 0) {
       already++;
       continue;
     }
-
-    block.hooks.push({ type: "command", command: hook.command });
-    added++;
+    mine.command = hook.command;
+    block.hooks = block.hooks.filter((h) => !duplicates.includes(h));
+    anchored++;
   }
 
-  if (added === 0 && moved === 0) {
+  if (added === 0 && moved === 0 && anchored === 0) {
     ok(`.claude/settings.json - all ${already} Guardian hook(s) already registered`);
     return;
   }
 
   writeFile(existingPath, JSON.stringify(existing, null, 2) + "\n");
+  const notes = [
+    moved > 0 ? `${moved} moved to the current matcher` : "",
+    anchored > 0 ? `${anchored} command(s) anchored to the project root` : "",
+  ].filter(Boolean);
   ok(`.claude/settings.json - merged ${added} Guardian hook(s) into existing config` +
-     (moved > 0 ? ` (${moved} moved to the current matcher)` : ""));
+     (notes.length > 0 ? ` (${notes.join(", ")})` : ""));
 }
 
 /**
@@ -1500,8 +1571,10 @@ function runInit({ refresh = false } = {}) {
   if (existsSync(claudeSettingsDest)) {
     mergeClaudeSettings(claudeSettingsDest, claudeSettingsSrc);
   } else {
-    copyFileSync(claudeSettingsSrc, claudeSettingsDest);
-    ok(".claude/settings.json - copied (new file)");
+    // Written from GUARDIAN_HOOKS, not copied from Guardian's own repo,
+    // whose settings are its development setup.
+    writeFile(claudeSettingsDest, JSON.stringify(newClaudeSettings(), null, 2) + "\n");
+    ok(".claude/settings.json - created with Guardian's hooks (new file)");
   }
 
   // ── 7. .claude/hooks/ - copy only, never overwrite ────────────────────────
