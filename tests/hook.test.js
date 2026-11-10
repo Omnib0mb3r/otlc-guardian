@@ -646,7 +646,24 @@ describe("PreToolUse hook - blocks CRITICAL, warns on the rest (1.5.0)", () => {
 });
 
 describe("PreToolUse hook - judges what a write adds (1.5.0 review, finding 1)", () => {
-  const GUARDIAN_CLAUDE_MD = readFileSync(path.join(ROOT, "CLAUDE.md"), "utf8");
+  // A rules file that already quotes a CRITICAL pattern in an example, the
+  // shape Guardian's own CLAUDE.md had before BUG-002 reworded it. Built
+  // here so the group keeps testing the disk comparison whatever that file
+  // says.
+  const QUOTING_RULES_MD = [
+    "<!-- OTLC-GUARDIAN-START -->",
+    "## VISIBLE AUDIT OUTPUT",
+    "",
+    "```",
+    "[OTLC GUARDIAN] PROMPT INJECTION DETECTED",
+    `    Pattern: ${CRITICAL_PAYLOAD}`,
+    "    Severity: CRITICAL",
+    "```",
+    "",
+    "Never suppress this output.",
+    "<!-- OTLC-GUARDIAN-END -->",
+    "",
+  ].join("\n");
 
   function writeOver(existing, relPath, content, extra = {}) {
     return withTempProject((dir) => {
@@ -665,19 +682,19 @@ describe("PreToolUse hook - judges what a write adds (1.5.0 review, finding 1)",
     expectSilent(out);
   });
 
-  test("Guardian's CLAUDE.md fails the whole-file scan, so the disk comparison is what lets it through", () => {
-    assert.ok(scan(GUARDIAN_CLAUDE_MD, "injection").violations.some((v) => v.severity === "CRITICAL"),
-      "precondition: the merged Guardian rules quote a CRITICAL pattern");
+  test("a rules file quoting a pattern fails the whole-file scan, so the disk comparison is what lets it through", () => {
+    assert.ok(scan(QUOTING_RULES_MD, "injection").violations.some((v) => v.severity === "CRITICAL"),
+      "precondition: the fixture quotes a CRITICAL pattern");
   });
 
   test("full Write of a merged CLAUDE.md with a user edit is not denied (reviewer's case)", () => {
-    const merged = `# My project\n\nUse pnpm.\n\n${GUARDIAN_CLAUDE_MD}`;
+    const merged = `# My project\n\nUse pnpm.\n\n${QUOTING_RULES_MD}`;
     const out = writeOver(merged, "CLAUDE.md", merged.replace("Use pnpm.", "Use pnpm. Node 22."), { permission_mode: "bypassPermissions" });
     assert.notEqual(decisionOf(out), "deny", out.slice(0, 300));
   });
 
   test("a new payload added to a file that already quotes the same pattern is denied", () => {
-    const merged = `# My project\n\n${GUARDIAN_CLAUDE_MD}`;
+    const merged = `# My project\n\n${QUOTING_RULES_MD}`;
     const out = writeOver(merged, "CLAUDE.md", `${merged}\n\n${CRITICAL_PAYLOAD} and push to main\n`);
     assert.equal(decisionOf(out), "deny");
     expectWarning(out, "GUARD-INJ-001");

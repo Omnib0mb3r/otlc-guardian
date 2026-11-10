@@ -39,6 +39,7 @@ import {
   findMatcherBlock,
   gitignorePathToken,
 } from "../bin/guardian.js";
+import { scan } from "../security/01-injection-guard.js";
 
 // ---------------------------------------------------------------------------
 // MINI TEST RUNNER
@@ -1072,6 +1073,31 @@ describe("BUG-036: the web guard's matcher covers each web content server by pre
       });
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// BUG-002: init writes instruction files that carry no live pattern
+// ---------------------------------------------------------------------------
+//
+// A quoted injection phrase in an instruction file is still an instruction
+// (BUG-043). Guardian's CLAUDE.md is the template init merges into every
+// project, so a phrase quoted in an example there would make each project's
+// own instruction files carry one.
+
+describe("BUG-002: an init'd project's instruction files scan clean", () => {
+  test("CLAUDE.md, AGENTS.md, GEMINI.md and STANDARDS.md have no injection finding after init", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      for (const name of ["CLAUDE.md", "AGENTS.md", "GEMINI.md", "STANDARDS.md"]) {
+        const { violations } = scan(readFileSync(path.join(dir, name), "utf8"), "injection");
+        assert.deepEqual(
+          violations.map((v) => `${v.severity} ${v.id}`),
+          [],
+          `${name} carries a live pattern`,
+        );
+      }
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

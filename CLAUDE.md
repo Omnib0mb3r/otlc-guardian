@@ -236,9 +236,9 @@ When this package's security tools detect something, output must be visible:
 
 ```
 ⚠️  [OTLC GUARDIAN] PROMPT INJECTION DETECTED
-    Pattern: ignore all previous instructions
-    Severity: CRITICAL
-    Input truncated and blocked.
+    Context  : chat input
+    Count    : 1 pattern(s) matched
+    [CRITICAL] GUARD-INJ-001 - matched: "<the injection phrase>"
 
 🔍 [OTLC GUARDIAN] SAFETY AUDIT COMPLETE
     Files scanned: 47

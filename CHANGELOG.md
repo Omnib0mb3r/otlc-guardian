@@ -448,6 +448,14 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
 ### Fixed
 
+- **Guardian's CLAUDE.md no longer quotes a live injection phrase
+  (BUG-002).** The VISIBLE AUDIT OUTPUT example quoted a CRITICAL
+  pattern, and `guardian init` merges that file into every project's
+  CLAUDE.md, so each project's instruction file carried one. The example
+  now mirrors what `reportViolations()` prints, with a placeholder for
+  the matched text. A test checks that the instruction files of a fresh
+  init scan clean.
+
 - **WEB-002 reads code, not comments, and costs linear time (BUG-038,
   audit half).** A comment that named the policy (`# TODO: add_header
   Content-Security-Policy`, `// helmet() goes here`, an HTML comment)
