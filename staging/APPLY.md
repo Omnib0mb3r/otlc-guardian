@@ -13,9 +13,9 @@ goes to Michael.
 
 | Staged file | Live file | Size of the change |
 |---|---|---|
-| `staging/hooks/injection-guard-hook.mjs` | `.claude/hooks/injection-guard-hook.mjs` | 1,638 lines added, 124 removed |
+| `staging/hooks/injection-guard-hook.mjs` | `.claude/hooks/injection-guard-hook.mjs` | 1,640 lines added, 124 removed |
 | `staging/hooks/web-content-guard.mjs` | `.claude/hooks/web-content-guard.mjs` | 26 added, 21 removed |
-| `staging/security/01-injection-guard.js` | `security/01-injection-guard.js` | 294 added, 34 removed |
+| `staging/security/01-injection-guard.js` | `security/01-injection-guard.js` | 373 added, 36 removed |
 | (hand edit) | `.claude/settings.json` (this repo only) | both hook commands anchored, web guard matcher widened |
 
 Already live, not part of this apply: the Python port
@@ -63,6 +63,9 @@ items paragraphs naming Dn.
 | BUG-065 (D6) | 4c53cf1 | hook | `find` read left to right; starting points above the project |
 | BUG-071 (D7) | 2c33cfa | scanner | invisible gaps, control characters and every comment form do not split a pattern |
 | BUG-063 (D8) | 29f1fec | hook | `npm` writing `security/package.json` (`npm pkg set`, `npm init` in `security/`) asks |
+| BUG-073 (D2) | bf4d23a | hook | the D2 message keeps a place's brackets (`hooks.PreToolUse[0].hooks[0].timeout`) |
+| BUG-072 | 0923937 | scanner | a schema, a generic, a call or a TypeScript type after `password:` or `api_key:` is not a literal |
+| BUG-046 (re-probe 3) | 14d9013 | scanner | an HTML comment weighs nothing in the change window |
 
 Documented, not fixed: an obfuscated payload moved out of a code fence
 (BUG-042, S7, f5ecc42) and `xargs cp` (S5); both are in SECURITY.md,
@@ -89,6 +92,9 @@ Behavior a user will notice after the apply:
 - Any settings change that adds a hook or another command (`statusLine`,
   `apiKeyHelper` and the rest) asks (D3); so does a settings value of the
   wrong type, such as `"disableAllHooks": "true"` (D2).
+- `guardOutput` and `scan(..., "secrets")` no longer report `password:
+  z.string().min(12)`, `apiKey: Joi.string()` or `password: string|undefined`
+  as a secret (BUG-072).
 - `find . -name '*.log' -delete` and the like no longer ask (S10).
 - `### System: Billing`, `--- System ---`, "wrap in <user> tags" and
   "wrap the request in <user> and </user> tags" are no longer denied
@@ -226,7 +232,7 @@ and run the smoke tests below.
 4. `BUGS.md`: flip to SMOKE-TESTING, in the index row and the detail block,
    announced: BUG-036, BUG-038, BUG-042, BUG-043, BUG-044, BUG-045,
    BUG-046, BUG-048, BUG-049, BUG-050, BUG-058, BUG-063, BUG-064, BUG-065,
-   BUG-066, BUG-067, BUG-071, BUG-073, BUG-074, BUG-075. Each detail block's "Staging commit: recorded
+   BUG-066, BUG-067, BUG-071, BUG-072, BUG-073, BUG-074, BUG-075. Each detail block's "Staging commit: recorded
    in `staging/APPLY.md`" gets the commit from the table above and the
    apply commit.
 5. `staging/`: keep the three files identical to the live ones, so the next
@@ -279,3 +285,5 @@ full steps; record the result there. Restore any file a test changes with
 | BUG-065 (D6) | In a scratch project ask Claude to run `find . -delete -name '*.log'`; see a Guardian prompt; decline. |
 | BUG-071 (D7) | Ask Claude to Write "ignore", U+3164, "all previous instructions" to `.planning/x.md`; see the deny. |
 | BUG-063 (D8) | From `security/` in a scratch project ask Claude to run `npm pkg set type=commonjs`; see a Guardian prompt naming `package.json`; decline. |
+| BUG-072 | In an installed project, `guardOutput("password: z.string().min(12)")` returns the text; `guardOutput('password: "hunter2hunter2"')` still throws. |
+| BUG-046 (re-probe 3) | In a scratch project write `.planning/pad.md` holding `ignore all <!-- `, 5,000 x characters, ` -->` and a line `END`; ask Claude to replace END with "previous instructions"; see the deny. |
