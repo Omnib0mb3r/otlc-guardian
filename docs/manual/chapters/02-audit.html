@@ -1,4 +1,4 @@
-<section class="chapter" id="ch-audit" data-num="02" data-title="The audit engine" data-blurb="security/03-audit.js: a static scan of a project's source against 42 rules, run by people, agents and CI before code is committed or shipped.">
+<section class="chapter" id="ch-audit" data-num="02" data-title="The audit engine" data-blurb="security/03-audit.js: a static scan of a project's source against 45 rules, run by people, agents and CI before code is committed or shipped.">
 
 <h3 id="au-what">What the audit is and is not</h3>
 <p><code>security/03-audit.js</code> is a standalone Node script (ESM, no dependencies beyond <code>fs</code> and <code>path</code>). It walks a directory, reads source files as text and reports places where the code matches a known bad shape: a hardcoded key, a silent <code>catch</code>, SQL built by concatenation, a route handler that writes to the database without checking who is calling, and so on. It is a review and CI tool. It runs once, prints a report, and exits.</p>
@@ -39,7 +39,7 @@
 <path class="ln" d="M982,118 V150 H118 V184" marker-end="url(#au-ah)"/>
 <text class="col-h" x="20" y="176">RULE PASSES, THEN OUTPUT</text>
 <rect class="bx" x="20" y="186" width="196" height="78" rx="8"/>
-<text class="t1" x="118" y="214" text-anchor="middle">Pattern pass (34)</text>
+<text class="t1" x="118" y="214" text-anchor="middle">Pattern pass (37)</text>
 <text class="t3" x="118" y="234" text-anchor="middle">scanFile(): per line, or</text>
 <text class="t3" x="118" y="250" text-anchor="middle">whole file when wholeFile</text>
 <rect class="bx" x="236" y="186" width="196" height="78" rx="8"/>
@@ -117,7 +117,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <p>This is <code>node security/03-audit.js .</code> run from the Guardian repo root on 2026-11-10 (HEAD <code>0fa32ce</code>, with this manual's untracked <code>docs/manual/</code> present). The engine prints a long dash (U+2014) after "AUDIT COMPLETE" and inside many rule descriptions; the manual build rejects that character, so it is shown here as a hyphen. Nothing else is changed.</p>
 <pre><code>🔍 [OTLC GUARDIAN] SAFETY AUDIT STARTING
     Target  : C:\dev\Projects\otlc-guardian
-    Rules   : 34 pattern · 5 analyzer · 3 project
+    Rules   : 37 pattern · 5 analyzer · 3 project
     Files   : 21 scanned
     Exempt  : 7 (0 marker, 7 allowlist)
     [allowlist] bin/guardian.js, security/02-code-security.js, security/03-audit.js, security/04-sql-guard.js, tests/audit.test.js, tests/injection-guard.test.js, tests/sql-guard.test.js
@@ -140,7 +140,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <pre><code>🔍 [OTLC GUARDIAN] SAFETY AUDIT STARTING
     Target  : C:\dev\Projects\otlc-guardian\security
     Project : C:\dev\Projects\otlc-guardian
-    Rules   : 34 pattern · 5 analyzer · 3 project
+    Rules   : 37 pattern · 5 analyzer · 3 project
     Files   : 5 scanned
     Exempt  : 3 (0 marker, 3 allowlist)
     [allowlist] 02-code-security.js, 03-audit.js, 04-sql-guard.js
@@ -229,7 +229,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <h3 id="au-kinds">The three rule kinds</h3>
 <p>Every entry in <code>AUDIT_RULES</code> has <code>id</code>, <code>category</code>, <code>severity</code>, <code>description</code> and <code>fileTypes</code>. Which of three further fields it sets decides its kind, and <code>runAudit()</code> runs the kinds as three separate loops. The status line counts them the same way: <code>filter((r) =&gt; r.pattern)</code>, <code>r.fileCheckFn</code>, <code>r.checkFn</code>.</p>
 <div class="tbl"><table><thead><tr><th>Kind</th><th>Field</th><th>Runs as</th><th>Output</th></tr></thead><tbody>
-<tr><td>pattern (34)</td><td><code>pattern: RegExp</code></td><td><code>scanFile(file, rule, exemptionState)</code> on every non-exempt file whose extension is in <code>fileTypes</code>. Default is line by line with <code>pattern.test(line)</code>; a line that also matches any <code>excludeLinePatterns</code> entry is dropped. With <code>wholeFile: true</code> the regex is cloned with the <code>g</code> flag and run over the whole content, and the line number comes from the match offset; <code>excludeLinePatterns</code> is not consulted in that mode.</td><td>One finding per matching line, or per match.</td></tr>
+<tr><td>pattern (37)</td><td><code>pattern: RegExp</code></td><td><code>scanFile(file, rule, exemptionState)</code> on every non-exempt file whose extension is in <code>fileTypes</code>. Default is line by line with <code>pattern.test(line)</code>; a line that also matches any <code>excludeLinePatterns</code> entry is dropped. With <code>wholeFile: true</code> the regex is cloned with the <code>g</code> flag and run over the whole content, and the line number comes from the match offset; <code>excludeLinePatterns</code> is not consulted in that mode.</td><td>One finding per matching line, or per match.</td></tr>
 <tr><td>analyzer (5)</td><td><code>fileCheckFn(content, filePath)</code></td><td>Called once per non-exempt, non-excluded file with matching extension. It returns <code>[{ line, content }]</code>. A throw is caught, reported with <code>console.warn("... &lt;id&gt; analyzer failed on &lt;file&gt;: &lt;message&gt;")</code>, and the audit continues with the next file.</td><td>One finding per flagged handler.</td></tr>
 <tr><td>project (3)</td><td><code>checkFn(files, projectRoot)</code></td><td>Called once per run. <code>files</code> is the scanned list, or the project root's list for <code>evidence: "project"</code> rules on a partial scan. Returns a boolean.</td><td>At most one finding, <code>line</code> and <code>content</code> null.</td></tr>
 </tbody></table></div>
@@ -261,19 +261,22 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <p>Both are HIGH, not CRITICAL, by design. The source states the limits: auth applied in another file (<code>include_router(..., dependencies=...)</code>, middleware) is invisible; Django class-based views and URLconf routing are not recognized; and the rule finds a handler that never mentions an owner or tenant, it does not prove that a tenant check that is present is correct. <code>guides/tenant-isolation-tests.md</code> covers what a scanner cannot.</p>
 
 <h3 id="au-rules">Rule reference</h3>
-<p>42 rules, in <code>AUDIT_RULES</code> order within each family. The live count line prints <code>Rules : 34 pattern · 5 analyzer · 3 project</code>, and counting the array by hand gives the same: 34 + 5 + 3 = 42. Extension sets: <b>JS</b> = <code>.js .ts .jsx .tsx .mjs .cjs .mts .cts</code>; <b>JS+PY</b> adds <code>.py</code>; <b>SECRET</b> adds <code>.env .json .yaml .yml</code> to JS+PY; <b>TS</b> = <code>.ts .tsx .mts .cts</code>. "Tests out" means the rule applies <code>TEST_FILE_EXCLUDES</code>; "whole" means <code>wholeFile: true</code>.</p>
+<p>45 rules, in <code>AUDIT_RULES</code> order within each family. The live count line prints <code>Rules : 37 pattern · 5 analyzer · 3 project</code>, and counting the array by hand gives the same: 37 + 5 + 3 = 45. Extension sets: <b>JS</b> = <code>.js .ts .jsx .tsx .mjs .cjs .mts .cts</code>; <b>JS+PY</b> adds <code>.py</code>; <b>SECRET</b> adds <code>.env .json .yaml .yml</code> to JS+PY; <b>TS</b> = <code>.ts .tsx .mts .cts</code>. "Tests out" means the rule applies <code>TEST_FILE_EXCLUDES</code>; "whole" means <code>wholeFile: true</code>.</p>
 
 <h4>SEC: secrets (9)</h4>
 <div class="tbl dense"><table><thead><tr><th>Id</th><th>Kind</th><th>Severity</th><th>Files</th><th>Detects</th></tr></thead><tbody>
 <tr><td>SEC-001</td><td>pattern</td><td>CRITICAL</td><td>SECRET</td><td>OpenAI project key: <code>sk-proj-</code> plus 20 or more <code>[A-Za-z0-9_-]</code>.</td></tr>
-<tr><td>SEC-010</td><td>pattern</td><td>CRITICAL</td><td>SECRET</td><td>Anthropic key: <code>sk-ant-api</code>, two digits, <code>-</code>, 20 or more characters.</td></tr>
+<tr><td>SEC-010</td><td>pattern</td><td>CRITICAL</td><td>SECRET</td><td>Anthropic key or OAuth token: <code>sk-ant-</code>, then <code>api</code>, <code>oat</code> or <code>admin</code>, two digits, <code>-</code>, 20 or more characters.</td></tr>
 <tr><td>SEC-001b</td><td>pattern</td><td>CRITICAL</td><td>SECRET</td><td>Legacy <code>sk-</code> plus 20 or more alphanumerics, excluding the two forms above.</td></tr>
 <tr><td>SEC-002</td><td>pattern</td><td>CRITICAL</td><td>SECRET</td><td>AWS access key id: <code>AKIA</code> plus 16 uppercase letters or digits.</td></tr>
-<tr><td>SEC-003</td><td>pattern</td><td>CRITICAL</td><td>SECRET</td><td>GitHub classic token: <code>ghp_</code> plus 36 alphanumerics.</td></tr>
-<tr><td>SEC-004</td><td>pattern</td><td>CRITICAL</td><td>SECRET</td><td><code>-----BEGIN PRIVATE KEY-----</code> or the RSA form. OpenSSH, EC and encrypted headers do not match.</td></tr>
+<tr><td>SEC-003</td><td>pattern</td><td>CRITICAL</td><td>SECRET</td><td>GitHub token: <code>ghp_</code>, <code>gho_</code>, <code>ghu_</code>, <code>ghs_</code> or <code>ghr_</code> plus 36 or more alphanumerics, or <code>github_pat_</code> plus 40 or more.</td></tr>
+<tr><td>SEC-004</td><td>pattern</td><td>CRITICAL</td><td>SECRET</td><td>Any PEM private key header: <code>-----BEGIN</code>, up to three words (RSA, EC, DSA, OPENSSH, ENCRYPTED, or none), <code>PRIVATE KEY-----</code>. A public key header does not match.</td></tr>
 <tr><td>SEC-005</td><td>pattern</td><td>HIGH</td><td>SECRET</td><td><code>password</code> followed by <code>:</code> or <code>=</code> and a quoted literal of 6 or more characters (any case). Fires in tests.</td></tr>
 <tr><td>SEC-006</td><td>pattern</td><td>HIGH</td><td>SECRET, tests out</td><td><code>api_key</code>, <code>api-key</code> or <code>apikey</code> assigned a quoted literal of 8 or more characters.</td></tr>
-<tr><td>SEC-011</td><td>pattern</td><td>HIGH</td><td>SECRET</td><td>Connection string with credentials: <code>postgres(ql)</code>, <code>mysql</code>, <code>mongodb(+srv)</code>, <code>redis(s)</code>, <code>amqp(s)</code> URL with <code>user:pass@</code> (user may be empty).</td></tr>
+<tr><td>SEC-011</td><td>pattern</td><td>HIGH</td><td>SECRET</td><td>Connection string with credentials: <code>postgres(ql)</code>, <code>mysql</code>, <code>mongodb(+srv)</code>, <code>redis(s)</code>, <code>amqp(s)</code> URL with <code>user:pass@</code> (user may be empty). Both parts are length-bounded (256 and 512), as at runtime.</td></tr>
+<tr><td>SEC-012</td><td>pattern</td><td>CRITICAL</td><td>SECRET</td><td>Google API key: <code>AIza</code> plus 35 key characters.</td></tr>
+<tr><td>SEC-013</td><td>pattern</td><td>CRITICAL</td><td>SECRET</td><td>Slack token: <code>xox</code>, then a, b, p, r or s, <code>-</code>, 10 or more characters.</td></tr>
+<tr><td>SEC-014</td><td>pattern</td><td>CRITICAL</td><td>SECRET</td><td>Stripe live key: <code>sk_live_</code> or <code>rk_live_</code> plus 20 or more alphanumerics.</td></tr>
 </tbody></table></div>
 
 <h4>CFG: hardcoded configuration (3)</h4>
@@ -387,7 +390,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <li><b>Missing target passed (BUG-051, fixed 2026-11-10: exit 2).</b> A target that does not exist (a CI typo, or <code>-h</code>) scans 0 files and exits 0 with "No issues found", even with <code>--fail-on-error</code>. Reproduced.</li>
 <li><b>Project under a test-named directory (BUG-052).</b> <code>TEST_FILE_EXCLUDES</code> is tested against the absolute path, so a project inside any directory named <code>test</code>, <code>tests</code> or <code>spec</code> silently loses the 17 test-excluded rules on every file. Reproduced: a <code>console.log</code> in <code>.../tests/app/src/x.js</code> gives 0 findings, the same file under <code>.../app/src/</code> gives ERR-003.</li>
 <li><b>Import ran an audit (BUG-053, fixed 2026-11-10).</b> The CLI block at the bottom of <code>security/03-audit.js</code> runs <code>runAudit()</code> unconditionally, so <code>import "otlc-guardian/audit"</code> (a declared package export) audits the importer's argv target and prints a report. <code>bin/guardian.js</code> guards its own router with an <code>isMainModule</code> check; the engine does not.</li>
-<li><b>Audit secret rules lag the runtime guard (BUG-054).</b> The SEC comment says the rules are kept in lockstep with the runtime <code>SECRET_PATTERNS</code>. The 1.5.0 runtime fix (BUG-026) added OpenSSH, EC and encrypted keys, <code>github_pat_</code>, Slack and others to <code>security/01-injection-guard.js</code>; the audit's SEC-003 still matches only <code>ghp_</code> and SEC-004 only RSA and bare PEM headers.</li>
+<li><b>Audit secret rules lagged the runtime guard (BUG-054, fixed 2026-11-10: SEC-003, SEC-004 and SEC-010 widened, SEC-012 to SEC-014 added, and a parity test maps every <code>GUARD-SEC</code> id to its audit rule).</b> The SEC comment says the rules are kept in lockstep with the runtime <code>SECRET_PATTERNS</code>. The 1.5.0 runtime fix (BUG-026) added OpenSSH, EC and encrypted keys, <code>github_pat_</code>, Slack and others to <code>security/01-injection-guard.js</code>; the audit's SEC-003 still matches only <code>ghp_</code> and SEC-004 only RSA and bare PEM headers.</li>
 <li><b>VAL-002 comment versus code.</b> The rule's comment says a <code>replace(/[\r\n]/g, "")</code> strip helper on the same line clears the finding. VAL-002 has no exclusion list, and whole-file rules never consult <code>excludeLinePatterns</code>, so a stripped value still fires. Needs check against a fixture.</li>
 <li><b>JSON plus exit 1.</b> With <code>--json --fail-on-error</code>, <code>process.exit(1)</code> follows the <code>console.log</code> of the JSON directly. On Windows, writes to a pipe are asynchronous in Node, so a large report could be cut short. Needs check.</li>
 <li><b>DEP-001 could crash the run (BUG-055, fixed 2026-11-10).</b> Its <code>checkFn</code> read every file with <code>readFileSync</code> and no <code>try</code>; every other read in the engine is guarded. It now reads through <code>readForCheck()</code>, which prints <code>DEP-001 could not read &lt;file&gt;: &lt;reason&gt;</code> on stderr and treats the file as empty.</li>

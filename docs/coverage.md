@@ -57,7 +57,7 @@ shell scripts, SQL files, Dockerfiles, CI workflow files, Terraform.
 | V10 OAuth and OIDC | not covered | none | |
 | V11 Cryptography | partial | AUTHZ-004 (non constant-time comparison of a secret) | Weak algorithms, key sizes, random sources. Which V11 section AUTHZ-004 maps to needs check |
 | V12 Secure Communication | not covered | none | TLS configuration, plain `http://` endpoints |
-| V13 Configuration | partial | SEC-001 to SEC-011 (hardcoded secrets), CFG-001 to CFG-003 (hardcoded hosts), DEP-002 (`.env` committed, broken by BUG-039) | Whether ASVS 5.0 places secret management in V13 or elsewhere needs check |
+| V13 Configuration | partial | SEC-001 to SEC-014 (hardcoded secrets), CFG-001 to CFG-003 (hardcoded hosts), DEP-002 (`.env` committed, broken by BUG-039) | Whether ASVS 5.0 places secret management in V13 or elsewhere needs check |
 | V14 Data Protection | needs check | Runtime `guardOutput` scans model output for secrets (`GUARD-SEC-*`) | Mapping to a V14 requirement needs check; no rules for PII in logs or caching headers |
 | V15 Secure Coding and Architecture | needs check | TS-001 (`any` type), INJ-001 (`eval`, BUG-040) | Dependency auditing is planned (Self-Growing Gate, Lane 4), not built; no deserialization rule. Mapping needs check |
 | V16 Security Logging and Error Handling | partial | ERR-001 (silent catch), ERR-002 (catch that only logs to console), ERR-003 (`console.log` in non-test code) | JS/TS only; no check that security events are logged, or that logs hold no secrets |
@@ -104,7 +104,7 @@ memory safety weaknesses in languages Guardian does not scan.
 | Prompt injection into an AI model (CWE-1427; OWASP LLM01) | partial | Runtime guard, 28 `GUARD-INJ-*` patterns, normalization and decode passes (chapter 03 of the manual); pattern based, so reworded instructions pass |
 | Indirect injection through files agents load (CLAUDE.md, memory, plans) | partial | PreToolUse hook, deny on CRITICAL additions to watched paths; routes it cannot see are listed in `SECURITY.md` |
 | Indirect injection through web content | partial | PostToolUse web content guard; warns only |
-| Hardcoded credentials (CWE-798) | partial | SEC-001 to SEC-011 in the audit; `GUARD-SEC-*` at runtime (BUG-026 for formats added in 1.5.0) |
+| Hardcoded credentials (CWE-798) | partial | SEC-001 to SEC-014 in the audit; `GUARD-SEC-*` at runtime (BUG-026 for formats added in 1.5.0; BUG-054 brought the audit to the same set) |
 | AV reputation of shipped static sites | partial | REP-001 to REP-005 |
 
 ## 5. How to keep this current

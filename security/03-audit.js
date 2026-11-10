@@ -850,9 +850,13 @@ const AUDIT_RULES = [
   //
   // Fix: split into provider-labelled rules so the violation report
   // names the provider the operator just leaked, and keep a legacy
-  // fallback for historical `sk-` tokens still in circulation. Kept in
-  // lockstep with the runtime SECRET_PATTERNS in 01-injection-guard.js
-  // and security/injection_guard.py.
+  // fallback for historical `sk-` tokens still in circulation.
+  //
+  // Every secret the runtime SECRET_PATTERNS (01-injection-guard.js and
+  // security/injection_guard.py) knows has an audit rule here. The two
+  // tables stay separate because this engine is one self-contained file;
+  // the "BUG-054" block in tests/audit.test.js maps each GUARD-SEC id to
+  // its audit rule and fails when a runtime pattern has none.
   {
     id: "SEC-001", category: "Secrets", severity: "CRITICAL",
     description: "Hardcoded OpenAI Project API key (sk-proj-...)",
@@ -861,8 +865,8 @@ const AUDIT_RULES = [
   },
   {
     id: "SEC-010", category: "Secrets", severity: "CRITICAL",
-    description: "Hardcoded Anthropic API key (sk-ant-api...)",
-    pattern: /sk-ant-api\d{2}-[a-zA-Z0-9_-]{20,}/,
+    description: "Hardcoded Anthropic API key or OAuth token (sk-ant-api, -oat, -admin)",
+    pattern: /sk-ant-(?:api|oat|admin)\d{2}-[a-zA-Z0-9_-]{20,}/,
     fileTypes: SECRET_FILE_EXTS,
   },
   {
@@ -879,14 +883,17 @@ const AUDIT_RULES = [
   },
   {
     id: "SEC-003", category: "Secrets", severity: "CRITICAL",
+    // Classic (ghp_), OAuth (gho_), user-to-server (ghu_), server
+    // (ghs_), refresh (ghr_) and fine-grained (github_pat_) tokens.
     description: "Hardcoded GitHub token",
-    pattern: /ghp_[a-zA-Z0-9]{36}/,
+    pattern: /gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,}/,
     fileTypes: SECRET_FILE_EXTS,
   },
   {
     id: "SEC-004", category: "Secrets", severity: "CRITICAL",
     description: "Private key embedded in code",
-    pattern: /-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----/,
+    // Any PEM private key header: bare, RSA, EC, DSA, OPENSSH, ENCRYPTED.
+    pattern: /-----BEGIN\s+(?:[A-Z0-9]+\s+){0,3}PRIVATE\s+KEY-----/,
     fileTypes: SECRET_FILE_EXTS,
   },
   {
@@ -913,10 +920,30 @@ const AUDIT_RULES = [
     // User part uses `*` so the redis "password only" variant
     // (`redis://:mypass@host`) also matches. Character classes
     // exclude `@` and `/` so the regex cannot walk past the credential
-    // boundary into the host portion.
+    // boundary into the host portion. Both credential parts are
+    // length-bounded, as at runtime: unbounded, a long run of
+    // "redis://a:b" with no "@" made the match quadratic.
     id: "SEC-011", category: "Secrets", severity: "HIGH",
     description: "Connection string with embedded credentials (user:pass@host)",
-    pattern: /(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqps?):\/\/[^:@\/\s"'`]*:[^@\s"'`]+@/i,
+    pattern: /(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqps?):\/\/[^:@\/\s"'`]{0,256}:[^@\s"'`]{1,512}@/i,
+    fileTypes: SECRET_FILE_EXTS,
+  },
+  {
+    id: "SEC-012", category: "Secrets", severity: "CRITICAL",
+    description: "Hardcoded Google API key (AIza...)",
+    pattern: /AIza[0-9A-Za-z\-_]{35}/,
+    fileTypes: SECRET_FILE_EXTS,
+  },
+  {
+    id: "SEC-013", category: "Secrets", severity: "CRITICAL",
+    description: "Hardcoded Slack token (xoxb-, xoxp-, ...)",
+    pattern: /xox[abprs]-[A-Za-z0-9-]{10,}/,
+    fileTypes: SECRET_FILE_EXTS,
+  },
+  {
+    id: "SEC-014", category: "Secrets", severity: "CRITICAL",
+    description: "Hardcoded Stripe live key (sk_live_, rk_live_)",
+    pattern: /[sr]k_live_[A-Za-z0-9]{20,}/,
     fileTypes: SECRET_FILE_EXTS,
   },
 

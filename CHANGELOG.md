@@ -172,6 +172,17 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **Audit secret rules now cover every runtime secret format (BUG-054).**
+  The 1.5.0 runtime widening (BUG-026) had not reached the audit, so a
+  committed fine-grained GitHub token or an OpenSSH key passed
+  `guardian audit`. SEC-003 now matches every GitHub token form (`ghp_`,
+  `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), SEC-004 any PEM private
+  key header, and SEC-010 Anthropic OAuth and admin keys; SEC-011 is
+  length-bounded like the runtime rule. New rules: SEC-012 (Google API
+  key), SEC-013 (Slack token), SEC-014 (Stripe live key). The audit now
+  has 45 rules (37 pattern, 5 analyzer, 3 project). A test maps every
+  runtime `GUARD-SEC` id to its audit rule and fails when one is missing.
+
 - **An unreadable file no longer crashes the audit (BUG-055).** DEP-001's
   check read every file with a bare `readFileSync`, so a file that
   vanished or lost its read permission mid-scan threw out of `runAudit`.

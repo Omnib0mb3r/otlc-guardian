@@ -30,7 +30,7 @@
  */
 
 import { strict as assert } from "assert";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { spawnSync } from "child_process";
@@ -2317,6 +2317,82 @@ describe("BUG-055: DEP-001 does not crash on an unreadable file", () => {
       }
       assert.equal(fired, true);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-054: audit secret rules cover every runtime secret pattern
+// ---------------------------------------------------------------------------
+//
+// The audit and the runtime guard keep separate tables (the audit is one
+// self-contained file). This block is what keeps them in step: every
+// GUARD-SEC id in security/01-injection-guard.js must be listed in
+// SECRET_PARITY with the audit rule that catches the same secret, or
+// carry a reason it is not mirrored. A runtime pattern added without an
+// audit counterpart fails the first test.
+
+const GUARD_SCRIPT = path.resolve(__dirname, "..", "security", "01-injection-guard.js");
+const { scan: guardScan } = await import(pathToFileURL(GUARD_SCRIPT).href);
+
+const SECRET_PARITY = {
+  "GUARD-SEC-001":  { audit: "SEC-001",  sample: "sk-proj-" + "a1B2c3D4e5".repeat(3) },
+  "GUARD-SEC-010":  { audit: "SEC-010",  sample: "sk-ant-oat01-" + "a".repeat(40) },
+  "GUARD-SEC-001b": { audit: "SEC-001b", sample: "sk-" + "a1B2c3D4e5".repeat(3) },
+  "GUARD-SEC-002":  { audit: "SEC-012",  sample: "AIza" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R" },
+  "GUARD-SEC-003":  { audit: "SEC-003",  sample: "ghp_" + "a".repeat(36) },
+  "GUARD-SEC-004":  { audit: "SEC-003",  sample: "gho_" + "a".repeat(36) },
+  "GUARD-SEC-005":  { audit: "SEC-002",  sample: "AKIA" + "ABCDEFGHIJKLMNOP" },
+  "GUARD-SEC-006":  { audit: null, reason: "keyword plus 40 base64 characters is too loose for source code; SEC-005 and SEC-006 cover quoted password and api key literals" },
+  "GUARD-SEC-007":  { audit: "SEC-004",  sample: "-----BEGIN OPENSSH PRIVATE KEY-----" },
+  "GUARD-SEC-008":  { audit: "SEC-005",  sample: "hunter2hunter2", line: (s) => `const password = "${s}";` },
+  "GUARD-SEC-009":  { audit: "SEC-006",  sample: "abcd1234efgh", line: (s) => `const api_key = "${s}";` },
+  "GUARD-SEC-011":  { audit: "SEC-011",  sample: "postgresql://admin:hunter2@db.internal:5432/prod" },
+  "GUARD-SEC-012":  { audit: "SEC-003",  sample: "github_pat_" + "A1b2C3d4E5".repeat(6) },
+  "GUARD-SEC-013":  { audit: "SEC-003",  sample: "ghs_" + "a".repeat(36) },
+  "GUARD-SEC-014":  { audit: "SEC-013",  sample: "xoxb-123456789012-abcdefghijkl" },
+  "GUARD-SEC-015":  { audit: "SEC-014",  sample: "sk_live_" + "a".repeat(24) },
+};
+
+describe("BUG-054: audit secret rules cover the runtime secret patterns", () => {
+  test("every runtime GUARD-SEC id is listed in SECRET_PARITY", () => {
+    const source = readFileSync(GUARD_SCRIPT, "utf8");
+    const runtimeIds = [...source.matchAll(/id:\s*"(GUARD-SEC-[0-9]+b?)"/g)].map((m) => m[1]);
+    assert.ok(runtimeIds.length > 10, `found only ${runtimeIds.length} runtime secret ids`);
+    assert.deepEqual([...new Set(runtimeIds)].sort(), Object.keys(SECRET_PARITY).sort());
+  });
+
+  const mirrored = Object.entries(SECRET_PARITY).filter(([, p]) => p.audit);
+  const files = {};
+  for (const [guardId, p] of mirrored) {
+    files[`src/${guardId}.js`] = (p.line ? p.line(p.sample) : `const value = "${p.sample}";`) + "\n";
+  }
+  const dir = makeProject(files);
+  let report;
+  try {
+    report = runAuditOn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  for (const [guardId, p] of mirrored) {
+    test(`${guardId} sample is caught by the runtime and by audit ${p.audit}`, () => {
+      const runtime = guardScan(p.line ? p.line(p.sample) : p.sample, "secrets").violations.map((v) => v.id);
+      assert.ok(runtime.includes(guardId), `runtime gave ${runtime}`);
+      const audit = report.findings
+        .filter((f) => path.basename(f.file) === `${guardId}.js`)
+        .map((f) => f.rule.id);
+      assert.ok(audit.includes(p.audit), `audit gave ${audit.join(", ") || "nothing"}`);
+    });
+  }
+
+  for (const header of ["EC", "ENCRYPTED", "RSA", "DSA"]) {
+    test(`SEC-004 catches the ${header} private key header`, () => {
+      assert.ok(auditFires({ "src/k.js": `const k = "-----BEGIN ${header} PRIVATE KEY-----";\n` }, "SEC-004"));
+    });
+  }
+
+  test("SEC-004 does not fire on a public key header", () => {
+    assert.ok(!auditFires({ "src/k.js": `const k = "-----BEGIN PUBLIC KEY-----";\n` }, "SEC-004"));
   });
 });
 

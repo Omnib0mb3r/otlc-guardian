@@ -65,7 +65,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-051 | SMOKE-TESTING | Audit of a path that does not exist scans 0 files and exits 0, even with `--fail-on-error` |
 | BUG-052 | OPEN | Audit: a project inside a folder named `test`, `tests` or `spec` loses every rule that skips test files |
 | BUG-053 | SMOKE-TESTING | Importing `security/03-audit.js` (package export `./audit`) runs an audit of the cwd as a side effect |
-| BUG-054 | OPEN | Audit secret rules lag the runtime guard: SEC-003 matches only `ghp_`, SEC-004 misses OpenSSH, EC and encrypted keys |
+| BUG-054 | SMOKE-TESTING | Audit secret rules lag the runtime guard: SEC-003 matches only `ghp_`, SEC-004 misses OpenSSH, EC and encrypted keys |
 | BUG-055 | SMOKE-TESTING | `DEP-001` reads files with no error handling, so one unreadable file crashes the audit |
 | BUG-056 | OPEN | Audit allowlist accepts an entry with an empty `# reason:`, though SECURITY.md says entries without a reason are rejected |
 | BUG-057 | OPEN | Any mention of `otlc-guardian:audit-exempt` in a file's first 4 KB exempts the whole file, including a string or a comment about the marker |
@@ -732,9 +732,11 @@ From code: the CLI entry point at the bottom of `security/03-audit.js` calls `ru
 
 ### BUG-054: Audit secret rules lag the runtime guard
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 From code: SEC-003 is `/ghp_[a-zA-Z0-9]{36}/` and SEC-004 matches only `BEGIN PRIVATE KEY` and `BEGIN RSA PRIVATE KEY`. BUG-026 (1.5.0) widened the runtime guard to `github_pat_`, `ghs_`, OpenSSH and EC keys, Slack, Stripe live and Anthropic OAuth, but not the audit, though a comment says the two are kept in step. A committed fine-grained GitHub token or OpenSSH key passes the audit. Fix: one shared secret table, or a test that fails when the two sets differ.
+
+**Fix (2026-11-10).** In `security/03-audit.js`: SEC-003 is `gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,}`, SEC-004 takes any PEM private key header (the runtime GUARD-SEC-007 form), SEC-010 takes `api`, `oat` and `admin`, and SEC-011 is length-bounded as at runtime. New SEC-012 (Google `AIza`), SEC-013 (Slack `xox?-`), SEC-014 (Stripe `sk_live_`/`rk_live_`); the audit is 45 rules (37 pattern). The tables stay separate (the audit is one self-contained file and the runtime file is protected); the test is the shared contract. Not mirrored, by design: GUARD-SEC-006 (keyword plus 40 base64 characters), too loose for source code. Tests: `tests/audit.test.js`, "BUG-054" block: one test reads every `GUARD-SEC` id from `01-injection-guard.js` and requires it in `SECRET_PARITY`; one test per mirrored id runs the sample through the runtime `scan()` and the audit; four header tests and a public-key negative (11 failed before the fix). Counts updated in README.md, skill/SKILL.md, docs/coverage.md and manual chapters 00, 01, 02 and 07. Smoke test: `guardian audit` on a scratch project holding a `github_pat_` token and an OpenSSH key header gives SEC-003 and SEC-004.
 
 ### BUG-055: `DEP-001` can crash the audit
 
