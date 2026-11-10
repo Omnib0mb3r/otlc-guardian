@@ -2822,6 +2822,42 @@ describe("BUG-032: AUTHZ-011 does not report reads", () => {
 });
 
 // ---------------------------------------------------------------------------
+// BUG-033: WEB-001 matches credential words, not substrings
+// ---------------------------------------------------------------------------
+
+describe("BUG-033: WEB-001 token constants, wrapped tokens, refreshCount", () => {
+  const fires = (code) => auditFires({ "src/auth.js": code + "\n" }, "WEB-001");
+
+  for (const [label, code] of [
+    ["a key constant", `localStorage.setItem(TOKEN_KEY, accessToken);`],
+    ["a key on a constants object", `localStorage.setItem(STORAGE_KEYS.authToken, t);`],
+    ["a token wrapped in JSON", `localStorage.setItem("auth", JSON.stringify({ accessToken }));`],
+    ["a token property wrapped in JSON", `sessionStorage.setItem("auth", JSON.stringify({ token: res.token }));`],
+    ["an upper-case session id key", `sessionStorage.setItem("SESSION_ID", sid);`],
+    ["an api key value", `localStorage.setItem("cfg", apiKey);`],
+  ]) {
+    test(`fires on ${label}`, () => assert.ok(fires(code)));
+  }
+
+  for (const [label, code] of [
+    ["refreshCount", `localStorage.setItem("refreshCount", "1");`],
+    ["design tokens", `localStorage.setItem("theme", JSON.stringify(themeTokens));`],
+    ["a flag that names tokens", `localStorage.setItem("prefs", JSON.stringify({ showTokenCount: true }));`],
+    ["a tokenizer value", `localStorage.setItem("cursor", tokenizer.position);`],
+    ["a property that only contains the letters", `localStorage.tokensSeen = 3;`],
+  ]) {
+    test(`silent on ${label}`, () => assert.ok(!fires(code)));
+  }
+
+  test("a long minified line stays fast", () => {
+    const line = `localStorage.setItem("a", ${"x".repeat(50000)});`;
+    const start = Date.now();
+    fires(line);
+    assert.ok(Date.now() - start < 5000, `took ${Date.now() - start} ms`);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

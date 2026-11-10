@@ -47,7 +47,7 @@ shell scripts, SQL files, Dockerfiles, CI workflow files, Terraform.
 |---|---|---|---|
 | V1 Encoding and Sanitization | partial | INJ-002, INJ-003 (HTML sinks), INJ-004, INJ-005, INJ-005b, INJ-006 (SQL), VAL-002 (email header CRLF) | No output-encoding check beyond the two HTML sinks; no LDAP, XPath, OS command or template injection rules |
 | V2 Validation and Business Logic | partial | VAL-001 (request body reaches a side effect without schema validation, JS/TS) | Python not covered; business logic rules are out of reach for a static pattern |
-| V3 Web Frontend Security | partial | WEB-001 (token in browser storage), WEB-002 (no CSP, nginx), REP-003, REP-004, INJ-002, INJ-003 | CSP is only checked for nginx; no cookie flag, frame, CORS or subresource-integrity rules. BUG-033, BUG-038 |
+| V3 Web Frontend Security | partial | WEB-001 (token in browser storage), WEB-002 (no CSP, nginx), REP-003, REP-004, INJ-002, INJ-003 | CSP is only checked for nginx; no cookie flag, frame, CORS or subresource-integrity rules. BUG-038 |
 | V4 API and Web Service | needs check | API-001 (no `/api/v1` prefix) | API-001 is a house style rule; whether any ASVS V4 requirement maps to it needs check. No rules for HTTP method handling, GraphQL or WebSocket |
 | V5 File Handling | not covered | none | Upload type, size and path checks |
 | V6 Authentication | partial | AUTHZ-001 (JS/TS), AUTHZ-011 (Python): side effect with no authentication check; AUTHZ-004 (secret compared with `===`) | Password storage, MFA, credential recovery |

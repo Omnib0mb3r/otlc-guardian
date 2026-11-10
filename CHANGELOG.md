@@ -172,6 +172,14 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **WEB-001 matches credential words, not substrings (BUG-033).** It
+  missed `setItem(TOKEN_KEY, accessToken)` and
+  `setItem("auth", JSON.stringify({ accessToken }))`, and flagged
+  `setItem("refreshCount", "1")`. Keys may now be literals or
+  identifiers, a value that names a token counts, and words are split
+  at camelCase and non-letters, so `refreshCount`, `themeTokens` and
+  `tokenizer` no longer count.
+
 - **AUTHZ-011 no longer reports reads (BUG-032).** Every database
   `execute` counted as a side effect, so a `GET` running
   `db.execute(select(...))` was reported HIGH as an unauthenticated write.

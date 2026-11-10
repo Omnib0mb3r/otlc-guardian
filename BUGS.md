@@ -44,7 +44,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-030 | SMOKE-TESTING | `AUTHZ-013` misses a textbook IDOR: a 404 and a `user_id` path parameter count as ownership checks |
 | BUG-031 | SMOKE-TESTING | `AUTHZ-011` blind spots: router-level `Depends(get_db)`, substring public-route list, bare `api_key` mention |
 | BUG-032 | SMOKE-TESTING | `AUTHZ-011` flags reads: `GET` plus `db.execute(select(...))` reports HIGH |
-| BUG-033 | OPEN | `WEB-001` misses token constants and JSON-wrapped tokens; flags `refreshCount` |
+| BUG-033 | SMOKE-TESTING | `WEB-001` misses token constants and JSON-wrapped tokens; flags `refreshCount` |
 | BUG-034 | OPEN | Bash in the PreToolUse matcher makes BUG-028 worse: hook error on every Bash call after a `cd` |
 | BUG-035 | OPEN | "ask" stalls unattended workers in default and acceptEdits modes |
 | BUG-036 | OPEN | Web guard MCP tool names (`mcp__firecrawl__crawl`, `mcp__exa__search`) are probably wrong |
@@ -539,12 +539,14 @@ Review finding 9 (MEDIUM). Source: `C:/dev/data/skill-connections/brainstorms/16
 
 ### BUG-033: `WEB-001` misses token constants and JSON-wrapped tokens; flags `refreshCount`
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 Review finding 10 (MEDIUM). Source: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`. Logged when 1.5.0 landed; not fixed in it.
 
 - Missed: `setItem(TOKEN_KEY, accessToken)` and `setItem("auth", JSON.stringify({accessToken}))`.
 - Falsely flagged: `setItem("refreshCount", "1")`.
+
+**Fix (2026-11-10).** WEB-001's pattern is now `WEB_TOKEN_STORAGE` in `security/03-audit.js`, built from `WEB_CREDENTIAL_WORD`: token, jwt, bearer, credential(s), api key, session id or access key as a word, with case-sensitive boundaries (non-letter or a camelCase change) and case-insensitive letters spelled by `ci()` (Node 22 has no inline regex modifiers). Matches: a `setItem` key literal or key identifier holding such a word (or a bare `"refresh"` key, kept from before), a `setItem` value naming an identifier that ends in one, a property assignment, and a bracket assignment. Every repeat is bounded (200 or 64 characters), so a 50,000-character line stays fast. The rule stays a pattern rule (counts unchanged). Tests: `tests/audit.test.js`, "BUG-033" block (6 fire, 5 silent, 1 timing; 7 failed before the fix); the existing WEB-001 block passes unchanged. Manual chapter 02 and docs/coverage.md updated. Smoke test: `guardian audit` on a React app that stores `accessToken` under a `TOKEN_KEY` constant reports WEB-001.
 
 ### BUG-034: Bash in the PreToolUse matcher makes BUG-028 worse: hook error on every Bash call after a `cd`
 

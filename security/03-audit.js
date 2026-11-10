@@ -939,6 +939,43 @@ function nginxWithoutCsp(files, projectRoot) {
   return !files.some((f) => CSP_ANYWHERE.test(readSmallText(f)));
 }
 
+// ---------------------------------------------------------------------------
+// WEB-001 SUPPORT: credential words in browser-storage writes (BUG-033)
+// ---------------------------------------------------------------------------
+//
+// A storage key or identifier names a credential when one of its words is
+// token, jwt, bearer, credential(s), api key, session id or access key.
+// Words split at non-letters and at camelCase changes, so "customer_token",
+// "authToken", "TOKEN_KEY" and "accessToken" are credentials and
+// "refreshCount", "themeTokens", "showTokenCount" and "tokenizer" are not.
+// A single /i regex cannot see a camelCase boundary (it folds [a-z] and
+// [A-Z] together), so the words are spelled case-insensitively by ci()
+// and the boundaries stay case-sensitive. Must stay above AUDIT_RULES,
+// which reads WEB_TOKEN_STORAGE while it is built.
+
+const ci = (word) => word.replace(/[a-z]/g, (ch) => `[${ch}${ch.toUpperCase()}]`);
+const WEB_WORD_START = String.raw`(?:(?<![A-Za-z])|(?<=[a-z])(?=[A-Z]))`;
+const WEB_WORD_END   = String.raw`(?![a-z])(?!(?<=[A-Z])[A-Z])`;
+const WEB_CREDENTIAL_WORD = WEB_WORD_START + "(?:" + [
+  ci("credentials"), ci("credential"), ci("token"), ci("jwt"), ci("bearer"),
+  `${ci("api")}[_-]?${ci("key")}`, `${ci("session")}[_-]?${ci("id")}`, `${ci("access")}[_-]?${ci("key")}`,
+].join("|") + ")" + WEB_WORD_END;
+
+const WEB_QUOTE = "[\"'`]";
+const WEB_KEY_LITERAL = `${WEB_QUOTE}[^"'\`\\n]{0,200}?${WEB_CREDENTIAL_WORD}[^"'\`\\n]{0,200}${WEB_QUOTE}|${WEB_QUOTE}${ci("refresh")}${WEB_QUOTE}`;
+const WEB_KEY_IDENT = String.raw`[\w$.]{0,64}?` + WEB_CREDENTIAL_WORD + String.raw`[\w$]{0,64}`;
+// An identifier that ends in a credential word: accessToken, res.jwt, ACCESS_TOKEN.
+const WEB_VALUE_IDENT = String.raw`(?<![\w$])[\w$]{0,64}?` + WEB_CREDENTIAL_WORD + String.raw`(?![\w$])`;
+
+const WEB_TOKEN_STORAGE = new RegExp(
+  String.raw`\b(?:localStorage|sessionStorage)(?:` +
+    String.raw`\.setItem\s*\(\s*(?:${WEB_KEY_LITERAL}|${WEB_KEY_IDENT})\s*,` +
+    String.raw`|\.setItem\s*\(\s*[^,()]{1,200},[^;\n]{0,200}?${WEB_VALUE_IDENT}` +
+    String.raw`|\.[\w$]{0,64}?${WEB_CREDENTIAL_WORD}[\w$]{0,64}\s*=(?!=)` +
+    String.raw`|\[\s*(?:${WEB_KEY_LITERAL})\s*\]\s*=(?!=)` +
+  ")"
+);
+
 const AUDIT_RULES = [
   // --- SECRETS ---
   //
@@ -1518,11 +1555,15 @@ const AUDIT_RULES = [
   // localStorage, use httpOnly cookies". Nothing enforced it. Anything in
   // browser storage is readable by any script on the page, so one XSS bug
   // becomes account takeover. Matches the three ways a token gets there:
-  // setItem("...token..."), storage.token = ..., storage["...token..."] = ...
+  // setItem("...token...", v) or setItem(TOKEN_KEY, v), setItem(k, token)
+  // (the value names a token, JSON-wrapped included), storage.token = ...,
+  // storage["...token..."] = .... Credential words are matched as words
+  // (WEB_CREDENTIAL_WORD), so refreshCount, themeTokens and tokenizer are
+  // not tokens (BUG-033).
   {
     id: "WEB-001", category: "Web Client", severity: "HIGH",
     description: "Auth token kept in browser storage (localStorage/sessionStorage). Use an httpOnly cookie",
-    pattern: /\b(?:localStorage|sessionStorage)(?:\.setItem\s*\(\s*["'`][^"'`]*(?:token|jwt|bearer|credential|api[_-]?key|session[_-]?id|access[_-]?key|refresh)[^"'`]*["'`]|\.\w*(?:token|jwt|bearer|credential|apiKey|sessionId)\w*\s*=[^=]|\[\s*["'`][^"'`]*(?:token|jwt|bearer|credential|api[_-]?key|session[_-]?id)[^"'`]*["'`]\s*\]\s*=[^=])/i,
+    pattern: WEB_TOKEN_STORAGE,
     fileTypes: [...JS_TS_EXTS, ".html", ".vue", ".svelte"],
     excludePatterns: TEST_FILE_EXCLUDES,
   },
