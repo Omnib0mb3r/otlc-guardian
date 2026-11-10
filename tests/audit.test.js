@@ -65,6 +65,27 @@ function describe(group, fn) {
   fn();
 }
 
+/**
+ * A test that reproduces an open bug. It must keep failing until the bug
+ * is fixed: while it fails it is reported as known, and the moment it
+ * passes the suite fails, so the fix also moves the test to test() and
+ * the bug in BUGS.md. The assertion itself is never weakened.
+ */
+let knownBugs = 0;
+function knownBug(bugId, name, fn) {
+  try {
+    fn();
+  } catch (err) {
+    console.log(`  ⚠️  ${name} (known: ${bugId})`);
+    knownBugs++;
+    return;
+  }
+  console.error(`  ❌ ${name}`);
+  console.error(`     → passes now: ${bugId} looks fixed. Move this to test() and update BUGS.md.`);
+  failed++;
+  failures.push({ name, error: `${bugId} passes now` });
+}
+
 // ---------------------------------------------------------------------------
 // HELPERS
 // ---------------------------------------------------------------------------
@@ -2012,6 +2033,62 @@ describe("WEB-002 — nginx server block with no CSP (1.5.0)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Rules that had no test before 2026-11-10 (gate plan, step 0).
+// One sample each rule must flag and one it must not. A rule that fails
+// its own fixture is logged in BUGS.md; the fixture is not loosened.
+// Secret-shaped values are assembled at runtime so this file carries none.
+// ---------------------------------------------------------------------------
+
+describe("Rules with no prior test: bad sample fires, good sample is silent", () => {
+  const big = (n) => "x".repeat(n);
+  const cases = [
+    { id: "SEC-002", bad: { "src/aws.js": `const key = "${"AKIA" + "IOSFODNN7EXAMPLE"}";\n` },
+                     good: { "src/aws.js": `const key = process.env.AWS_ACCESS_KEY_ID;\n` } },
+    { id: "SEC-003", bad: { "src/gh.js": `const token = "${"ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"}";\n` },
+                     good: { "src/gh.js": `const token = process.env.GITHUB_TOKEN; // ghp_ prefix expected\n` } },
+    { id: "SEC-004", bad: { "src/key.js": `const pem = \`${"-----BEGIN RSA " + "PRIVATE KEY-----"}\nMIIE...\`;\n` },
+                     good: { "src/key.js": `const pem = \`-----BEGIN PUBLIC KEY-----\nMIIB...\`;\n` } },
+    { id: "SEC-005", bad: { "src/db.js": `const config = { password: "${"hunter" + "2secret"}" };\n` },
+                     good: { "src/db.js": `const config = { password: process.env.DB_PASSWORD };\n` } },
+    { id: "ERR-002", bad: { "src/job.js": `try { run(); } catch (err) { console.log(err); }\n` },
+                     good: { "src/job.js": `try { run(); } catch (err) { logger.error({ err }, "run failed"); throw err; }\n` } },
+    { id: "API-001", bad: { "src/routes.js": `router.get("/api/users", listUsers);\n` },
+                     good: { "src/routes.js": `router.get("/api/v1/users", listUsers);\n` } },
+    { id: "INJ-001", bad: { "src/calc.js": `const result = eval(req.query.expr);\n` },
+                     good: { "src/calc.js": `const result = JSON.parse(req.query.expr);\n` } },
+    { id: "INJ-003", bad: { "src/Post.jsx": `export const Post = ({ html }) => <div dangerouslySetInnerHTML={{ __html: html }} />;\n` },
+                     good: { "src/Post.jsx": `export const Post = ({ text }) => <div>{text}</div>;\n` } },
+    { id: "DEP-002", bad: { ".env": `API_URL=https://api.example.com\n`, "src/index.js": `export {};\n` },
+                     good: { ".env.example": `API_URL=\n`, "src/index.js": `export {};\n` } },
+    { id: "REP-001", bad: { "index.html": `<html><body><script>var a = "${big(21000)}";</script></body></html>\n` },
+                     good: { "index.html": `<html><body><script src="app.3f9a.js"></script><script>init();</script></body></html>\n` } },
+    { id: "REP-002", bad: { "public/data.js": `window.DATA = "${big(25000)}";\n` },
+                     good: { "public/data.js": `window.DATA = [\n${Array.from({ length: 50 }, () => `  "${big(500)}",`).join("\n")}\n];\n` } },
+    { id: "REP-003", bad: { "index.html": `<button onclick="buy()">Buy</button>\n` },
+                     good: { "index.html": `<button id="buy">Buy</button>\n` } },
+    { id: "REP-004", bad: { "index.html": `<a href="javascript:void(0)">Menu</a>\n` },
+                     good: { "index.html": `<a href="/menu">Menu</a>\n` } },
+    { id: "REP-005", bad: { "src/logo.js": `export const logo = "data:image/png;base64,${"QUFB".repeat(1100)}";\n` },
+                     good: { "src/logo.js": `export const logo = "data:image/png;base64,${"QUFB".repeat(20)}";\n` } },
+  ];
+
+  // BUG-039: a bare .env has no extension, so the walker never collects it.
+  const openBugs = { "DEP-002 bad": "BUG-039" };
+
+  for (const { id, bad, good } of cases) {
+    const badName = `${id} flags its bad sample`;
+    const badFn = () => assert.ok(auditFires(bad, id), `${id} did not fire on ${Object.keys(bad).join(", ")}`);
+    if (openBugs[`${id} bad`]) knownBug(openBugs[`${id} bad`], badName, badFn);
+    else test(badName, badFn);
+    test(`${id} is silent on its good sample`, () => assert.ok(!auditFires(good, id), `${id} fired on its good sample`));
+  }
+
+  knownBug("BUG-040", "INJ-001 (eval) is silent on a function whose name ends in 'eval'", () => {
+    assert.ok(!auditFires({ "src/search.js": `const docs = retrieval(query);\n` }, "INJ-001"));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 
@@ -2019,7 +2096,8 @@ console.log(`\n${"─".repeat(60)}`);
 console.log(`🔍 [OTLC GUARDIAN] audit.test.js RESULTS`);
 console.log(`   Passed : ${passed}`);
 console.log(`   Failed : ${failed}`);
-console.log(`   Total  : ${passed + failed}`);
+console.log(`   Known  : ${knownBugs} (open bugs reproduced, see BUGS.md)`);
+console.log(`   Total  : ${passed + failed + knownBugs}`);
 
 if (failures.length > 0) {
   console.error(`\n❌ FAILURES:`);

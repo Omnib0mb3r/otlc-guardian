@@ -50,6 +50,8 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-036 | OPEN | Web guard MCP tool names (`mcp__firecrawl__crawl`, `mcp__exa__search`) are probably wrong |
 | BUG-037 | OPEN | `guardian update` hook migration overrides a custom wider matcher and duplicates the `$CLAUDE_PROJECT_DIR` form |
 | BUG-038 | OPEN | Small hook and audit defects: deny message loses the file name, NGINX check cost, CSP comment suppresses WEB-002 |
+| BUG-039 | OPEN | `DEP-002` can never fire: the walker never collects a bare `.env` file |
+| BUG-040 | OPEN | Audit `INJ-001` (eval) fires on any call whose name ends in `eval`, e.g. `retrieval(` |
 
 <!-- INDEX END -->
 
@@ -539,5 +541,25 @@ Review finding 16 (LOW). Source: `C:/dev/data/skill-connections/brainstorms/16f2
 - The hook's deny message truncates a long path from the end (`safeEcho`), so the file name is cut off. Truncate from the start instead.
 - The `NGINX_SERVER_BLOCK` check's cost grows with the file size.
 - A comment that mentions ContentSecurityPolicy suppresses `WEB-002`.
+
+### BUG-039: `DEP-002` can never fire: the walker never collects a bare `.env` file
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Found by the first fixture for DEP-002 (gate plan step 0, `tests/audit.test.js`, "Rules with no prior test").
+
+- `collectFiles()` in `security/03-audit.js` keeps a file only when `path.extname()` is in the rule extension list. `path.extname(".env")` is `""`, so a bare `.env` is never collected, and DEP-002's `checkFn` (`path.basename(f) === ".env"`) never sees one.
+- Same root cause: the `.env` entry in `SECRET_FILE_EXTS` matches only names like `prod.env`, so the secret rules never read `.env`, `.env.local` or `.env.production` either. Whether they should (a `.env` is where secrets belong) is a separate decision; DEP-002's presence check clearly should see the file.
+- The fixture is kept as a known-bug test (`knownBug("BUG-039", ...)`); it fails the suite once DEP-002 starts firing, so the fix must move it to `test()`.
+
+### BUG-040: Audit `INJ-001` (eval) fires on any call whose name ends in `eval`, e.g. `retrieval(`
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Found by the fixtures for the audit's INJ-001 (gate plan step 0).
+
+- The pattern is `/eval\s*\(/` with no word boundary, so `retrieval(query)` is reported CRITICAL as "Direct user input passed to eval()".
+- The description also overstates what is checked: any `eval(` fires, with or without user input. The likely fix is `\beval\s*\(` (and `new Function(`, which the rule does not cover), with the description matched to what it detects.
+- The fixture is kept as a known-bug test (`knownBug("BUG-040", ...)`).
 
 <!-- DETAILS END -->
