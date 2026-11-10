@@ -49,7 +49,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-035 | OPEN | "ask" stalls unattended workers in default and acceptEdits modes |
 | BUG-036 | IN-PROGRESS | Web guard MCP tool names (`mcp__firecrawl__crawl`, `mcp__exa__search`) are probably wrong |
 | BUG-037 | SMOKE-TESTING | `guardian update` hook migration overrides a custom wider matcher and duplicates the `$CLAUDE_PROJECT_DIR` form |
-| BUG-038 | OPEN | Small hook and audit defects: deny message loses the file name, NGINX check cost, CSP comment suppresses WEB-002 |
+| BUG-038 | IN-PROGRESS | Small hook and audit defects: deny message loses the file name, NGINX check cost, CSP comment suppresses WEB-002 |
 | BUG-039 | SMOKE-TESTING | `DEP-002` can never fire: the walker never collects a bare `.env` file |
 | BUG-040 | SMOKE-TESTING | Audit `INJ-001` (eval) fires on any call whose name ends in `eval`, e.g. `retrieval(` |
 | BUG-041 | RESOLVED | Partial scans: project checks judge the scanned subtree as the whole project (false `DEP-001`), and a single-file target scans nothing |
@@ -623,7 +623,7 @@ Review finding 14 (LOW). Source: `C:/dev/data/skill-connections/brainstorms/16f2
 
 ### BUG-038: Small hook and audit defects: deny message loses the file name, NGINX check cost, CSP comment suppresses WEB-002
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** IN-PROGRESS · **Found:** 2026-11-10
 
 Review finding 16 (LOW). Source: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`. Logged when 1.5.0 landed; not fixed in it.
 
