@@ -201,6 +201,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Invisible gaps, controls and every comment form no longer split a
+  pattern (BUG-071, re-probe 3 D7).** A zero-width character, a Hangul or
+  Braille filler or a C0 or C1 control used as the gap between two words
+  was deleted before matching, so the text read "ignoreall", and
+  `<!-->` or a comment with content between two words split a pattern.
+  Two scan views are added: one with each such character as a space, and
+  one with every HTML comment form removed. Comments stay in the base
+  view for `GUARD-INJ-027`, and controls count as padding in the change
+  window. The Python port has the same change, live.
+
 - **`find` reads as find does (BUG-065, re-probe 3 D6).** A filter after
   the action (`find . -delete -name '*.log'`) no longer counts as
   narrowing it, since find evaluates left to right and that command

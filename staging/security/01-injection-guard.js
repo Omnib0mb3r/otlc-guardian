@@ -245,13 +245,61 @@ function decodeHtmlEntities(text) {
 // or invisible characters renders as nothing between two words (BUG-071).
 const LINE_SEPARATORS    = /[\u0085\u2028\u2029]/g;
 const EMPTY_HTML_COMMENT = /<!--\s*-->/g;
+// C0 and C1 controls other than tab, newline, carriage return, vertical
+// tab and form feed, and the Braille blank: they render as nothing or as
+// a gap (re-probe 3, D7).
+const CONTROL_PATTERN    = /[\u0000-\u0008\u000E-\u001F\u007F-\u009F\u2800]/g;
 
-/** The text as the patterns read it: NFKC, separators as spaces, invisibles and empty comments removed. */
+/** The text as the patterns read it: NFKC, separators as spaces, invisibles, controls and empty comments removed. */
 function baseView(text) {
   return text.normalize("NFKC")
     .replace(LINE_SEPARATORS, " ")
     .replace(INVISIBLE_STRIP_PATTERN, "")
+    .replace(CONTROL_PATTERN, "")
     .replace(EMPTY_HTML_COMMENT, " ");
+}
+
+/**
+ * The text with every invisible character and control as a space. The
+ * base view deletes them, which joins "ig\u200bnore"; a reader also sees
+ * one used as the gap between two words ("ignore\u3164all"), which the
+ * base view would read as "ignoreall" (re-probe 3, D7).
+ */
+function spacedView(text) {
+  return text.normalize("NFKC")
+    .replace(LINE_SEPARATORS, " ")
+    .replace(INVISIBLE_STRIP_PATTERN, " ")
+    .replace(CONTROL_PATTERN, " ")
+    .replace(EMPTY_HTML_COMMENT, " ");
+}
+
+/**
+ * The text with every HTML comment form replaced by a space: "<!-->" and
+ * "<!--->" (which HTML reads as empty comments) and any "<!-- ... -->",
+ * so a comment between two words does not split a pattern (re-probe 3,
+ * D7). A comment's newlines are kept, so lines stay in place. Walked with
+ * indexOf, so the cost is linear (BUG-023); an opener with no closer ends
+ * the walk and the rest reads as text. The base view keeps comments for
+ * GUARD-INJ-027.
+ */
+function withoutHtmlComments(text) {
+  let out = "";
+  let pos = 0;
+  for (;;) {
+    const start = text.indexOf("<!--", pos);
+    if (start < 0) break;
+    let end;
+    if (text.startsWith(">", start + 4)) end = start + 5;
+    else if (text.startsWith("->", start + 4)) end = start + 6;
+    else {
+      const close = text.indexOf("-->", start + 4);
+      if (close < 0) break;
+      end = close + 3;
+    }
+    out += `${text.slice(pos, start)} ${text.slice(start, end).replace(/[^\n]/g, "")}`;
+    pos = end;
+  }
+  return out + text.slice(pos);
 }
 
 function scanViews(text) {
@@ -280,6 +328,8 @@ function scanViews(text) {
     base.replace(/[*_`~]+/g, ""),
     wholeBase64,
     decodedRuns.join("\n"),
+    spacedView(text),
+    withoutHtmlComments(base),
   ];
 }
 
@@ -604,7 +654,7 @@ function contextKinds(view, fence, partial) {
 }
 
 /** View indexes that keep the text's lines, quotes and fences in place (see scanViews()). */
-const POSITIONAL_VIEWS = new Set([0, 2, 3, 4]);
+const POSITIONAL_VIEWS = new Set([0, 2, 3, 4, 8, 9]);
 
 /**
  * The context is counted in characters that are not padding (BUG-046).
@@ -615,7 +665,7 @@ const POSITIONAL_VIEWS = new Set([0, 2, 3, 4]);
  * would push the old half out of the window. The text itself is never
  * changed, so every view still reads it as written.
  */
-const INVISIBLE_CLASS = INVISIBLE_STRIP_PATTERN.source.slice(1, -1);
+const INVISIBLE_CLASS = INVISIBLE_STRIP_PATTERN.source.slice(1, -1) + CONTROL_PATTERN.source.slice(1, -1);
 const CONTEXT_TOKEN = new RegExp(
   `((?:[\\s*_\`~]|[${INVISIBLE_CLASS}])+)` +              // 1: padding run
   `|(&#?[0-9A-Za-z]{1,8};|(?:%[0-9A-Fa-f]{2})+)` +        // 2: entity or %-run

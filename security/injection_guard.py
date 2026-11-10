@@ -143,6 +143,34 @@ INVISIBLE_STRIP_PATTERN = re.compile(
 # an HTML comment holding only whitespace renders as nothing (BUG-071).
 LINE_SEPARATORS = re.compile("[\u0085\u2028\u2029]")
 EMPTY_HTML_COMMENT = re.compile(r"<!--\s*-->")
+# C0 and C1 controls other than tab, newline, carriage return, vertical
+# tab and form feed, and the Braille blank: they render as nothing or as
+# a gap (re-probe 3, D7).
+CONTROL_PATTERN = re.compile("[\x00-\x08\x0e-\x1f\x7f-\x9f\u2800]")
+
+
+def _without_html_comments(text: str) -> str:
+    """Every HTML comment form ("<!-->", "<!--->", "<!-- ... -->") as a space,
+    its newlines kept. Walked with find(), so the cost is linear (BUG-023);
+    an opener with no closer ends the walk (re-probe 3, D7)."""
+    out = []
+    pos = 0
+    while True:
+        start = text.find("<!--", pos)
+        if start < 0:
+            break
+        if text.startswith(">", start + 4):
+            end = start + 5
+        elif text.startswith("->", start + 4):
+            end = start + 6
+        else:
+            close = text.find("-->", start + 4)
+            if close < 0:
+                break
+            end = close + 3
+        out.append(text[pos:start] + " " + "\n" * text.count("\n", start, end))
+        pos = end
+    return "".join(out) + text[pos:]
 
 
 TAG_CHAR_PATTERN = re.compile("[\U000E0020-\U000E007E]")
@@ -277,6 +305,7 @@ def _normalize_for_scan(text: str) -> str:
     base = unicodedata.normalize("NFKC", text)
     base = LINE_SEPARATORS.sub(" ", base)
     base = INVISIBLE_STRIP_PATTERN.sub("", base)
+    base = CONTROL_PATTERN.sub("", base)
     base = EMPTY_HTML_COMMENT.sub(" ", base)
     views = [base]
 
@@ -300,6 +329,15 @@ def _normalize_for_scan(text: str) -> str:
         if count >= MAX_BASE64_CANDIDATES:
             break
         add_view(_decode_base64_printable(run.group(0)))
+
+    # Re-probe 3, D7: invisibles and controls as a space (one used as the
+    # gap between two words), and the text without HTML comments.
+    spaced = unicodedata.normalize("NFKC", text)
+    spaced = LINE_SEPARATORS.sub(" ", spaced)
+    spaced = INVISIBLE_STRIP_PATTERN.sub(" ", spaced)
+    spaced = CONTROL_PATTERN.sub(" ", spaced)
+    add_view(EMPTY_HTML_COMMENT.sub(" ", spaced))
+    add_view(_without_html_comments(base))
 
     return "\n".join(views)
 
