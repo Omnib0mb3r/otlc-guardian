@@ -172,6 +172,13 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **A bad audit argument no longer passes (BUG-051).** A path that did not
+  exist scanned 0 files and exited 0, even with `--fail-on-error`, and an
+  unknown flag was ignored, so a CI typo turned the gate into a pass. An
+  unknown flag, a second path or a missing path is now a usage error (exit
+  2, message on stderr, nothing scanned). `--help` prints usage. `guardian
+  audit` passes the code through and treats a child killed by a signal as a
+  failure.
 - **`guardian check` fails on a broken or unregistered hook (BUG-062).** A
   failed hook smoke test was a warning and `check` still printed "correctly
   installed" and exited 0, and nothing read `.claude/settings.json`, so the

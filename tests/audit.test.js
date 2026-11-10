@@ -2139,6 +2139,78 @@ describe("Rules with no prior test: bad sample fires, good sample is silent", ()
 });
 
 // ---------------------------------------------------------------------------
+// BUG-051: a target that does not exist, or a mistyped flag, is an error
+// ---------------------------------------------------------------------------
+//
+// A path that did not exist scanned 0 files and exited 0 with "No issues
+// found", even with --fail-on-error, so a CI typo turned the gate into a
+// pass. An unknown flag was ignored the same way (--fail-on-eror ran a
+// non-failing audit). Both now exit 2, the usage-error code, with a
+// message on stderr and nothing on stdout.
+
+function runAuditArgs(...args) {
+  return spawnSync("node", [AUDIT_SCRIPT, ...args], { encoding: "utf8", shell: false });
+}
+
+function withTempProject(files, fn) {
+  const dir = makeProject(files);
+  try {
+    return fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe("BUG-051: bad audit arguments exit 2 instead of passing", () => {
+  test("a target that does not exist exits 2, even with --fail-on-error", () => {
+    withTempProject({}, (dir) => {
+      const r = runAuditArgs(path.join(dir, "does-not-exist"), "--fail-on-error");
+      assert.equal(r.status, 2, `exit ${r.status}: ${r.stdout.slice(0, 200)}`);
+      assert.ok(/does not exist/.test(r.stderr), r.stderr.slice(0, 200));
+      assert.ok(!/No issues found/.test(r.stdout + r.stderr));
+    });
+  });
+
+  test("a missing target in --json mode exits 2 and writes no JSON to stdout", () => {
+    withTempProject({}, (dir) => {
+      const r = runAuditArgs(path.join(dir, "nope"), "--json");
+      assert.equal(r.status, 2);
+      assert.equal(r.stdout.trim(), "");
+    });
+  });
+
+  test("a mistyped flag exits 2 and names the flag", () => {
+    withTempProject({ "src/a.js": "export const a = 1;\n" }, (dir) => {
+      const r = runAuditArgs(dir, "--fail-on-eror");
+      assert.equal(r.status, 2);
+      assert.ok(/--fail-on-eror/.test(r.stderr));
+    });
+  });
+
+  test("two targets exit 2 instead of silently scanning the first", () => {
+    withTempProject({ "src/a.js": "export const a = 1;\n" }, (dir) => {
+      const r = runAuditArgs(dir, path.join(dir, "src"));
+      assert.equal(r.status, 2);
+    });
+  });
+
+  test("--help prints usage and exits 0 without scanning", () => {
+    const r = runAuditArgs("--help");
+    assert.equal(r.status, 0);
+    assert.ok(/Usage/i.test(r.stdout));
+    assert.ok(!/SAFETY AUDIT STARTING/.test(r.stdout + r.stderr));
+  });
+
+  test("an existing target with known flags still runs", () => {
+    withTempProject({ "src/a.js": "export const a = 1;\n" }, (dir) => {
+      const r = runAuditArgs(dir, "--json", "--fail-on-error");
+      assert.equal(r.status, 0, r.stderr.slice(-300));
+      JSON.parse(r.stdout);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

@@ -85,20 +85,21 @@
 <h3 id="au-cli">Command line</h3>
 <pre><code>node security/03-audit.js [target] [--json] [--fail-on-error]
 guardian audit [target] [--json] [--fail-on-error]</code></pre>
-<p>The parser is four lines at the bottom of the file. It is not a real option parser, and that has consequences:</p>
+<p><code>parseArgs()</code> at the bottom of the file reads the arguments before anything runs. Since 2026-11-10 (BUG-051) a bad argument is a usage error with exit 2 and a message on stderr, and no audit runs; before that the parser took the first non-flag word and ignored everything else.</p>
 <div class="tbl"><table><thead><tr><th>Input</th><th>What the code does</th></tr></thead><tbody>
-<tr><td><code>target</code></td><td>The first argument that does not start with <code>--</code>. Default <code>.</code>, resolved against the current directory. A directory is walked; a file is scanned alone (since BUG-041).</td></tr>
+<tr><td><code>target</code></td><td>The one argument that does not start with <code>-</code>. Default <code>.</code>, resolved against the current directory. A directory is walked; a file is scanned alone (since BUG-041). A target that does not exist is a usage error.</td></tr>
 <tr><td><code>--json</code></td><td>Status lines go to stderr; stdout carries one JSON object. See <a href="#au-json">JSON output</a>.</td></tr>
 <tr><td><code>--fail-on-error</code></td><td>Exit 1 when at least one CRITICAL or HIGH finding exists. MEDIUM and LOW never change the exit code.</td></tr>
-<tr><td><code>--help</code>, any other <code>--</code> flag</td><td>Silently ignored. There is no help text in the engine: <code>node security/03-audit.js --help</code> runs a normal audit of the current directory. The help lives in <code>bin/guardian.js</code> (<code>guardian help</code>).</td></tr>
-<tr><td><code>-h</code> or any single-dash word</td><td>Taken as the target path. <code>-h</code> resolves to a directory that does not exist, which scans 0 files and reports a clean pass.</td></tr>
-<tr><td>A second path</td><td>Ignored. Only the first non-flag argument is used.</td></tr>
+<tr><td><code>--help</code>, <code>-h</code></td><td>Print the usage text (<code>USAGE</code>) on stdout and exit 0 without scanning.</td></tr>
+<tr><td>Any other flag</td><td>Usage error, exit 2, naming the flag. A mistyped <code>--fail-on-eror</code> used to run an audit that could not fail.</td></tr>
+<tr><td>A second path</td><td>Usage error, exit 2.</td></tr>
 </tbody></table></div>
 
 <h4>Exit codes</h4>
 <div class="tbl dense"><table><thead><tr><th>Code</th><th>When</th></tr></thead><tbody>
-<tr><td><code>0</code></td><td>The run finished and either <code>--fail-on-error</code> was not given, or it was given and no CRITICAL or HIGH finding exists. A target that does not exist also exits 0 (0 files scanned, "No issues found").</td></tr>
-<tr><td><code>1</code></td><td><code>--fail-on-error</code> and at least one CRITICAL or HIGH finding. Also any uncaught exception (Node's default), for example DEP-001's <code>checkFn</code>, which reads every file with <code>readFileSync</code> and no <code>try</code>, so a file that becomes unreadable mid-run crashes the audit.</td></tr>
+<tr><td><code>0</code></td><td>The run finished and either <code>--fail-on-error</code> was not given, or it was given and no CRITICAL or HIGH finding exists. Also <code>--help</code>.</td></tr>
+<tr><td><code>1</code></td><td><code>--fail-on-error</code> and at least one CRITICAL or HIGH finding. Also any uncaught exception (Node's default), for example DEP-001's <code>checkFn</code>, which reads every file with <code>readFileSync</code> and no <code>try</code>, so a file that becomes unreadable mid-run crashes the audit (BUG-055).</td></tr>
+<tr><td><code>2</code></td><td>Usage error: an unknown flag, more than one path, or a path that does not exist. Nothing is scanned and stdout stays empty, so a <code>--json</code> consumer gets no half report. <code>guardian audit</code> passes the code through, and treats a child killed by a signal as exit 1.</td></tr>
 </tbody></table></div>
 
 <h4>Which stream gets what</h4>
@@ -383,7 +384,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <h3 id="au-found">Found while writing this chapter</h3>
 <div class="limit"><b>Found while writing, logged 2026-11-10</b><p>Read from the code and, where marked, reproduced. Each defect is now in BUGS.md under the id given.</p>
 <ul>
-<li><b>Missing target passes (BUG-051).</b> A target that does not exist (a CI typo, or <code>-h</code>) scans 0 files and exits 0 with "No issues found", even with <code>--fail-on-error</code>. Reproduced.</li>
+<li><b>Missing target passed (BUG-051, fixed 2026-11-10: exit 2).</b> A target that does not exist (a CI typo, or <code>-h</code>) scans 0 files and exits 0 with "No issues found", even with <code>--fail-on-error</code>. Reproduced.</li>
 <li><b>Project under a test-named directory (BUG-052).</b> <code>TEST_FILE_EXCLUDES</code> is tested against the absolute path, so a project inside any directory named <code>test</code>, <code>tests</code> or <code>spec</code> silently loses the 17 test-excluded rules on every file. Reproduced: a <code>console.log</code> in <code>.../tests/app/src/x.js</code> gives 0 findings, the same file under <code>.../app/src/</code> gives ERR-003.</li>
 <li><b>Import runs an audit (BUG-053).</b> The CLI block at the bottom of <code>security/03-audit.js</code> runs <code>runAudit()</code> unconditionally, so <code>import "otlc-guardian/audit"</code> (a declared package export) audits the importer's argv target and prints a report. <code>bin/guardian.js</code> guards its own router with an <code>isMainModule</code> check; the engine does not.</li>
 <li><b>Audit secret rules lag the runtime guard (BUG-054).</b> The SEC comment says the rules are kept in lockstep with the runtime <code>SECRET_PATTERNS</code>. The 1.5.0 runtime fix (BUG-026) added OpenSSH, EC and encrypted keys, <code>github_pat_</code>, Slack and others to <code>security/01-injection-guard.js</code>; the audit's SEC-003 still matches only <code>ghp_</code> and SEC-004 only RSA and bare PEM headers.</li>

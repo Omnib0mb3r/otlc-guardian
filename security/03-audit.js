@@ -2047,11 +2047,46 @@ function runAudit(targetDir, options = {}) {
 // CLI ENTRY POINT
 // ---------------------------------------------------------------------------
 
-const args        = process.argv.slice(2);
-const targetDir   = args.find((a) => !a.startsWith("--")) ?? ".";
-const outputJson  = args.includes("--json");
-const failOnError = args.includes("--fail-on-error");
+// Exit codes: 0 clean (or findings without --fail-on-error), 1 a CRITICAL
+// or HIGH finding with --fail-on-error, 2 a usage error. A usage error
+// never runs an audit: a target that does not exist used to scan 0 files
+// and pass, and a mistyped flag used to be ignored, so a CI typo turned
+// the gate into a pass (BUG-051).
 
-runAudit(targetDir, { outputJson, failOnError });
+const USAGE = `Usage: node security/03-audit.js [path] [--json] [--fail-on-error]
+
+  path             directory or file to audit (default: the current directory)
+  --json           print the report as JSON on stdout; status goes to stderr
+  --fail-on-error  exit 1 when any CRITICAL or HIGH finding is reported
+  --help, -h       print this help
+
+Exit codes: 0 no blocking finding, 1 blocking finding with --fail-on-error,
+2 usage error (unknown flag, more than one path, path does not exist).
+`;
+
+const KNOWN_FLAGS = new Set(["--json", "--fail-on-error", "--help", "-h"]);
+
+/** @returns {{ help: true } | { error: string } | { targetDir: string, outputJson: boolean, failOnError: boolean }} */
+function parseArgs(argv) {
+  const flags   = argv.filter((a) => a.startsWith("-"));
+  const targets = argv.filter((a) => !a.startsWith("-"));
+  if (flags.includes("--help") || flags.includes("-h")) return { help: true };
+  const unknown = flags.filter((f) => !KNOWN_FLAGS.has(f));
+  if (unknown.length > 0) return { error: `unknown option ${unknown.join(", ")}` };
+  if (targets.length > 1) return { error: `one path at a time (got ${targets.length}: ${targets.join(", ")})` };
+  const targetDir = targets[0] ?? ".";
+  if (!fs.existsSync(targetDir)) return { error: `path does not exist: ${path.resolve(targetDir)}` };
+  return { targetDir, outputJson: flags.includes("--json"), failOnError: flags.includes("--fail-on-error") };
+}
+
+const parsed = parseArgs(process.argv.slice(2));
+if (parsed.help) {
+  process.stdout.write(USAGE);
+} else if (parsed.error) {
+  process.stderr.write(`[OTLC GUARDIAN] audit: ${parsed.error}\n\n${USAGE}`);
+  process.exitCode = 2;
+} else {
+  runAudit(parsed.targetDir, { outputJson: parsed.outputJson, failOnError: parsed.failOnError });
+}
 
 export { runAudit, AUDIT_RULES };

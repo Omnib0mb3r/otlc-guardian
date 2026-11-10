@@ -205,8 +205,10 @@ function runAudit() {
     process.exit(1);
   }
 
-  // exit code 1 from audit script = issues found with --fail-on-error
-  process.exit(result.status ?? 0);
+  // The audit's own code passes through: 1 = blocking finding with
+  // --fail-on-error, 2 = usage error. A null status means the child was
+  // killed by a signal before it finished, which is not a pass.
+  process.exit(result.status ?? 1);
 }
 
 // ---------------------------------------------------------------------------

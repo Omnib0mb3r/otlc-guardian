@@ -62,7 +62,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-048 | OPEN | PowerShell tool commands are not read for `git`, `bash -c`, `node -e` or `curl -o` writes, and `cmd /c` is read by neither shell reader |
 | BUG-049 | OPEN | Runtime `scan()` with an unknown `mode` runs no rules and returns clean (fails open on a typo) |
 | BUG-050 | OPEN | `guardInput` with `blockOnSecrets: false` still throws on a secret, with a "prompt injection" message (Node only; Python differs) |
-| BUG-051 | OPEN | Audit of a path that does not exist scans 0 files and exits 0, even with `--fail-on-error` |
+| BUG-051 | SMOKE-TESTING | Audit of a path that does not exist scans 0 files and exits 0, even with `--fail-on-error` |
 | BUG-052 | OPEN | Audit: a project inside a folder named `test`, `tests` or `spec` loses every rule that skips test files |
 | BUG-053 | OPEN | Importing `security/03-audit.js` (package export `./audit`) runs an audit of the cwd as a side effect |
 | BUG-054 | OPEN | Audit secret rules lag the runtime guard: SEC-003 matches only `ghp_`, SEC-004 misses OpenSSH, EC and encrypted keys |
@@ -709,9 +709,11 @@ Found by the manual writer; reproduced: `guardInput(textWithAnAnthropicKey, { bl
 
 ### BUG-051: Audit of a missing path passes
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 Found by the manual writer; reproduced: `node security/03-audit.js ./does-not-exist --fail-on-error` exits 0. The target is taken as given (`args.find((a) => !a.startsWith("--"))` in the CLI entry point), no file is collected, and a clean report results. A typo in a CI path, or `-h` taken as a path, turns the gate into a pass. Fix: a target that does not exist is an error (exit 2, message on stderr), tested in `tests/audit.test.js`. Related: there is no `--help`; unknown `--` flags are ignored.
+
+**Fix (2026-11-10).** `parseArgs()` in the CLI entry point of `security/03-audit.js` checks the arguments before anything runs: an unknown flag, more than one path or a path that does not exist exits 2 with the reason and the usage text on stderr and nothing on stdout; `--help` and `-h` print usage and exit 0. `guardian audit` in `bin/guardian.js` already passed the child's code through; it now treats a null status (child killed by a signal) as 1 instead of 0. Tests: `tests/audit.test.js`, "BUG-051" block (6 cases, 5 failed before the fix). Smoke test: a CI run with a mistyped path fails.
 
 ### BUG-052: Audit: projects under a test-named folder lose the test-skipping rules
 
