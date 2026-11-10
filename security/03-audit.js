@@ -28,6 +28,9 @@ import fs   from "fs";
 import path from "path";
 import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
+// AGT-002 judges instruction files with the runtime scanner itself, so
+// the audit and the hooks never disagree on what a pattern is.
+import { scan as scanForInjection } from "./01-injection-guard.js";
 
 // ---------------------------------------------------------------------------
 // TEST FILE RECOGNITION
@@ -724,6 +727,84 @@ function checkUnvalidatedBody(content) {
 }
 
 // ---------------------------------------------------------------------------
+// AI AGENT RULES (BUG-002, 1.5.0)
+// ---------------------------------------------------------------------------
+//
+// Files an AI agent loads as its instructions: CLAUDE.md in any folder,
+// Claude Code subagents and slash commands, skill SKILL.md files, and the
+// AGENTS.md and GEMINI.md other agents read. Tested against the path inside
+// the project (includedByRule()), any case, as a case-insensitive file
+// system loads "claude.md" too.
+const INSTRUCTION_FILES = [
+  /\/(?:CLAUDE|AGENTS|GEMINI)\.md$/i,
+  /\/\.claude\/(?:agents|commands)\/(?:.+\/)?[^/]+\.md$/i,
+  /\/SKILL\.md$/i,
+];
+
+const printable = (text) => String(text).replace(/[^\x20-\x7E]/g, "?");
+
+/**
+ * AGT-002: the CRITICAL injection findings scan() reports for one
+ * instruction file. Only CRITICAL ones, the ones the PreToolUse hook
+ * denies: a HIGH pattern ("you are now a", "act as a") is what a subagent
+ * definition is made of. Each finding is placed on the first line that
+ * carries it on its own, else on the line holding the matched text, else
+ * on line 1 (a pattern split across lines).
+ */
+function checkInstructionInjection(content) {
+  const critical = scanForInjection(content, "injection").violations.filter((v) => v.severity === "CRITICAL");
+  if (critical.length === 0) return [];
+  const lines = content.split("\n");
+  let lineIds = null;
+  const lineOf = (v) => {
+    lineIds ??= lines.map((line) => new Set(scanForInjection(line, "injection").violations.map((x) => x.id)));
+    const own = lineIds.findIndex((ids) => ids.has(v.id));
+    if (own !== -1) return own + 1;
+    const at = typeof v.matched === "string" ? content.indexOf(v.matched) : -1;
+    return at === -1 ? 1 : content.slice(0, at).split("\n").length;
+  };
+  return critical.map((v) => ({ line: lineOf(v), content: `${v.id}: "${printable(v.matched)}"`.slice(0, 120) }));
+}
+
+// otlcGuardian.ignorePaths in .claude/settings.json: the paths the
+// PreToolUse hook does not judge. AGT-002 honors them the same way
+// (honorsIgnorePaths), so a security doc a project keeps out of the hook
+// is not reported here either; every run lists the files skipped. An
+// entry is a path from the project root and covers that file or folder;
+// one that names the root or a folder above it covers nothing, as in the
+// hook. A settings file that cannot be read adds no entry.
+const CASE_INSENSITIVE_FS = process.platform === "win32" || process.platform === "darwin";
+const ignorePathsByRoot = new Map();
+
+function guardianIgnorePaths(projectRoot) {
+  if (ignorePathsByRoot.has(projectRoot)) return ignorePathsByRoot.get(projectRoot);
+  let entries = [];
+  try {
+    const settings = JSON.parse(fs.readFileSync(path.join(projectRoot, ".claude", "settings.json"), "utf8"));
+    const list = settings?.otlcGuardian?.ignorePaths;
+    if (Array.isArray(list)) entries = list.filter((p) => typeof p === "string" && p.trim() !== "");
+  } catch {
+    entries = []; // no settings, or unreadable: nothing is ignored
+  }
+  ignorePathsByRoot.set(projectRoot, entries);
+  return entries;
+}
+
+function ignoredByGuardian(file, projectRoot) {
+  const key = (p) => {
+    const resolved = path.resolve(p).replace(/\\/g, "/");
+    return CASE_INSENSITIVE_FS ? resolved.toLowerCase() : resolved;
+  };
+  const covers = (entry, p) => p === entry || p.startsWith(entry.endsWith("/") ? entry : `${entry}/`);
+  const target = key(file);
+  const root = key(projectRoot);
+  return guardianIgnorePaths(projectRoot).some((p) => {
+    const entry = key(path.resolve(projectRoot, p));
+    return !covers(entry, root) && covers(entry, target);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // AUDIT RULES
 // Each rule is one of three kinds:
 //   { id, category, severity, description, pattern, fileTypes }      regex
@@ -731,6 +812,10 @@ function checkUnvalidatedBody(content) {
 //       evidence: "project" when the check proves an absence across the
 //       project; it then sees the project root's files on a partial scan.
 //   { id, ..., fileCheckFn(content, filePath) -> [{line, content}] } per-file
+// A rule with includePatterns reads only the files whose path inside the
+// project matches one (fileTypes is then unused). Those files are
+// collected by path, not by extension, and are never evidence for a
+// project check.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -1823,6 +1908,20 @@ const AUDIT_RULES = [
     pattern: /data:[a-z0-9\/+.-]+;base64,[A-Za-z0-9+\/=]{4000,}/i,
     fileTypes: JS_TS_EXTS,
   },
+
+  // --- AI AGENTS (BUG-002, 1.5.0) ---
+  //
+  // The runtime guard and the hooks defend what an agent reads at run
+  // time; these rules read what a project commits for its agents.
+  {
+    id: "AGT-002", category: "AI Agent", severity: "CRITICAL",
+    description: "Instruction file an AI agent loads (CLAUDE.md, AGENTS.md, a subagent, a skill) carries a CRITICAL prompt-injection pattern",
+    pattern: null,
+    fileTypes: [],
+    includePatterns: INSTRUCTION_FILES,
+    honorsIgnorePaths: true,
+    fileCheckFn: checkInstructionInjection,
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -1895,12 +1994,17 @@ function keptOutOfGit(file) {
   return run("check-ignore", "-q").status === 0;                     // 0 = ignored
 }
 
-function collectFiles(rootDir, extensions) {
+/**
+ * Every file under rootDir with one of the extensions (all files for an
+ * empty list), a bare .env, and any file `byPath(fullPath)` accepts.
+ */
+function collectFiles(rootDir, extensions, byPath = () => false) {
   const results = [];
   const wanted = (name) =>
     extensions.length === 0 ||
     extensions.includes(path.extname(name).toLowerCase()) ||
-    DOTENV_FILE.test(path.basename(name));
+    DOTENV_FILE.test(path.basename(name)) ||
+    byPath(name);
 
   // A single file as the target (a commit hook auditing changed files).
   // readdirSync on a file throws, which used to leave the list empty.
@@ -1919,7 +2023,7 @@ function collectFiles(rootDir, extensions) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         walk(fullPath);
-      } else if (entry.isFile() && wanted(entry.name)) {
+      } else if (entry.isFile() && wanted(fullPath)) {
         results.push(fullPath);
       }
     }
@@ -2108,6 +2212,19 @@ function excludedByRule(rule, file, projectRoot) {
   return rule.excludePatterns.some((ep) => ep.test(inProject));
 }
 
+/** True when a rule with includePatterns names the file, by its path inside the project. */
+function includedByRule(rule, file, projectRoot) {
+  if (!rule.includePatterns) return false;
+  const inProject = "/" + path.relative(projectRoot, file).replace(/\\/g, "/");
+  return rule.includePatterns.some((ip) => ip.test(inProject));
+}
+
+/** Whether a pattern or analyzer rule reads the file: by path for includePatterns, else by extension. */
+function appliesTo(rule, file, projectRoot) {
+  if (rule.includePatterns) return includedByRule(rule, file, projectRoot);
+  return rule.fileTypes.length === 0 || rule.fileTypes.includes(path.extname(file).toLowerCase());
+}
+
 function scanFile(filePath, rule, scanContext) {
   if (!rule.pattern) return [];
 
@@ -2286,7 +2403,14 @@ function runAudit(targetDir, options = {}) {
   // target, NOT the upward-walked project root - the user said "audit
   // ./src" and they meant "audit ./src", not "audit my whole repo".
   const allExtensions = [...new Set(AUDIT_RULES.flatMap((r) => r.fileTypes))];
-  const files         = collectFiles(scanRoot, allExtensions);
+  const pathRules     = AUDIT_RULES.filter((r) => r.includePatterns);
+  const files         = collectFiles(scanRoot, allExtensions, (f) => pathRules.some((r) => includedByRule(r, f, projectRoot)));
+  // A file collected only because a rule names its path (an instruction
+  // file) is read by that rule alone. As evidence for a project check it
+  // would mislead: Guardian's own CLAUDE.md asks for a /health endpoint,
+  // which DEP-001 would read as the app having one.
+  const collectedByPath = (f) =>
+    !allExtensions.includes(path.extname(f).toLowerCase()) && !DOTENV_FILE.test(path.basename(f));
 
   // Precompute which files are exempt and via which mechanism. We do
   // this once here instead of inside scanFile so the same file isn't
@@ -2304,6 +2428,7 @@ function runAudit(targetDir, options = {}) {
   const exemptByList    = [];
   const ruleExemptions  = new Map(); // file -> Set of rule ids (per-rule entries)
   const exemptByRule    = [];
+  const exemptByIgnorePaths = []; // honorsIgnorePaths rules skipped by otlcGuardian.ignorePaths
 
   for (const file of files) {
     let head;
@@ -2320,8 +2445,15 @@ function runAudit(targetDir, options = {}) {
       // A per-rule entry: only the named rules skip this file.
       const entry = allowlist.get(path.relative(projectRoot, file).replace(/\\/g, "/"));
       if (entry?.rules) {
-        ruleExemptions.set(file, entry.rules);
+        ruleExemptions.set(file, new Set(entry.rules));
         exemptByRule.push({ file: path.relative(scanRoot, file).replace(/\\/g, "/"), rules: [...entry.rules] });
+      }
+      // otlcGuardian.ignorePaths, for the rules that honor it.
+      const ignoring = AUDIT_RULES.filter((r) => r.honorsIgnorePaths && appliesTo(r, file, projectRoot)).map((r) => r.id);
+      if (ignoring.length > 0 && ignoredByGuardian(file, projectRoot)) {
+        if (!ruleExemptions.has(file)) ruleExemptions.set(file, new Set());
+        for (const id of ignoring) ruleExemptions.get(file).add(id);
+        exemptByIgnorePaths.push({ file: path.relative(scanRoot, file).replace(/\\/g, "/"), rules: ignoring });
       }
     }
   }
@@ -2345,6 +2477,9 @@ function runAudit(targetDir, options = {}) {
   for (const { file, rules } of exemptByRule) {
     status(`    [allowlist rule] ${file} [${rules.join(", ")}]`);
   }
+  for (const { file, rules } of exemptByIgnorePaths) {
+    status(`    [ignorePaths] ${file} [${rules.join(", ")}]`);
+  }
   status("");
 
   const allFindings = [];
@@ -2353,9 +2488,7 @@ function runAudit(targetDir, options = {}) {
   for (const rule of AUDIT_RULES) {
     if (!rule.pattern) continue;
 
-    const relevantFiles = files.filter((f) =>
-      rule.fileTypes.length === 0 || rule.fileTypes.includes(path.extname(f).toLowerCase())
-    );
+    const relevantFiles = files.filter((f) => appliesTo(rule, f, projectRoot));
 
     for (const file of relevantFiles) {
       const findings = scanFile(file, rule, scanContext);
@@ -2381,9 +2514,7 @@ function runAudit(targetDir, options = {}) {
   for (const rule of AUDIT_RULES) {
     if (!rule.fileCheckFn) continue;
 
-    const relevantFiles = files.filter((f) =>
-      rule.fileTypes.length === 0 || rule.fileTypes.includes(path.extname(f).toLowerCase())
-    );
+    const relevantFiles = files.filter((f) => appliesTo(rule, f, projectRoot));
 
     for (const file of relevantFiles) {
       if (exemptPaths.has(file)) continue;
@@ -2442,10 +2573,10 @@ function runAudit(targetDir, options = {}) {
     if (!rule.checkFn) continue;
     const wholeProject = rule.evidence === "project";
     const evidence = !wholeProject
-      ? files.filter((f) => !exemptPaths.has(f) && !ruleExemptions.get(f)?.has(rule.id))
+      ? files.filter((f) => !collectedByPath(f) && !exemptPaths.has(f) && !ruleExemptions.get(f)?.has(rule.id))
       : projectRoot !== scanRoot
         ? (projectFiles ??= collectFiles(projectRoot, allExtensions))
-        : files;
+        : files.filter((f) => !collectedByPath(f));
     if (rule.checkFn(evidence, projectRoot)) {
       allFindings.push({ file: wholeProject ? projectRoot : targetDir, line: null, content: null, rule });
     }

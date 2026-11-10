@@ -246,9 +246,9 @@ after pulling a new release; until you do, that project keeps its old scanner an
 guardian update
 ```
 
-**`guardian audit`** - Scan your project for security and quality problems. 45 rules
-in 1.5.x: 37 regex patterns, 5 per-file analyzers, 3 project-level checks. The audit
-prints the live breakdown on every run (`Rules : 37 pattern · 5 analyzer · 3 project`), so
+**`guardian audit`** - Scan your project for security and quality problems. 46 rules
+in 1.5.x: 37 regex patterns, 6 per-file analyzers, 3 project-level checks. The audit
+prints the live breakdown on every run (`Rules : 37 pattern · 6 analyzer · 3 project`), so
 that line is always the authoritative count.
 Run regularly.
 ```bash
@@ -315,7 +315,7 @@ Claude Code.
 
 **Audit CLI - scan any codebase:**
 - `guardian audit` scans for hardcoded secrets, silent errors, raw SQL, console.log in
-  prod paths, missing `/health`, and more (45 rules in 1.5.x - every finding should be
+  prod paths, missing `/health`, and more (46 rules in 1.5.x - every finding should be
   reviewed; the tool is advisory)
 - Finds the two bugs AI coding tools generate most, which no regex can express:
   endpoints that perform side effects with no authentication (`AUTHZ-001`) and

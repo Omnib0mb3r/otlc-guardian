@@ -150,6 +150,15 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Added
 
+- **Audit rule AGT-002: an instruction file carries a prompt-injection
+  pattern (BUG-002).** The audit read no file an AI agent loads as its
+  instructions. AGT-002 runs the runtime scanner's `scan()` over
+  `CLAUDE.md`, `AGENTS.md` and `GEMINI.md` in any folder, `.claude/agents/`,
+  `.claude/commands/` and every `SKILL.md`, and reports each CRITICAL
+  finding (CRITICAL) with its line. It honors the allowlist, the marker and
+  `otlcGuardian.ignorePaths` (listed on every run). A rule can now name its
+  files by path (`includePatterns`); such files are never evidence for a
+  project check. 46 rules: 37 pattern, 6 analyzer, 3 project.
 - **staging/ for the protected files (Guardian's own repo).** The candidate
   next versions of the two hooks and the scanner live in `staging/hooks/`
   and `staging/security/`, outside every path the live hook watches or
