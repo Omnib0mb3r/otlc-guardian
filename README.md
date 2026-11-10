@@ -342,8 +342,9 @@ lifecycle, which no other agent exposes today. They're installed automatically b
 `guardian init` and do nothing if you're not running inside Claude Code.
 
 **Two hooks. The first one can block; the second one warns:**
-- **PreToolUse** denies a write whose new content has a CRITICAL injection pattern,
-  asks for confirmation on a Bash command that carries one and names a watched file,
+- **PreToolUse** denies a write that adds a CRITICAL injection pattern to a watched
+  file, asks for confirmation on a Bash command that carries one and writes to a
+  watched file (a command that only reads or names it gets an advisory),
   asks before `.claude/settings.json` is changed in a way that weakens Guardian, and
   warns on HIGH/MEDIUM findings. It scans Write, Edit, MultiEdit, NotebookEdit and
   Bash on a wide default watch list — `.planning/`,

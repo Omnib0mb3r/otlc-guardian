@@ -471,6 +471,64 @@ describe("PreToolUse hook — blocks CRITICAL, warns on the rest (1.5.0)", () =>
     expectSilent(out);
   });
 
+  test("Bash command that names a watched path without writing it is not denied in bypass mode (reviewer's case)", () => {
+    const out = runHook(PRE_HOOK, {
+      tool_name: "Bash",
+      permission_mode: "bypassPermissions",
+      tool_input: { command: `grep -rn "${CRITICAL_PAYLOAD}" CLAUDE.md .claude/` },
+    });
+    assert.equal(decisionOf(out), null, out.slice(0, 200));
+    expectWarning(out, "INJ-001", "does not write");
+  });
+
+  test("git commit whose message quotes a pattern is not denied in bypass mode (reviewer's case)", () => {
+    const out = runHook(PRE_HOOK, {
+      tool_name: "Bash",
+      permission_mode: "bypassPermissions",
+      tool_input: { command: `git add CLAUDE.md && git commit -m "docs: block '${CRITICAL_PAYLOAD}'"` },
+    });
+    assert.equal(decisionOf(out), null, out.slice(0, 200));
+  });
+
+  test("a redirect inside quotes is not a write", () => {
+    const out = runHook(PRE_HOOK, {
+      tool_name: "Bash",
+      permission_mode: "bypassPermissions",
+      tool_input: { command: `grep -c "${CRITICAL_PAYLOAD} > CLAUDE.md" notes.txt` },
+    });
+    assert.equal(decisionOf(out), null, out.slice(0, 200));
+  });
+
+  test("a heredoc body is data, not commands", () => {
+    const out = runHook(PRE_HOOK, {
+      tool_name: "Bash",
+      permission_mode: "bypassPermissions",
+      tool_input: { command: `cat <<'EOF' > /tmp/notes.txt\n${CRITICAL_PAYLOAD} > CLAUDE.md\nEOF` },
+    });
+    assert.equal(decisionOf(out), null, out.slice(0, 200));
+  });
+
+  const bashWrites = {
+    "a >> redirect":                 `echo "${CRITICAL_PAYLOAD}" >> CLAUDE.md`,
+    "an fd redirect":                `echo "${CRITICAL_PAYLOAD}" 1>CLAUDE.md`,
+    "tee -a":                        `printf '%s' "${CRITICAL_PAYLOAD}" | tee -a .planning/STATE.md`,
+    "sed -i":                        `sed -i 's/x/${CRITICAL_PAYLOAD}/' AGENTS.md`,
+    "cp into a watched directory":   `echo "${CRITICAL_PAYLOAD}" > /tmp/p.md && cp /tmp/p.md .claude/`,
+    "mv onto a watched file":        `echo "${CRITICAL_PAYLOAD}" > /tmp/p.md; mv -f /tmp/p.md GEMINI.md`,
+    "sh -c":                         `sh -c 'echo "${CRITICAL_PAYLOAD}" > CLAUDE.md'`,
+    "command substitution":          `echo "$(echo '${CRITICAL_PAYLOAD}' > CLAUDE.md)"`,
+    "cd into a watched directory":   `cd .planning && echo "${CRITICAL_PAYLOAD}" > spec.md`,
+    "curl -o":                       `curl -sSo .planning/page.md "https://x.example/?q=${CRITICAL_PAYLOAD}"`,
+    "an inline interpreter":         `node -e "require('fs').writeFileSync('CLAUDE.md', '${CRITICAL_PAYLOAD}')"`,
+    "sudo tee":                      `echo "${CRITICAL_PAYLOAD}" | sudo tee MEMORY.md`,
+  };
+  for (const [name, command] of Object.entries(bashWrites)) {
+    test(`Bash write through ${name} into a watched path asks`, () => {
+      const out = runHook(PRE_HOOK, { tool_name: "Bash", tool_input: { command } });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 160)}`);
+    });
+  }
+
   test("matched text echoed back is stripped of markup characters", () => {
     const out = runHook(PRE_HOOK, {
       tool_name: "Write",

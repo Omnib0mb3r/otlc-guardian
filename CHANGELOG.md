@@ -14,8 +14,19 @@ project (each project picks it up when `guardian update` is run there).
 
 - **The PreToolUse hook can now block (BUG-022).** It was advisory only.
   A CRITICAL injection pattern that a write adds to a watched path is
-  denied. A Bash command that carries one and names a watched path asks for
-  confirmation. HIGH and MEDIUM findings stay advisory.
+  denied. A Bash command that carries one and writes to a watched path asks
+  for confirmation. HIGH and MEDIUM findings stay advisory.
+- **Bash is judged by what it writes (review finding 2).** The first deny
+  build asked (and in bypass mode denied) any Bash command that carried a
+  pattern and named a watched path, so `grep -rn "<pattern>" CLAUDE.md`
+  and `git commit -m` were blocked. The hook now reads the paths a command
+  writes: redirections, `tee`, `sed -i`/`perl -i`, `cp`/`mv`/`install`/`ln`
+  destinations, `dd of=`, `curl -o`/`wget -O`, deletes, and the same
+  inside `sh -c`, `eval`, `$( )`, backticks and `find -exec`, following
+  `cd`. Quoted text and heredoc bodies are data. Inline interpreter code
+  (`node -e`, `python -c`) cannot be parsed, so every path-like word in it
+  counts as written. A command that only names a watched path gets an
+  advisory.
 - **A write is judged by what it adds (review finding 1).** The first deny
   build scanned the whole new content, so a rewrite of any file that
   already quoted a pattern was denied, including every CLAUDE.md that
