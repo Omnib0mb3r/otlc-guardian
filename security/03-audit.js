@@ -1038,9 +1038,71 @@ function readForCheck(file, ruleId, root) {
 // ---------------------------------------------------------------------------
 
 const NGINX_FILE_HINT   = /(?:nginx|sites-(?:available|enabled)|conf\.d)[^\n]*$|\.conf(?:\.template)?$/i;
-const NGINX_SERVER_BLOCK = /\bserver\s*\{[\s\S]*?\b(?:listen|server_name)\b/;
+const NGINX_SERVER_OPEN = /\bserver\s*\{/;
+const NGINX_SERVER_DIRECTIVE = /\b(?:listen|server_name)\b/;
 const CSP_ANYWHERE = /content-security-policy|\bhelmet\s*\(|\bTalisman\s*\(|flask_talisman|\bCSP_DEFAULT_SRC\b|django[-_]csp|\bcsp\.middleware\b|ContentSecurityPolicy/i;
 const CONFIG_SCAN_SIZE_CAP = 512 * 1024;
+
+// Comment syntax by file kind, so a note that names a policy ("# TODO:
+// add_header Content-Security-Policy") is not read as setting one (BUG-038).
+const HASH_COMMENT_EXTS = new Set([".py", ".yml", ".yaml", ".sh", ".toml", ".conf", ".env"]);
+const C_COMMENT_EXTS    = new Set([...JS_TS_EXTS, ".css", ".scss"]);
+const MARKUP_EXTS       = new Set([".html", ".htm", ".vue", ".svelte"]);
+
+/**
+ * An nginx server block: a `server {` opener with a `listen` or
+ * `server_name` after it. Two linear searches; the single lazy regex
+ * this replaces retried from every opener and went quadratic on a file
+ * of unmatched openers (BUG-038).
+ */
+function hasNginxServerBlock(text) {
+  const open = NGINX_SERVER_OPEN.exec(text);
+  return open !== null && NGINX_SERVER_DIRECTIVE.test(text.slice(open.index + open[0].length));
+}
+
+/** Drop `//` and `/* *\/` comments, leaving string and template literals whole. */
+function stripCComments(text) {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (ch === "/" && next === "/") {
+      const nl = text.indexOf("\n", i);
+      i = nl === -1 ? text.length : nl;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      const close = text.indexOf("*/", i + 2);
+      i = close === -1 ? text.length : close + 2;
+      out += " ";
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      let j = i + 1;
+      while (j < text.length && text[j] !== ch && !(ch !== "`" && text[j] === "\n")) {
+        j += text[j] === "\\" ? 2 : 1;
+      }
+      out += text.slice(i, j + 1);
+      i = j + 1;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+const stripMarkupComments = (text) => text.replace(/<!--[\s\S]*?(?:-->|$)/g, " ");
+
+/** The text of `file` with its comments removed, by file kind. */
+function withoutComments(file, text) {
+  const ext = path.extname(file).toLowerCase();
+  if (C_COMMENT_EXTS.has(ext)) return stripCComments(text);
+  if (MARKUP_EXTS.has(ext)) return stripMarkupComments(text);
+  if (HASH_COMMENT_EXTS.has(ext) || NGINX_FILE_HINT.test(file.replace(/\\/g, "/"))) return stripPyComments(text);
+  return text;
+}
 
 function readSmallText(file) {
   try {
@@ -1057,16 +1119,18 @@ function readSmallText(file) {
  * True when the project ships an nginx server block and nothing in the
  * project sets a Content-Security-Policy (not nginx, not app middleware,
  * not a meta tag). nginx config files usually have no code extension, so
- * they are collected here and not through the rule's fileTypes.
+ * they are collected here and not through the rule's fileTypes. Both
+ * sides are read with comments removed: a commented-out server block
+ * serves nothing and a comment naming the policy sets nothing (BUG-038).
  */
 function nginxWithoutCsp(files, projectRoot) {
   const nginxConfigs = collectFiles(projectRoot, [])
     .filter((f) => NGINX_FILE_HINT.test(f.replace(/\\/g, "/")))
-    .map(readSmallText)
-    .filter((text) => NGINX_SERVER_BLOCK.test(text));
+    .map((f) => stripPyComments(readSmallText(f)))
+    .filter(hasNginxServerBlock);
   if (nginxConfigs.length === 0) return false;
   if (nginxConfigs.some((text) => CSP_ANYWHERE.test(text))) return false;
-  return !files.some((f) => CSP_ANYWHERE.test(readSmallText(f)));
+  return !files.some((f) => CSP_ANYWHERE.test(withoutComments(f, readSmallText(f))));
 }
 
 // ---------------------------------------------------------------------------

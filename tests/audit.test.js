@@ -2030,6 +2030,36 @@ describe("WEB-002 - nginx server block with no CSP (1.5.0)", () => {
   test("silent on a .conf file that is not an nginx server block", () => {
     assert.ok(!auditFires({ "tool.conf": `[section]\nkey = value\n`, "app/main.py": `x = 1\n` }, "WEB-002"));
   });
+
+  // BUG-038: a comment that names the policy sets nothing.
+  for (const [name, files] of [
+    ["an nginx comment", { "deploy/nginx.conf": nginx("    # TODO: add_header Content-Security-Policy"), "app/main.py": "x = 1\n" }],
+    ["a Python comment", { "deploy/nginx.conf": nginx(), "app/main.py": "app = FastAPI()  # wire up Talisman() later\n" }],
+    ["a JS line comment", { "deploy/nginx.conf": nginx(), "src/server.js": "// helmet() goes here, with a Content-Security-Policy\napp.listen(3000);\n" }],
+    ["a JS block comment", { "deploy/nginx.conf": nginx(), "src/server.ts": "/* ContentSecurityPolicy: see ticket 12 */\nexport const port = 3000;\n" }],
+    ["an HTML comment", { "deploy/nginx.conf": nginx(), "public/index.html": "<!-- meta http-equiv=\"Content-Security-Policy\" to come -->\n<p>hi</p>\n" }],
+  ]) {
+    test(`a CSP named only in ${name} does not count (BUG-038)`, () => {
+      assert.ok(auditFires(files, "WEB-002"));
+    });
+  }
+
+  for (const [name, files] of [
+    ["a header set next to a URL", { "deploy/nginx.conf": nginx(), "src/server.js": `res.setHeader("Content-Security-Policy", "default-src https://cdn.example");\n` }],
+    ["helmet() after a string holding //", { "deploy/nginx.conf": nginx(), "src/server.js": `const api = "https://api.example"; app.use(helmet());\n` }],
+    ["a meta tag", { "deploy/nginx.conf": nginx(), "public/index.html": `<meta http-equiv="Content-Security-Policy" content="default-src 'self'">\n` }],
+    ["a quoted # in nginx", { "deploy/nginx.conf": nginx(`    add_header X-Note "see #1"; add_header Content-Security-Policy "default-src 'self'";`), "app/main.py": "x = 1\n" }],
+  ]) {
+    test(`a real CSP still counts: ${name}`, () => {
+      assert.ok(!auditFires(files, "WEB-002"));
+    });
+  }
+
+  test("the server-block check is linear: 450 KB of unmatched 'server {' openers (BUG-038)", () => {
+    const start = Date.now();
+    auditFires({ "deploy/nginx.conf": "server {\n".repeat(50_000), "app/main.py": "x = 1\n" }, "WEB-002");
+    assert.ok(Date.now() - start < 1_000, `took ${Date.now() - start} ms`);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2070,7 +2100,9 @@ describe("BUG-041 - project checks on a partial scan see the whole project", () 
     const files = {
       "requirements.txt":   "fastapi==0.115.0\n",
       "deploy/nginx.conf":  "server {\n  listen 80;\n  server_name app.example.com;\n}\n",
-      "app/security.py":    "app.add_middleware(CSPMiddleware)  # sets Content-Security-Policy\n",
+      // Set in code: pre-BUG-038 this fixture passed only through a
+      // comment naming the header.
+      "app/security.py":    "response.headers[\"Content-Security-Policy\"] = \"default-src 'self'\"\n",
       "app/routes/items.py": "def list_items():\n    return []\n",
     };
     assert.ok(!hasFinding(auditAt(files, "app/routes"), "WEB-002"));

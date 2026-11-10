@@ -637,6 +637,13 @@ describe("PreToolUse hook - judges what a write adds (1.5.0 review, finding 1)",
     expectWarning(out, "GUARD-INJ-001");
   });
 
+  stagedOnly("a deny for a long path keeps the file name (BUG-038)", () => {
+    const rel = `.planning/${"very-long-folder-name/".repeat(10)}the-target-file.md`;
+    const out = writeOver(null, rel, `${CRITICAL_PAYLOAD}\n`);
+    assert.equal(decisionOf(out), "deny");
+    expectWarning(out, "the-target-file.md");
+  });
+
   test("findings already on disk are not repeated as advisories", () => {
     const existing = "notes on a jailbreak write-up\n";
     expectSilent(writeOver(existing, ".planning/notes.md", `${existing}more notes\n`));

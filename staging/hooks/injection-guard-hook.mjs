@@ -1724,6 +1724,12 @@ function safeEcho(value, max = 40) {
     .slice(0, max);
 }
 
+// A path keeps its tail: the file name is the part a reader needs (BUG-038).
+function safeEchoPath(value, max = 120) {
+  const clean = safeEcho(value, Infinity);
+  return clean.length <= max ? clean : `...${clean.slice(clean.length - (max - 3))}`;
+}
+
 function emit(hookSpecificOutput) {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...hookSpecificOutput } }));
   process.exit(0);
@@ -1785,7 +1791,7 @@ process.stdin.on("end", () => {
         emit({
           permissionDecision: confirmOrDeny,
           permissionDecisionReason:
-            `${TAG} This change weakens Guardian in ${safeEcho(write.targets[0], 120)}: ` +
+            `${TAG} This change weakens Guardian in ${safeEchoPath(write.targets[0], 120)}: ` +
             `${reasons.join("; ")}. Approve only if you asked for it.${bypassNote}`,
         });
       }
@@ -1804,7 +1810,7 @@ process.stdin.on("end", () => {
       emit({
         permissionDecision: confirmOrDeny,
         permissionDecisionReason:
-          `${TAG} This command writes, moves or removes ${safeEcho(target, 120)}, which holds Guardian's settings, ` +
+          `${TAG} This command writes, moves or removes ${safeEchoPath(target, 120)}, which holds Guardian's settings, ` +
           `and may weaken Guardian: Guardian cannot see the result, so it cannot tell whether hooks are removed ` +
           `or disableAllHooks is set. Use Edit for settings changes, or approve only if you asked for it.${bypassNote}`,
       });
@@ -1833,12 +1839,12 @@ process.stdin.on("end", () => {
       const file = guardFileHit(target);
       if (!file) continue;
       const how = write.kind === "file"
-        ? `This ${toolName} changes ${safeEcho(target, 120)}`
-        : `This command writes, moves or removes ${safeEcho(target, 120)}`;
+        ? `This ${toolName} changes ${safeEchoPath(target, 120)}`
+        : `This command writes, moves or removes ${safeEchoPath(target, 120)}`;
       emit({
         permissionDecision: confirmOrDeny,
         permissionDecisionReason:
-          `${TAG} ${how}, which holds ${safeEcho(path.basename(file), 60)}, part of Guardian's own enforcement. ` +
+          `${TAG} ${how}, which holds ${safeEchoPath(path.basename(file), 60)}, part of Guardian's own enforcement. ` +
           `A change there can switch Guardian off, and Guardian cannot judge code, so a person confirms it. ` +
           `Approve only if you asked for it.${bypassNote}`,
       });
@@ -1874,12 +1880,12 @@ process.stdin.on("end", () => {
       const found = scanChange(before, after.replace(/\r\n/g, "\n"), "injection").violations;
       if (!found.some((v) => v.severity === "CRITICAL")) continue;
       const details = found.map((v) => `${v.severity} ${v.id} matched "${safeEcho(v.matched)}"`).join(" | ");
-      process.stderr.write(`${TAG} blocked ${toolName} copying into ${safeEcho(target, 160)}: ${details}\n`);
+      process.stderr.write(`${TAG} blocked ${toolName} copying into ${safeEchoPath(target, 160)}: ${details}\n`);
       emit({
         permissionDecision: "deny",
         permissionDecisionReason:
           `⚠️  ${TAG} PROMPT INJECTION BLOCKED (content copied by a shell command)\n` +
-          `    Target   : ${safeEcho(target, 160)}\n` +
+          `    Target   : ${safeEchoPath(target, 160)}\n` +
           `    Sources  : ${safeEcho([...sources].map((s) => path.basename(s)).join(", "), 160)}\n` +
           `    Details  : ${details}\n` +
           `    Action   : Denied, as a Write of the same content would be. Do not retry through another\n` +
@@ -1923,7 +1929,7 @@ process.stdin.on("end", () => {
     const detailLines   = violations
       .map((v) => `${v.severity} ${v.id} matched "${safeEcho(v.matched)}"`)
       .join(" | ");
-    const where = safeEcho(watched[0], 160);
+    const where = safeEchoPath(watched[0], 160);
 
     const summary =
       `    Target   : ${where}\n` +

@@ -201,6 +201,11 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A deny message keeps the file name of a long path (BUG-038, hook
+  half).** Paths echoed in the hook's messages were cut from the end, so
+  a long path lost its file name. They now keep the tail, after `...`
+  (`safeEchoPath()`); matched text still keeps its head.
+
 - **Cleanup and read-only inline code are judged by their effect
   (BUG-044).** A `sed` script made only of deletes (`/re/d`, `N`, `$`,
   ranges, `!d`; with `-i` or redirected) and `grep` (`-v -i -E -F -x -w
@@ -327,6 +332,18 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
   of silently switching the scanner off.
 
 ### Fixed
+
+- **WEB-002 reads code, not comments, and costs linear time (BUG-038,
+  audit half).** A comment that named the policy (`# TODO: add_header
+  Content-Security-Policy`, `// helmet() goes here`, an HTML comment)
+  counted as setting one and silenced WEB-002. Evidence files are now read
+  with their comments removed by file kind: `#` (quote-aware) for nginx
+  config, Python, YAML, shell, TOML and `.env`; `//` and `/* */`
+  (string-aware) for JS/TS and CSS; `<!-- -->` for HTML, Vue and Svelte.
+  A commented-out nginx server block no longer counts as one. The
+  server-block test was a lazy regex retried from every `server {`
+  opener, quadratic on a large file of openers (2.5 s on 450 KB); it is
+  now two linear searches with the same meaning.
 
 - **`update` keeps a wider matcher the user chose (BUG-037).** The
   1.5.0 migration took Guardian's hook out of every block whose matcher
