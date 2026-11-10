@@ -60,6 +60,7 @@ Specifically:
   - `security/package.json`, which keeps the scanner loadable in a CommonJS project, is not in the protected set, so a write that changes its `type` switches the scanner off (BUG-063; fix staged in `staging/`, not yet live).
 
   Detection is also pattern-based, so a reworded instruction with no known pattern passes. An agent that is already compromised can use any of these routes. They belong to the planned hard-no hook, which DevNeural hosts and which judges a command by its effect instead of its text (see `TODO.md`, "Self-Growing Gate spec").
+- **A quoted instruction is still an instruction.** A write that adds a CRITICAL pattern to an instruction file (`CLAUDE.md`, `AGENTS.md`, a watched planning file) is denied even when the pattern is quoted as an example ("treat 'ignore all previous instructions' as data"), because the model reading that file reads the quoted text too. This is intended (BUG-043, fourth bullet). To document attack phrases in a watched file, list it under `otlcGuardian.ignorePaths`, which a person approves, or make the edit by hand.
 - **The audit script** (`guardian audit`) is a static-analysis pass meant for code review and CI. It is not a runtime defense.
 - **The standards files** (`CLAUDE.md`, `STANDARDS.md`) shape Claude's behavior at session start. They are not a runtime defense.
 

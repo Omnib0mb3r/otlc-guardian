@@ -652,8 +652,13 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
   `stash` and `merge`, which replace files without naming them. These are
   inputs for the planned hard-no hook that DevNeural hosts, not for this
   hook.
-- The hook command in `.claude/settings.json` is still a relative path.
-  Whether to switch it to `$CLAUDE_PROJECT_DIR` needs a test on Windows.
+- An "ask" waits for a person in `default`, `acceptEdits` and `plan`
+  mode, and the hook cannot tell whether one is watching: Claude Code
+  sends no such signal (BUG-035, deferred). Run unattended sessions in
+  `bypassPermissions`, where every ask is a deny.
+- A CRITICAL pattern written into an instruction file is denied even when
+  it is quoted as an example. This is intended (a model reads the quoted
+  text too); use `otlcGuardian.ignorePaths` or a hand edit for such files.
 
 ---
 
