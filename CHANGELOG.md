@@ -172,6 +172,12 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **An invalid settings file stops `init` and `update` before they write
+  (BUG-061).** Invalid JSON in `.claude/settings.json` was found only at step
+  6, after the behavior files, `.gitignore`, `.env.example` and `security/`
+  were written, and the run ended in a stack trace. A preflight now refuses
+  invalid JSON and valid JSON that is not an object before any write, and a
+  later failure prints the reason and what to do instead of a stack trace.
 - **A bad audit argument no longer passes (BUG-051).** A path that did not
   exist scanned 0 files and exited 0, even with `--fail-on-error`, and an
   unknown flag was ignored, so a CI typo turned the gate into a pass. An

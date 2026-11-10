@@ -72,7 +72,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-058 | OPEN | Hook `ignorePaths` is a substring match: an entry such as `docs` exempts every path containing it |
 | BUG-059 | OPEN | Audit exemptions do not reach the project checks: `DEP-001`, `DEP-002`, `WEB-002` still read exempt files |
 | BUG-060 | OPEN | `guardian init` copies Guardian's own `.github/` (CODEOWNERS naming Guardian's maintainer, templates) and allowlist into every project |
-| BUG-061 | OPEN | `guardian init` and `update` on an invalid `.claude/settings.json` stop with a raw stack trace after earlier steps are written |
+| BUG-061 | SMOKE-TESTING | `guardian init` and `update` on an invalid `.claude/settings.json` stop with a raw stack trace after earlier steps are written |
 | BUG-062 | SMOKE-TESTING | `guardian check` passes (exit 0, "correctly installed") when the hook smoke test fails, and never checks the hook is registered |
 | BUG-063 | OPEN | HIGH: the PreToolUse hook fails open in every CommonJS project: the ESM scanner cannot load under `"type": "commonjs"` |
 | BUG-064 | OPEN | Windows path aliases dodge the watch and protected sets: `::$INDEX_ALLOCATION` on a folder, and 8.3 short names (`CLAUDE~1`) |
@@ -773,9 +773,11 @@ Exempt files are skipped by per-file rules but still passed to the project check
 
 ### BUG-061: `init`/`update` crash on an invalid settings file
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 With an invalid `.claude/settings.json`, `init` and `update` stop with a raw stack trace (exit 1) after steps 1 to 5 have already written files, leaving a half install with no message saying what was done. Fix: validate the settings file before the first write and stop with a clear error.
+
+**Fix (2026-11-10).** `initPreflightProblems()` runs at the top of `runInit()`, before any write: `settingsFileProblem()` refuses invalid JSON and valid JSON that is not an object (`[]`, `null`; the merge used to throw a TypeError on those) and the run stops with the reason, "Nothing was written" and exit 1. `mergeClaudeSettings()` uses the same check, so a direct caller is covered. `runInitReporting()` wraps `init` and `update` in the CLI: a later failure prints `guardian init stopped: <reason>` and that the files listed above were written, with no stack trace. Tests: `tests/init.test.js`, "BUG-061" block (8 cases; the 6 settings cases and the mid-install case failed before the fix). Smoke test: run `guardian update` in a real project with a broken settings file and confirm nothing changes.
 
 ### BUG-062: `guardian check` passes with a broken hook
 

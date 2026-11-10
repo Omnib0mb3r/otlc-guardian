@@ -947,16 +947,14 @@ function mergeClaudeSettings(existingPath, guardianSrcPath) {
   ];
 
   // Parse the user's settings - refuse to touch the file if we can't.
-  let existing;
-  try {
-    existing = JSON.parse(readFile(existingPath) || "{}");
-  } catch (parseErr) {
-    err(`.claude/settings.json - INVALID JSON, refusing to overwrite`);
-    err(`    ${parseErr.message}`);
-    err(`    Fix the JSON manually, then re-run guardian init.`);
+  const problem = settingsFileProblem(existingPath);
+  if (problem) {
+    err(`.claude/settings.json - ${problem}, refusing to overwrite`);
+    err(`    Fix the file by hand, then re-run guardian init.`);
     err(`    A reference copy is at: ${guardianSrcPath}`);
     throw new Error(".claude/settings.json could not be parsed; aborting init");
   }
+  const existing = JSON.parse(readFile(existingPath) || "{}");
 
   existing.hooks = existing.hooks ?? {};
 
@@ -1271,10 +1269,69 @@ const PROJECT_OWNED_SECURITY_FILES = new Set([".audit-allowlist"]);
 //                                    marker-delimited sections of the
 //                                    behavior files with current content.
 
+/**
+ * Why Guardian cannot merge into a settings file, or null when it can.
+ * A missing or empty file is fine (it is created or treated as {}).
+ * Valid JSON that is not an object ([] or null) is refused too: Claude
+ * Code reads no hooks from it, and the merge would throw on it.
+ */
+function settingsFileProblem(file) {
+  if (!existsSync(file)) return null;
+  const text = readFile(file);
+  if (!text.trim()) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (parseErr) {
+    return `INVALID JSON (${parseErr.message})`;
+  }
+  return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+    ? null
+    : "not a JSON object";
+}
+
+/**
+ * Checks that must pass before init or update writes anything (BUG-061).
+ * Both used to write steps 1 to 5 and then die on step 6 with a stack
+ * trace, leaving a half install.
+ * @returns {string[]} problems; empty when it is safe to start
+ */
+function initPreflightProblems(root) {
+  const problems = [];
+  const settings = path.join(root, ".claude", "settings.json");
+  const settingsProblem = settingsFileProblem(settings);
+  if (settingsProblem) problems.push(`.claude/settings.json is ${settingsProblem.replace(/^INVALID JSON/, "invalid JSON")}`);
+  return problems;
+}
+
+/**
+ * runInit for the CLI. A failure after the preflight (a locked file, a
+ * permission error) stops the run with the reason and what to do, not a
+ * Node stack trace. Every file written so far is already listed above
+ * the error, and re-running is safe: init skips files that exist.
+ */
+function runInitReporting(options) {
+  const command = options.refresh ? "update" : "init";
+  try {
+    runInit(options);
+  } catch (e) {
+    err(`guardian ${command} stopped: ${e?.message ?? String(e)}`);
+    err(`The files listed above were written before it stopped. Fix the cause, then re-run guardian ${command}.`);
+    process.exit(1);
+  }
+}
+
 function runInit({ refresh = false } = {}) {
   log(`\n${c.bold}[OTLC GUARDIAN] INITIALIZING PROJECT${c.reset}`);
   log(`${c.dim}Target: ${CWD}${c.reset}`);
   log(`${c.dim}Guardian source: ${ROOT}${c.reset}\n`);
+
+  const blockers = initPreflightProblems(CWD);
+  if (blockers.length > 0) {
+    for (const b of blockers) err(b);
+    err(`Nothing was written. Fix the file by hand, then re-run guardian ${refresh ? "update" : "init"}.`);
+    process.exit(1);
+  }
 
   // ── 1. CLAUDE.md ─────────────────────────────────────────────────────────
   // CLAUDE.md is the Claude-Code-specific behavior file. Claude Code reads
@@ -1518,7 +1575,7 @@ if (isMainModule) {
       break;
 
     case "init":
-      runInit();
+      runInitReporting({ refresh: false });
       break;
 
     case "update":
@@ -1526,7 +1583,7 @@ if (isMainModule) {
       // update also replaces Guardian-owned files (security/, .claude/hooks/)
       // and the marker-delimited sections of the behavior files, so a fix
       // in this repo actually reaches a project that already has Guardian.
-      runInit({ refresh: true });
+      runInitReporting({ refresh: true });
       break;
 
     case "list-watched":

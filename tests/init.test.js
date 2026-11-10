@@ -709,6 +709,59 @@ describe("BUG-062: guardian check fails on a broken or unregistered hook", () =>
 });
 
 // ---------------------------------------------------------------------------
+// BUG-061: an invalid settings file stops init before anything is written
+// ---------------------------------------------------------------------------
+//
+// init and update used to write CLAUDE.md, STANDARDS.md, .gitignore,
+// .env.example and security/ (steps 1 to 5) and then die on step 6 with a
+// raw stack trace, leaving a half install and no word on what was done.
+
+function runCliRaw(dir, ...args) {
+  return spawnSync("node", [GUARDIAN_CLI, ...args], { cwd: dir, encoding: "utf8", timeout: 60_000, env: HOOK_ENV });
+}
+
+describe("BUG-061: init and update refuse an invalid settings file before writing", () => {
+  for (const [label, text] of [["invalid JSON", "{ not json"], ["a JSON array", "[]"], ["JSON null", "null"]]) {
+    for (const command of ["init", "update"]) {
+      test(`${command} with ${label} in .claude/settings.json writes nothing and exits 1 without a stack trace`, () => {
+        withTempDir((dir) => {
+          mkdirSync(path.join(dir, ".claude"), { recursive: true });
+          writeFileSync(path.join(dir, ".claude", "settings.json"), text);
+          const r = runCliRaw(dir, command);
+          assert.equal(r.status, 1, `exit ${r.status}`);
+          assert.ok(/settings\.json/.test(r.stderr), r.stderr.slice(0, 300));
+          assert.ok(!/\n\s+at .+:\d+:\d+/.test(r.stderr), `stack trace printed: ${r.stderr.slice(0, 400)}`);
+          for (const f of ["CLAUDE.md", "STANDARDS.md", ".gitignore", ".env.example", "security"]) {
+            assert.ok(!existsSync(path.join(dir, f)), `${f} was written before the failure`);
+          }
+          assert.equal(readFileSync(path.join(dir, ".claude", "settings.json"), "utf8"), text, "settings must be untouched");
+        });
+      });
+    }
+  }
+
+  test("a failure after the preflight stops with the reason, not a stack trace", () => {
+    withTempDir((dir) => {
+      writeFileSync(path.join(dir, "security"), "a file where Guardian needs a folder\n");
+      const r = runCliRaw(dir, "init");
+      assert.equal(r.status, 1);
+      assert.ok(/guardian init stopped/.test(r.stderr), r.stderr.slice(0, 300));
+      assert.ok(/re-run guardian init/.test(r.stderr));
+      assert.ok(!/\n\s+at .+:\d+:\d+/.test(r.stderr), `stack trace printed: ${r.stderr.slice(0, 400)}`);
+    });
+  });
+
+  test("an invalid settings.local.json does not block init (init never writes it)", () => {
+    withTempDir((dir) => {
+      mkdirSync(path.join(dir, ".claude"), { recursive: true });
+      writeFileSync(path.join(dir, ".claude", "settings.local.json"), "{ not json");
+      const r = runCliRaw(dir, "init");
+      assert.equal(r.status, 0, r.stderr.slice(0, 300));
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 
