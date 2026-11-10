@@ -412,6 +412,107 @@ function winCopyWrites(name, args, dir, ctx) {
   if (name === "robocopy" && has("MOV", "MOVE")) ctx.add(dir, src);
 }
 
+// What find's name and path tests are tried against: the guarded files
+// and folders and the watched instruction files (re-probe 2, S10).
+const FIND_GUARDED = [
+  ".claude/settings.json", ".claude/settings.local.json",
+  ...GUARDIAN_HOOK_FILES.map((f) => `.claude/hooks/${f}`),
+  GUARDIAN_SCANNER_FILE.replace(/\\/g, "/"), GUARDIAN_SCANNER_PACKAGE.replace(/\\/g, "/"),
+  ".claude", ".claude/hooks", "security",
+];
+const FIND_WATCHED_NAMES = ["CLAUDE.md", "AGENTS.md", "GEMINI.md", ".cursorrules", ".windsurfrules", ".aider.conf.yml",
+  ".aider.conf.yaml", "copilot-instructions.md", ".env", ".env.local", ".env.production", "MEMORY.md"];
+const FIND_NAMES = [...new Set([...FIND_GUARDED.map((p) => path.posix.basename(p)), ...FIND_WATCHED_NAMES])];
+const FIND_NAME_TESTS = new Set(["-name", "-iname"]);
+const FIND_PATH_TESTS = new Set(["-path", "-ipath", "-wholename", "-iwholename"]);
+
+/** A find glob (*, ?, [...]) as a whole-string regex; * crosses "/" as in -path. Case is ignored, to err toward matching. */
+function findGlob(glob) {
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    const ch = glob[i];
+    if (ch === "\\" && i + 1 < glob.length) re += glob[++i].replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+    else if (ch === "*") re += ".*";
+    else if (ch === "?") re += ".";
+    else if (ch === "[" && glob.indexOf("]", i + 2) > i) {
+      const close = glob.indexOf("]", i + 2);
+      re += `[${glob.slice(i + 1, close).replace(/^!/, "^").replace(/\\/g, "\\\\")}]`;
+      i = close;
+    } else re += ch.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+  }
+  try {
+    return new RegExp(`^${re}$`, "i");
+  } catch (err) {
+    return /^/; // a glob this cannot read is taken to match anything
+  }
+}
+
+/** The paths find would print for the guarded and watched files under `root`, wherever root sits above them. */
+function findPathSamples(root) {
+  const r = root.replace(/\\/g, "/").replace(/(.)\/+$/, "$1");
+  const join = (rel) => (r.endsWith("/") ? `${r}${rel}` : `${r}/${rel}`);
+  const samples = [r];
+  for (const p of FIND_GUARDED) {
+    const parts = p.split("/");
+    for (let k = 0; k < parts.length; k++) samples.push(join(parts.slice(k).join("/")));
+  }
+  for (const n of FIND_WATCHED_NAMES) samples.push(join(n), join(`sub/${n}`));
+  return samples;
+}
+
+/**
+ * Paths a find command writes. Which files match is not visible in the
+ * command, so what an action acts on is each starting point: -delete
+ * removes it (BUG-065), and in each -exec, -execdir, -ok and -okdir
+ * clause {} stands for it, also inside a word ({}.bak), so "-exec rm {} ;"
+ * removes it (re-probe 2, S4). An action is kept away from the starting
+ * points when its branch (between -o operators) holds a -name, -iname,
+ * -path or -wholename test, not negated, that matches none of the guarded
+ * files and folders or the watched instruction files: then nothing it
+ * reaches is one (re-probe 2, S10). An expression with parentheses is not
+ * narrowed.
+ */
+function findWrites(args, dir, ctx) {
+  const first = args.findIndex((a) => /^[-(!]/.test(a));
+  const starts = args.slice(0, first < 0 ? args.length : first);
+  const roots = starts.length > 0 ? starts : ["."];
+  // The expression, with each -exec clause folded into its action.
+  const expr = [];
+  for (let k = first < 0 ? args.length : first; k < args.length; k++) {
+    if (/^-(?:exec|execdir|ok|okdir)$/.test(args[k])) {
+      let end = args.findIndex((a, j) => j > k && (a === ";" || a === "+"));
+      if (end < 0) end = args.length;
+      expr.push({ word: args[k], clause: args.slice(k + 1, end) });
+      k = end;
+    } else expr.push({ word: args[k] });
+  }
+  const grouped = expr.some((e) => e.word === "(" || e.word === ")");
+  const isOr = (e) => e.word === "-o" || e.word === "-or";
+  const reaches = (i) => {
+    if (grouped) return true;
+    let s = i;
+    while (s > 0 && !isOr(expr[s - 1])) s--;
+    let e = i;
+    while (e < expr.length && !isOr(expr[e])) e++;
+    for (let k = s; k < e - 1; k++) {
+      const test = expr[k].word;
+      const negated = k > 0 && (expr[k - 1].word === "!" || expr[k - 1].word === "-not");
+      if (negated || (!FIND_NAME_TESTS.has(test) && !FIND_PATH_TESTS.has(test))) continue;
+      const re = findGlob(expr[k + 1].word);
+      const hits = FIND_NAME_TESTS.has(test) ? FIND_NAMES.some((n) => re.test(n)) : roots.some((r) => findPathSamples(r).some((p) => re.test(p)));
+      if (!hits) return false;
+    }
+    return true;
+  };
+  expr.forEach((e, i) => {
+    if (e.word === "-delete" && reaches(i)) for (const p of roots) ctx.add(dir, p);
+    if (!e.clause) return;
+    // A clause that cannot reach a guarded file still writes the paths it spells out.
+    const reach = reaches(i);
+    for (const root of reach ? roots : ["{}"]) commandWrites(e.clause.map((a) => (reach ? a.split("{}").join(root) : a)), dir, ctx);
+  });
+}
+
 /** The lines a unified diff adds, without their "+" marker. */
 function addedLines(diff) {
   return diff.split("\n").filter((l) => l.startsWith("+") && !l.startsWith("+++")).map((l) => l.slice(1)).join("\n");
@@ -1075,22 +1176,7 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   } else if (name === "eval") {
     recurse(args.join(" "), dir);
   } else if (name === "find") {
-    // Which files match is not visible in the command, so what find acts
-    // on is each starting point: -delete removes it (BUG-065), and in each
-    // -exec, -execdir, -ok and -okdir clause {} stands for it, also inside
-    // a word ({}.bak), so "-exec rm {} ;" removes it (re-probe 2, S4).
-    const first = args.findIndex((a) => /^[-(!]/.test(a));
-    const starts = args.slice(0, first < 0 ? args.length : first);
-    const roots = starts.length > 0 ? starts : ["."];
-    for (let k = 0; k < args.length; k++) {
-      if (!/^-(?:exec|execdir|ok|okdir)$/.test(args[k])) continue;
-      let end = args.findIndex((a, j) => j > k && (a === ";" || a === "+"));
-      if (end < 0) end = args.length;
-      const clause = args.slice(k + 1, end);
-      for (const root of roots) commandWrites(clause.map((a) => a.split("{}").join(root)), dir, ctx);
-      k = end;
-    }
-    if (args.includes("-delete")) for (const p of roots) add(dir, p);
+    findWrites(args, dir, ctx);
   } else if (name === "tar") {
     tarWrites(args, dir, ctx);
   } else if (name === "unzip") {

@@ -201,6 +201,18 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **`find` with a name filter that cannot match Guardian's files is not
+  asked about (BUG-065, re-probe 2 S10).** The BUG-065 change read every
+  `find . ... -delete` as deleting the project root, so an everyday
+  `find . -path ./node_modules -prune -o -name '*.log' -delete` asked. An
+  action (`-delete`, `-exec` and the like) is now kept away from the
+  starting points when its `-o` branch holds a `-name`, `-iname`,
+  `-path` or `-wholename` test, not negated, that matches none of the
+  settings files, hook scripts, scanner, `security/package.json`, their
+  folders, or the watched instruction files (`CLAUDE.md`, `AGENTS.md`,
+  `.env` and the rest). Case is ignored when testing, and an expression
+  with parentheses is read as before.
+
 - **robocopy, xcopy, `install` and single-file `rsync` are judged by
   what they copy (BUG-066, BUG-048, re-probe 2 S5).** `robocopy staged
   .claude\agents /E` and `cmd /c "xcopy staged .claude\agents /E /I"` had

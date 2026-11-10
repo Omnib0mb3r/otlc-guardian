@@ -1559,6 +1559,35 @@ describe("PreToolUse hook - explicit deletes and replaces of the settings and gu
     test(`silent: ${command} (S4)`, () => expectSilent(bash(command)));
   }
 
+  // Re-probe 2, S10: a name or path test that can match no guarded or
+  // watched file keeps find away from them.
+  for (const command of [
+    "find . -path ./node_modules -prune -o -name '*.log' -delete",
+    "find . -name '*.tmp' -delete",
+    "find . -type f -name '*.pyc' -exec rm {} +",
+    "find . -iname '*.LOG' -delete",
+    "find . -path './build/*' -delete",
+    "find . -name '__pycache__' -exec rm -rf {} +",
+  ]) {
+    stagedOnly(`silent: ${command} (S10)`, () => expectSilent(bash(command)));
+  }
+  for (const command of [
+    "find . -name '*.json' -delete",
+    "find . -name '*.md' -delete",
+    "find . -iname 'SETTINGS.JSON' -delete",
+    "find . -name '.claude' -exec rm -rf {} +",
+    "find . -path '*/.claude/*' -delete",
+    "find . -not -name '*.log' -delete",
+    "find . \\( -name '*.log' -o -name '*.json' \\) -delete",
+    "find . -name '*.log' -o -delete",
+    "find . -name '*.log' -exec rm -rf .claude \\;",
+  ]) {
+    stagedOnly(`asks: ${command} (S10)`, () => {
+      const out = bash(command);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    });
+  }
+
   for (const command of [
     "find src -name '*.tmp' -delete",
     "find .claude -name '*.json'",
