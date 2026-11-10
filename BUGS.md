@@ -38,7 +38,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-024 | SMOKE-TESTING | Scanner bypassed by tag characters, U+2060, lookalike letters, stray `%`, embedded base64, entities, markdown, filler padding |
 | BUG-025 | SMOKE-TESTING | `guardian update` never overwrote anything, so fixes never reached existing installs |
 | BUG-026 | SMOKE-TESTING | Secret rules missed OpenSSH/EC keys, `github_pat_`, `ghs_`, Slack, Stripe live, Anthropic OAuth |
-| BUG-027 | OPEN | Hook files and scanner are writable by the agent they guard (only settings.json is protected) |
+| BUG-027 | IN-PROGRESS | Hook files and scanner are writable by the agent they guard (only settings.json is protected) |
 | BUG-028 | OPEN | Hook command path is cwd-relative; `$CLAUDE_PROJECT_DIR` form untested on Windows |
 | BUG-029 | OPEN | Scanner bypasses: base64 candidate cap can be spent, chained encodings pass, confusables gaps |
 | BUG-030 | OPEN | `AUTHZ-013` misses a textbook IDOR: a 404 and a `user_id` path parameter count as ownership checks |
@@ -437,13 +437,24 @@ Still to verify outside the test suite before marking RESOLVED:
 
 ### BUG-027 — Hook files and scanner are not write-protected
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** IN-PROGRESS · **Found:** 2026-11-10
 
 `.claude/settings.json` edits that weaken Guardian now ask for confirmation. The hook
 files (`.claude/hooks/*.mjs`) and `security/01-injection-guard.js` do not. An agent that
 is already compromised can rewrite them, or write any file through a script. Belongs with
 the hard-no hook in the Self-Growing Gate spec (Lane 5), and with the DevNeural write
 guard boundary noted in `TODO.md`.
+
+**In-hook half: done (2026-11-10, verifier item P3).** `injection-guard-hook.mjs` now
+treats both hook scripts and `security/01-injection-guard.js` as protected, on the same
+rule as the settings files: a Write, Edit, MultiEdit or NotebookEdit of one, or a Bash or
+PowerShell target that is one or a directory holding one, asks (denied in
+bypassPermissions). Covers the project's copies and the files the running hook loads,
+matched without case and without an NTFS stream suffix. Tests: `tests/hook.test.js`,
+"self-protection of the hook files and scanner". Still open, so the bug stays
+IN-PROGRESS: writes the hook cannot see (a variable or glob target, `node -e` code, a
+script that writes the file, `guardian update` run by the agent). Those belong to the
+hard-no hook (Lane 5, hosted by DevNeural).
 
 ### BUG-028 — Hook command path is cwd-relative
 

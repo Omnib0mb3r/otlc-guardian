@@ -64,6 +64,18 @@ project (each project picks it up when `guardian update` is run there).
   too); `mv` sources count as written; and `git checkout`, `restore`, `rm`
   and `mv` paths are read. Targets the command does not spell out (a
   variable, a glob, `node -e` code) are not seen by this hook.
+- **The hook files and the scanner are protected (verification P3,
+  BUG-027 in-hook half).** An agent could switch Guardian off without
+  touching settings: `echo 'process.exit(0)' > .claude/hooks/injection-guard-hook.mjs`,
+  or a Write of `security/01-injection-guard.js` that returns no
+  violations, was allowed. Both hook scripts and the scanner now join the
+  protected set on the same rule as the settings: a Write, Edit, MultiEdit
+  or NotebookEdit of one, or a Bash or PowerShell target that is one or a
+  directory holding one (`rm -rf security`, `mv .claude/hooks x`), asks,
+  and is denied in bypass mode. The project's copies and the files the
+  running hook loads are both covered. Any change asks, because the
+  content is code the scanner cannot judge. Changing Guardian's own code
+  in a bypass-mode session now needs a person.
 - **Path spelling no longer dodges the watch list (verification P4, P5).**
   Matching was case-sensitive, so `.PLANNING/STATE.md` and
   `.Claude/agents/a.md` were not watched on Windows, where they are the

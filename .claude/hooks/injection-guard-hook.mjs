@@ -24,6 +24,9 @@
 //   ask       A change to .claude/settings*.json that weakens Guardian
 //             (hook removed, hooks disabled, ignore list grown, watch
 //             list shrunk, defaults turned off).
+//   ask       Any change to Guardian's own enforcement files: the two
+//             hook scripts and the scanner they import, both the copies
+//             in the project and the ones this hook runs from.
 //   In bypassPermissions mode both "ask" cases above become "deny":
 //   prompts are switched off there, so nobody would be asked.
 //   advisory  HIGH and MEDIUM findings.
@@ -77,7 +80,8 @@ function failOpenLoudly(reason) {
 // SCANNER IMPORT: single source of truth
 // ---------------------------------------------------------------------------
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const hookPath  = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(hookPath);
 const guardModulePath = path.resolve(__dirname, "..", "..", "security", "01-injection-guard.js");
 
 let scan = null;
@@ -133,6 +137,7 @@ const DEFAULT_WATCH_FILE_PATTERNS = [
 ];
 
 const GUARDIAN_HOOK_FILES = ["injection-guard-hook.mjs", "web-content-guard.mjs"];
+const GUARDIAN_SCANNER_FILE = path.join("security", "01-injection-guard.js");
 const SETTINGS_FILE_PATTERN = /(?:^|\/)\.claude\/settings(?:\.local)?\.json$/i;
 
 // ---------------------------------------------------------------------------
@@ -988,6 +993,37 @@ process.stdin.on("end", () => {
           `${TAG} This command writes, moves or removes ${safeEcho(target, 120)}, which holds Guardian's settings, ` +
           `and may weaken Guardian: Guardian cannot see the result, so it cannot tell whether hooks are removed ` +
           `or disableAllHooks is set. Use Edit for settings changes, or approve only if you asked for it.${bypassNote}`,
+      });
+    }
+
+    // ── Self-protection: Guardian's own enforcement files ─────────────
+    // The hook scripts and the scanner decide every verdict above, so a
+    // change to them can switch Guardian off without touching settings.
+    // Their content is code, which the scanner cannot judge, so any
+    // change is confirmed by a person. Both the project's copies and the
+    // files this process actually runs are covered: a settings command
+    // may point at a hook outside the project.
+    const guardFiles = [
+      ...GUARDIAN_HOOK_FILES.map((f) => path.join(projectRoot, ".claude", "hooks", f)),
+      path.join(projectRoot, GUARDIAN_SCANNER_FILE),
+      hookPath,
+      ...GUARDIAN_HOOK_FILES.map((f) => path.join(__dirname, f)),
+      guardModulePath,
+    ].filter((f, i, all) => all.findIndex((g) => watchKey(g) === watchKey(f)) === i);
+    const guardFileHit = (target) => guardFiles.find((f) => covers(target, f));
+    const guardTargets = write.kind === "file" ? write.targets.map(resolve) : bashWrites;
+    for (const target of guardTargets) {
+      const file = guardFileHit(target);
+      if (!file) continue;
+      const how = write.kind === "file"
+        ? `This ${toolName} changes ${safeEcho(target, 120)}`
+        : `This command writes, moves or removes ${safeEcho(target, 120)}`;
+      emit({
+        permissionDecision: confirmOrDeny,
+        permissionDecisionReason:
+          `${TAG} ${how}, which holds ${safeEcho(path.basename(file), 60)}, part of Guardian's own enforcement. ` +
+          `A change there can switch Guardian off, and Guardian cannot judge code, so a person confirms it. ` +
+          `Approve only if you asked for it.${bypassNote}`,
       });
     }
 

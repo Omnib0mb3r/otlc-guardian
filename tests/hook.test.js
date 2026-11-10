@@ -17,6 +17,7 @@
  *     - denies CRITICAL findings, warns on HIGH/MEDIUM (1.5.0)
  *     - only ignorePaths exempts a path; the doc marker does nothing
  *     - Bash, MultiEdit, NotebookEdit coverage; settings.json self-protection
+ *     - self-protection of the hook files and the scanner
  *     - uses the full pattern set imported from the main module
  *     - handles both Write and Edit tool calls
  *
@@ -1024,6 +1025,128 @@ describe("PreToolUse hook — self-protection of .claude/settings.json (1.5.0)",
       return runHook(PRE_HOOK, { tool_name: "Write", cwd: dir, tool_input: { file_path: file, content: '{"disableAllHooks":true}' } });
     });
     assert.equal(decisionOf(out), "ask");
+  });
+});
+
+describe("PreToolUse hook: self-protection of the hook files and scanner (1.5.0 verify, P3)", () => {
+  const HOOK_REL    = ".claude/hooks/injection-guard-hook.mjs";
+  const WEB_REL     = ".claude/hooks/web-content-guard.mjs";
+  const SCANNER_REL = "security/01-injection-guard.js";
+
+  // A project with Guardian installed: both hooks and the scanner on disk.
+  function inGuardedProject(fn) {
+    return withTempProject((dir) => {
+      for (const rel of [HOOK_REL, WEB_REL, SCANNER_REL]) {
+        mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+        writeFileSync(path.join(dir, rel), "// real guard code\n");
+      }
+      return fn(dir);
+    });
+  }
+  const run = (dir, tool_name, tool_input, permission_mode) =>
+    runHook(PRE_HOOK, { tool_name, cwd: dir, tool_input, ...(permission_mode ? { permission_mode } : {}) });
+
+  test("echo 'process.exit(0)' into the hook file asks, denied in bypass (verifier's case)", () => {
+    const command = `echo 'process.exit(0)' > ${HOOK_REL}`;
+    inGuardedProject((dir) => {
+      const out = run(dir, "Bash", { command });
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+      expectWarning(out, "injection-guard-hook.mjs", "Guardian's own enforcement");
+      assert.equal(decisionOf(run(dir, "Bash", { command }, "bypassPermissions")), "deny");
+    });
+  });
+
+  test("a Write of the hook file to a no-op asks, denied in bypass (verifier's case)", () => {
+    inGuardedProject((dir) => {
+      const tool_input = { file_path: path.join(dir, HOOK_REL), content: "process.exit(0)\n" };
+      assert.equal(decisionOf(run(dir, "Write", tool_input)), "ask");
+      assert.equal(decisionOf(run(dir, "Write", tool_input, "bypassPermissions")), "deny");
+    });
+  });
+
+  test("a Write of the scanner to a no-op scan asks (verifier's case)", () => {
+    inGuardedProject((dir) => {
+      const out = run(dir, "Write", {
+        file_path: path.join(dir, SCANNER_REL),
+        content: "export const scan=()=>({violations:[]});export const scanChange=scan;\n",
+      });
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+      expectWarning(out, "01-injection-guard.js");
+    });
+  });
+
+  test("an Edit of the web content guard asks", () => {
+    inGuardedProject((dir) => {
+      const out = run(dir, "Edit", { file_path: path.join(dir, WEB_REL), old_string: "real", new_string: "fake" });
+      assert.equal(decisionOf(out), "ask");
+    });
+  });
+
+  test("a MultiEdit or a relative path to the scanner asks", () => {
+    inGuardedProject((dir) => {
+      const out = run(dir, "MultiEdit", { file_path: SCANNER_REL, edits: [{ old_string: "real", new_string: "fake" }] });
+      assert.equal(decisionOf(out), "ask");
+    });
+  });
+
+  test("the guard files are matched without case and without an NTFS stream suffix", () => {
+    inGuardedProject((dir) => {
+      for (const rel of [".Claude/Hooks/Injection-Guard-Hook.mjs", `${SCANNER_REL}::$DATA`]) {
+        const out = run(dir, "Write", { file_path: path.join(dir, rel), content: "process.exit(0)\n" });
+        assert.equal(decisionOf(out), "ask", `${rel}: ${out.slice(0, 200)}`);
+      }
+    });
+  });
+
+  for (const command of [
+    "rm -rf security",
+    "mv .claude/hooks .claude/hooks-off",
+    `sed -i 's/deny/allow/' ${HOOK_REL}`,
+    `cp /tmp/noop.js ${SCANNER_REL}`,
+    `git checkout HEAD~5 -- ${SCANNER_REL}`,
+    `cd .claude/hooks && rm web-content-guard.mjs`,
+  ]) {
+    test(`Bash that changes a guard file asks: ${command}`, () => {
+      inGuardedProject((dir) => {
+        const out = run(dir, "Bash", { command });
+        assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+      });
+    });
+  }
+
+  test("PowerShell Set-Content on the scanner asks, denied in bypass", () => {
+    inGuardedProject((dir) => {
+      const command = `Set-Content -Path ${SCANNER_REL} -Value 'export const scan=()=>({violations:[]})'`;
+      assert.equal(decisionOf(run(dir, "PowerShell", { command })), "ask");
+      assert.equal(decisionOf(run(dir, "PowerShell", { command }, "bypassPermissions")), "deny");
+    });
+  });
+
+  test("the files this hook runs from are covered even outside the project", () => {
+    inGuardedProject((dir) => {
+      for (const file of [PRE_HOOK, POST_HOOK, path.join(ROOT, SCANNER_REL)]) {
+        const out = run(dir, "Write", { file_path: file, content: "process.exit(0)\n" });
+        assert.equal(decisionOf(out), "ask", `${file}: ${out.slice(0, 200)}`);
+      }
+    });
+  });
+
+  for (const command of [
+    `cat ${HOOK_REL}`,
+    `cp ${SCANNER_REL} /tmp/scanner.bak`,
+    `grep -n deny ${HOOK_REL}`,
+    "node --check .claude/hooks/injection-guard-hook.mjs",
+  ]) {
+    test(`Bash that only reads a guard file is silent: ${command}`, () => {
+      inGuardedProject((dir) => expectSilent(run(dir, "Bash", { command })));
+    });
+  }
+
+  test("other files beside the guard files are not protected", () => {
+    inGuardedProject((dir) => {
+      expectSilent(run(dir, "Write", { file_path: path.join(dir, "security", "02-code-security.js"), content: "export {};\n" }));
+      expectSilent(run(dir, "Write", { file_path: path.join(dir, ".claude", "hooks", "my-hook.mjs"), content: "export {};\n" }));
+    });
   });
 });
 
