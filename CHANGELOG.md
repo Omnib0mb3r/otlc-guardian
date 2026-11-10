@@ -44,8 +44,12 @@ project (each project picks it up when `guardian update` is run there).
   `Rename-Item` and their aliases, by named or positional parameter,
   `[IO.File]::Write*` calls, and `Get-Content` piped into a writer. Bash
   `powershell "..."` was only read when `-Command` was given; any script
-  argument is now read, and `-EncodedCommand` is decoded. `-File` scripts
-  are not.
+  argument is now read. An `-EncodedCommand` script is decoded and read
+  for write targets; its text is not scanned for patterns, so a payload
+  inside it passes (BUG-067). `-File` scripts are not read. Parameter
+  prefixes such as `-LiteralP` are not recognized (BUG-067), and a
+  PowerShell tool command is not read for `git`, `bash -c` or `node -e`
+  writes (BUG-048).
 - **A shell copy is judged by what it copies (verification P1).** Writing a
   payload to an unwatched file and then `cp notes/x.md CLAUDE.md`,
   `cat x > CLAUDE.md` or `git apply p.diff` was allowed: the command text

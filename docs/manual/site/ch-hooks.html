@@ -304,6 +304,15 @@
 </ul>
 <p>Two smaller approximations from the code: the directory set by <code>cd</code> inside <code>( ... )</code> carries past the closing parenthesis, and a CRITICAL match anywhere in a command that writes a watched path triggers the ask, even if the match sits in a part of the command that writes elsewhere. An agent that is already compromised can use any of these routes. They are left to the planned hard-no hook, hosted by DevNeural, which judges a command by its effect instead of its text (<code>TODO.md</code>, "Self-Growing Gate spec").</p>
 
+<div class="limit"><b>Known gaps in what it reads (re-probe, 2026-11-10)</b><p>An independent re-probe against <code>4fd3ef8</code> found variants of the fixed cases that still pass. Each is logged, listed in SECURITY.md, and waits for a hook edit in a session that prompts:</p>
+<ul>
+<li>Windows path aliases: <code>::$INDEX_ALLOCATION</code> on a folder component and 8.3 short names such as <code>CLAUDE~1</code> (BUG-064). <code>canonicalPath()</code> strips a stream suffix from the last component only and never resolves short names.</li>
+<li>Deletes and replaces the shell reader does not know: <code>find -delete</code>, <code>rsync --delete</code>, <code>tar -x</code> members, and every <code>cmd /c</code> built-in (BUG-065, BUG-048).</li>
+<li>Copies whose content is not read: a directory source (<code>readSource()</code> returns "" for anything but a regular file), <code>sort -o</code>, <code>cmd /c copy</code> (BUG-066).</li>
+<li>PowerShell: parameter prefixes (<code>-LiteralP</code>, <code>-Pat</code>, <code>-Val</code>) are not matched by <code>psParse()</code>, and an <code>-EncodedCommand</code> script is read for targets but its text is not scanned (BUG-067). <code>New-Item -Name</code> is ignored, so a plain <code>New-Item -Path . -Name x</code> is read as a write to the project root and asks as a settings change (BUG-044).</li>
+<li><code>security/package.json</code>, which keeps the scanner loadable in a CommonJS project (chapter 05), is not in the protected set (BUG-063).</li>
+</ul></div>
+
 <h3 id="hk-tests">What the tests verify</h3>
 <p><code>tests/hook.test.js</code> drives both hooks as child processes. Its groups:</p>
 <div class="tbl dense"><table>

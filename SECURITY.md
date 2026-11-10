@@ -48,6 +48,16 @@ Specifically:
   - encoded or assembled content: `printf` octal escapes, `rev`, `tr` rot13, `base64 -d`, variable concatenation, words split by quotes;
   - git operations that replace files without naming them: branch switches, `reset`, `stash`, `merge`.
 
+  Known gaps in what it does read, logged and not yet fixed in 1.5.0 (each is a hook change, and the hook is a protected file):
+  - Windows path aliases: a directory stream suffix on a folder (`.claude::$INDEX_ALLOCATION/settings.local.json`) and 8.3 short names (`CLAUDE~1/settings.local.json`, `PLANNI~1/STATE.md`) reach watched and protected files unmatched (BUG-064);
+  - deletes and replaces it does not parse: `find -delete`, `rsync --delete`, `tar -x` members (BUG-065);
+  - `cmd /c` and `cmd.exe /c` are read by neither shell reader, so `rd`, `del`, `copy` and redirects through them pass (BUG-048, BUG-065, BUG-066);
+  - a PowerShell tool command is read only for redirections and Guardian's list of cmdlets, so `git`, `bash -c`, `node -e` and `curl -o` typed into the PowerShell tool are not read (BUG-048);
+  - PowerShell parameter prefixes (`-LiteralP`, `-Pat`, `-Val`) are not recognized as the parameters they abbreviate (BUG-067);
+  - the script inside `powershell -EncodedCommand` is decoded and read for write targets, but its text is not scanned for patterns (BUG-067);
+  - copies whose content is not read: a directory source (`cp -r staged/. .claude/agents/`), `sort -o`, `cmd /c copy` (BUG-066);
+  - `security/package.json`, which keeps the scanner loadable in a CommonJS project, is not in the protected set, so a write that changes its `type` switches the scanner off (BUG-063).
+
   Detection is also pattern-based, so a reworded instruction with no known pattern passes. An agent that is already compromised can use any of these routes. They belong to the planned hard-no hook, which DevNeural hosts and which judges a command by its effect instead of its text (see `TODO.md`, "Self-Growing Gate spec").
 - **The audit script** (`guardian audit`) is a static-analysis pass meant for code review and CI. It is not a runtime defense.
 - **The standards files** (`CLAUDE.md`, `STANDARDS.md`) shape Claude's behavior at session start. They are not a runtime defense.
