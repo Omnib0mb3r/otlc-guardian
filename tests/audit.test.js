@@ -2909,6 +2909,73 @@ describe("BUG-069: AUTHZ-003 catches caller-supplied ownership", () => {
 });
 
 // ---------------------------------------------------------------------------
+// BUG-070: AUTHZ-001 sees route-level and router-level middleware
+// ---------------------------------------------------------------------------
+
+describe("BUG-070: AUTHZ-001 honors auth middleware", () => {
+  const del = (args) => [
+    `router.delete("/docs/:docId", ${args}async (req, res) => {`,
+    `  await prisma.doc.delete({ where: { id: req.params.docId } });`,
+    `  res.status(204).end();`,
+    `});`,
+    ``,
+  ].join("\n");
+  const report = (src) => withTempProject({ "src/routes.js": src }, (dir) => runAuditOn(dir));
+  const ids = (src) => report(src).findings.map((f) => f.rule.id);
+
+  for (const [label, args] of [
+    ["requireAuth before the handler", "requireAuth, "],
+    ["passport.authenticate", `passport.authenticate("jwt", { session: false }), `],
+    ["a middleware array", "[requireAuth, isAdmin], "],
+  ]) {
+    test(`${label} counts as auth (and the IDOR is then AUTHZ-003's)`, () => {
+      const found = ids(del(args));
+      assert.ok(!found.includes("AUTHZ-001"), found.join(", "));
+      assert.ok(found.includes("AUTHZ-003"), found.join(", "));
+    });
+  }
+
+  test("a non-auth middleware does not count", () => {
+    assert.ok(ids(del("rateLimiter, ")).includes("AUTHZ-001"));
+  });
+
+  test("router.use(requireAuth) covers the routes registered after it", () => {
+    assert.ok(!ids([`router.use(requireAuth);`, del("")].join("\n")).includes("AUTHZ-001"));
+  });
+
+  test("router.use(requireAuth) does not cover a route registered before it", () => {
+    assert.ok(ids([del(""), `router.use(requireAuth);`].join("\n")).includes("AUTHZ-001"));
+  });
+
+  test("auth on one router does not cover another router", () => {
+    const src = [`admin.use(requireAuth);`, del("")].join("\n");
+    assert.ok(ids(src).includes("AUTHZ-001"));
+  });
+
+  test("a path-scoped app.use(\"/api\", verifyToken) counts for that object", () => {
+    const src = [`router.use("/api", verifyToken);`, del("")].join("\n");
+    assert.ok(!ids(src).includes("AUTHZ-001"));
+  });
+
+  test("an inline auth middleware before the handler counts", () => {
+    const found = ids(del("(req, res, next) => { if (!req.user) return res.status(401).end(); next(); }, "));
+    assert.ok(!found.includes("AUTHZ-001"), found.join(", "));
+  });
+
+  test("a handler passed by name is not misread from the next block", () => {
+    const src = [`router.delete("/docs/:docId", removeDoc);`, `const cfg = { db: prisma.doc.delete({ where: {} }) };`, ``].join("\n");
+    assert.ok(!ids(src).includes("AUTHZ-001"));
+  });
+
+  test("a handler longer than 4000 characters is still read", () => {
+    const filler = Array.from({ length: 200 }, (_, k) => `  const v${k} = "${"x".repeat(20)}";`).join("\n");
+    const src = [`router.delete("/docs/:docId", async (req, res) => {`, filler,
+      `  await prisma.doc.delete({ where: { id: req.params.docId } });`, `});`, ``].join("\n");
+    assert.ok(ids(src).includes("AUTHZ-001"));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

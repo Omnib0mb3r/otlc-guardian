@@ -81,7 +81,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-067 | OPEN | PowerShell parameter prefixes (`-LiteralP`, `-Pat`, `-Val`) are not recognized; `-EncodedCommand` payload text is never scanned |
 | BUG-068 | SMOKE-TESTING | `guardian scan` exits 0 when it finds injection or secret patterns, so a script or pipeline cannot act on the result |
 | BUG-069 | SMOKE-TESTING | `AUTHZ-003` (JS IDOR) counts caller-supplied ids as ownership: `userId: req.params.userId`, a `:teamId` path parameter |
-| BUG-070 | OPEN | `AUTHZ-001` ignores route-level middleware: `router.delete(path, requireAuth, handler)` is reported CRITICAL as unauthenticated |
+| BUG-070 | SMOKE-TESTING | `AUTHZ-001` ignores route-level middleware: `router.delete(path, requireAuth, handler)` is reported CRITICAL as unauthenticated |
 
 <!-- INDEX END -->
 
@@ -886,8 +886,10 @@ Fix direction, as for BUG-030: ownership evidence must tie the column to the ver
 
 ### BUG-070: `AUTHZ-001` ignores route-level middleware
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 Found while checking BUG-069. For `router.delete("/docs/:docId", requireAuth, async (req, res) => { ... })` the analyzer reads only the handler's block (`findRouteHandlers()`, `skipParams: false`, body from the first `{` after the call), so the `requireAuth` argument between the path and the handler is never seen and the handler is reported CRITICAL as having no authentication. Route-level middleware is the most common Express auth shape, so this is a loud false positive. Fix direction: count auth evidence in the route call's arguments before the handler as well as in its body.
+
+**Fix (2026-11-10).** In `security/03-audit.js`: `findRouteHandlers()` records each handler's `object` (`router`) and `head` (the call text before its block). New `handlerIsAuthenticated()` reads `AUTH_PATTERNS` in the body, the head, and auth mounted earlier on the same object (`jsAuthMounts()`: `x.use(...)` whose arguments are auth, honored only for routes registered after it, as Express does); AUTHZ-001 and AUTHZ-003 both use it. In the blast radius: the handler block was the first `{` after the call, so `passport.authenticate("jwt", { session: false })` made the options object the "handler". New `lastInlineHandler()` takes the inline function whose block is the call's last argument (`skipParenGroup()` gained a `maxSpan` argument, 40,000 here, so long handlers still read); a handler passed by name is skipped rather than misread. Tests: `tests/audit.test.js`, "BUG-070" block (11 cases: requireAuth, passport with options, array, inline middleware count and hand the IDOR to AUTHZ-003; rateLimiter does not; use() before and after, another object, path-scoped use; handler by name; a long handler; 5 failed before the fix, and the by-name and long-handler cases were added with the `lastInlineHandler()` change). Manual chapter 02 updated. Smoke test: `guardian audit` on an Express app using `router.delete(path, requireAuth, handler)` gives no AUTHZ-001.
 
 <!-- DETAILS END -->

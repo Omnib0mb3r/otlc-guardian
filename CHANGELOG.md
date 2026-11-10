@@ -172,6 +172,16 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **AUTHZ-001 sees auth middleware (BUG-070).** Only the handler body
+  was read, so `router.delete(path, requireAuth, handler)`, the most
+  common Express auth shape, was reported CRITICAL as unauthenticated.
+  Auth now counts in the route-level middleware and in an earlier
+  `router.use(requireAuth)` on the same object. The handler is now found
+  as the call's last inline function, so an options object in middleware
+  (`passport.authenticate("jwt", { session: false })`) is no longer read
+  as the handler. Authenticated handlers found this way are checked by
+  AUTHZ-003.
+
 - **AUTHZ-003 needs an ownership check tied to the caller (BUG-069).**
   The JavaScript IDOR rule took any `userId:` or bare `teamId` mention as
   an ownership check, so `where: { id: req.params.docId, userId:

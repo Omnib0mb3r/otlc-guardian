@@ -493,14 +493,14 @@ function extractBlock(content, from) {
  * Given the index of an opening `(`, return the index just past its
  * matching `)`. String- and comment-aware for the same reason
  * extractBlock is: a parenthesis inside a default-value string literal
- * must not be counted. Returns -1 if unbalanced.
+ * must not be counted. Returns -1 if unbalanced within maxSpan characters.
  */
-function skipParenGroup(content, openParen) {
+function skipParenGroup(content, openParen, maxSpan = 4000) {
   if (content[openParen] !== "(") return -1;
 
   let depth = 0;
   let i = openParen;
-  const limit = Math.min(content.length, openParen + 4000);
+  const limit = Math.min(content.length, openParen + maxSpan);
 
   while (i < limit) {
     const ch = content[i];
@@ -537,6 +537,34 @@ function skipParenGroup(content, openParen) {
   return -1;
 }
 
+// The opening `{` of an inline function: `=> {` or `function name(...) {`.
+const INLINE_FUNCTION_OPEN = /=>\s*\{|\bfunction\b\s*\*?\s*[\w$]*\s*\([^)]*\)\s*\{/g;
+const ROUTE_CALL_SPAN = 40000;
+
+/**
+ * For `router.delete(path, ...middleware, handler)` return the block of the
+ * handler: the inline function whose body is the call's last argument.
+ * Reading the first `{` after the call, as before BUG-070, took an
+ * options object such as `passport.authenticate("jwt", { session: false })`
+ * for the handler. A handler passed by name has no block here and is
+ * skipped rather than misread.
+ */
+function lastInlineHandler(content, openParen) {
+  const callEnd = skipParenGroup(content, openParen, ROUTE_CALL_SPAN);
+  if (callEnd === -1) return null;
+  const call = content.slice(0, callEnd);
+  INLINE_FUNCTION_OPEN.lastIndex = openParen;
+  let m;
+  while ((m = INLINE_FUNCTION_OPEN.exec(call)) !== null) {
+    const block = extractBlock(content, m.index + m[0].length - 1);
+    if (!block || block.end > callEnd) return null;
+    // The last argument: only whitespace, a trailing comma and `)` follow.
+    if (/^[\s,]*\)$/.test(content.slice(block.end, callEnd))) return block;
+    INLINE_FUNCTION_OPEN.lastIndex = block.end;
+  }
+  return null;
+}
+
 /**
  * Find every route handler in a file and return its body plus the line the
  * handler is declared on. Overlapping matches (a signature that lands
@@ -553,17 +581,23 @@ function findRouteHandlers(content) {
       // Every signature regex ends on the `(` it opened.
       const openParen = match.index + match[0].length - 1;
 
-      let bodyFrom = match.index;
+      let block;
       if (signature.skipParams) {
         const afterParams = skipParenGroup(content, openParen);
         if (afterParams === -1) continue; // unbalanced - not a handler we can read
-        bodyFrom = afterParams;
+        block = extractBlock(content, afterParams);
+      } else {
+        block = lastInlineHandler(content, openParen);
       }
-
-      const block = extractBlock(content, bodyFrom);
       if (!block) continue;
       handlers.push({
         signature: match[0],
+        // `router` in `router.delete(...)`; null for the export forms.
+        object: /^(\w+)\./.exec(match[0])?.[1] ?? null,
+        // The call text before the handler's block: for
+        // `router.delete(path, requireAuth, async (req, res) => {` it holds
+        // the route-level middleware (BUG-070).
+        head: content.slice(match.index, block.start),
         line: content.slice(0, match.index).split("\n").length,
         body: block.body,
         start: match.index,
@@ -586,15 +620,42 @@ function findRouteHandlers(content) {
 
 const matchesAny = (patterns, text) => patterns.some((p) => p.test(text));
 
+// `router.use(requireAuth)` / `app.use("/api", verifyToken)`: auth
+// middleware mounted on an object covers the routes registered on that
+// object after it, as in Express. Same model as pyAuthedRouters().
+const JS_USE_CALL = /\b(\w+)\.use\s*\(/g;
+
+function jsAuthMounts(content) {
+  const mounts = [];
+  for (const m of content.matchAll(JS_USE_CALL)) {
+    const open = m.index + m[0].length - 1;
+    const end = skipParenGroup(content, open);
+    if (end !== -1 && matchesAny(AUTH_PATTERNS, content.slice(open, end))) mounts.push({ object: m[1], index: m.index });
+  }
+  return mounts;
+}
+
+/**
+ * Auth evidence for one handler: its body, the route-level middleware in
+ * its call (handler.head), or auth mounted earlier on the same object.
+ * Before BUG-070 only the body was read, so the most common Express shape,
+ * `router.delete(path, requireAuth, handler)`, was reported CRITICAL.
+ */
+function handlerIsAuthenticated(handler, mounts) {
+  if (matchesAny(AUTH_PATTERNS, handler.body) || matchesAny(AUTH_PATTERNS, handler.head)) return true;
+  return handler.object !== null && mounts.some((m) => m.object === handler.object && m.index < handler.start);
+}
+
 /**
  * AUTHZ-001 - handler performs a side effect with no authentication check
- * anywhere in its body.
+ * in its body, its route-level middleware, or an earlier auth mount.
  */
 function checkMissingAuth(content) {
+  const mounts = jsAuthMounts(content);
   const findings = [];
   for (const handler of findRouteHandlers(content)) {
     if (!matchesAny(SIDE_EFFECT_PATTERNS, handler.body)) continue;
-    if (matchesAny(AUTH_PATTERNS, handler.body)) continue;
+    if (handlerIsAuthenticated(handler, mounts)) continue;
     findings.push({
       line: handler.line,
       content: handler.signature.replace(/\s+/g, " ").trim().slice(0, 120),
@@ -608,11 +669,12 @@ function checkMissingAuth(content) {
  * ID with no ownership, assignment, or role check. Classic IDOR.
  */
 function checkMissingObjectAuthz(content) {
+  const mounts = jsAuthMounts(content);
   const findings = [];
   for (const handler of findRouteHandlers(content)) {
     // Must be a protected route - an unauthenticated route is AUTHZ-001's
     // problem, and reporting both on the same handler is just noise.
-    if (!matchesAny(AUTH_PATTERNS, handler.body)) continue;
+    if (!handlerIsAuthenticated(handler, mounts)) continue;
     // Must actually take an object ID from the caller.
     if (!matchesAny(OBJECT_ID_PATTERNS, handler.body)) continue;
     // Must do something with it beyond validating shape.
