@@ -74,6 +74,11 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-060 | OPEN | `guardian init` copies Guardian's own `.github/` (CODEOWNERS naming Guardian's maintainer, templates) and allowlist into every project |
 | BUG-061 | OPEN | `guardian init` and `update` on an invalid `.claude/settings.json` stop with a raw stack trace after earlier steps are written |
 | BUG-062 | OPEN | `guardian check` passes (exit 0, "correctly installed") when the hook smoke test fails, and never checks the hook is registered |
+| BUG-063 | OPEN | HIGH: the PreToolUse hook fails open in every CommonJS project: the ESM scanner cannot load under `"type": "commonjs"` |
+| BUG-064 | OPEN | Windows path aliases dodge the watch and protected sets: `::$INDEX_ALLOCATION` on a folder, and 8.3 short names (`CLAUDE~1`) |
+| BUG-065 | OPEN | Settings and guard-file protection miss explicit deletes and replaces: `find -delete`, `rsync --delete`, `tar -x`, `cmd /c rd` and `del` |
+| BUG-066 | OPEN | Copies into watched paths not judged: directory sources (`cp -r dir/. .claude/agents/`), `sort -o`, `cmd /c copy` |
+| BUG-067 | OPEN | PowerShell parameter prefixes (`-LiteralP`, `-Pat`, `-Val`) are not recognized; `-EncodedCommand` payload text is never scanned |
 
 <!-- INDEX END -->
 
@@ -636,6 +641,7 @@ Verifier item P9 (`C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-
 - Cleanup that removes a payload is denied in bypass mode: `sed -i '/payload/d' CLAUDE.md`, and `grep -v payload CLAUDE.md > tmp && mv tmp CLAUDE.md`. The hook scans the whole command text (about hook lines 779 to 788 at 811381e), so the pattern being removed counts as being written.
 - Read-only `node -e` and `python -c` that only read `.claude/settings.json` or CLAUDE.md are treated as writes, because every path-like word in inline interpreter code counts as written (about hook lines 426 to 428).
 - Seen live on 2026-11-10 at f3d1f1b in this repo, bypass mode: a `python -c` one-liner that edited `BUGS.md` was denied with "This command writes, moves or removes C:/, which holds Guardian's settings". A word in the inline code resolved to the drive root, and a root covers every settings file, so one stray path-like word in inline code denies the command.
+- Second route (re-probe R6, a regression from the P6 PowerShell reader): `New-Item -ItemType Directory -Path . -Name build` and `New-Item -Path . -Name notes.txt -Value hello` are denied in bypass mode and asked in default mode as settings changes. `-Name` is ignored, so the target is the project root, which "holds" the settings. Same failure class as the stray path words above: a target too wide is read as covering the settings. Reprobe file: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-reprobe.md`.
 - Related: BUG-034 (Bash in the matcher), BUG-035 ("ask" stalls unattended workers).
 
 ### BUG-045: Settings protection misreads matcher spacing and denies the `$CLAUDE_PROJECT_DIR` command form
@@ -680,6 +686,7 @@ Found by the manual writer reading `commandWrites()` in `.claude/hooks/injection
 - Cause: for the PowerShell dialect `commandWrites()` returns right after `powershellWrites()`, so the readers the Bash path runs (`gitWrites()`, nested `bash -c`/`sh -c`, inline interpreter code, `curl -o`) never see a PowerShell tool command. Only redirections and the listed cmdlets are read. No reader handles `cmd /c` or `cmd.exe /c`.
 - Impact: HIGH on this machine, where PowerShell is the primary shell. Verifier P2 (git checkout of the settings) and P1-class copies are closed for Bash only. The P3 guard-file protection has the same hole through the PowerShell tool.
 - The fix is in the hook, which is now protected (cc9182f), so it must be made in a session that prompts, not in bypass mode. Tests first in `tests/hook.test.js`: the table above for both tools, plus the guard files.
+- Re-probe R7 confirms `cmd /c` is read by neither dialect (`cmd /c rd /s /q .claude`, `cmd.exe /c "del .claude\settings.json"`, `cmd /c copy notes\x.md CLAUDE.md`, the last two also under BUG-065 and BUG-066). Either parse `cmd /c` and `cmd.exe /c` (built-ins `del`, `erase`, `rd`, `rmdir`, `copy`, `move`, `ren`, `>` and `>>`) or list it as unread in SECURITY.md; the docs now list it (2026-11-10).
 
 ### BUG-049: Runtime `scan()` with an unknown `mode` fails open
 
@@ -773,5 +780,47 @@ With an invalid `.claude/settings.json`, `init` and `update` stop with a raw sta
 **Status:** OPEN · **Found:** 2026-11-10
 
 `runCheck()` in `bin/guardian.js` counts a failed hook smoke test as a warning, then prints "Guardian is correctly installed in this project." and exits 0; only missing required files exit 1. It also never reads `.claude/settings.json`, so an unregistered hook passes. This repo's CI runs `node bin/guardian.js check` as a gate, which therefore cannot fail on a broken hook. SETUP.md troubleshooting said it verifies registration (corrected 2026-11-10). Fix: a failed smoke test and a missing registration are failures (exit 1), tested in `tests/init.test.js`. Related: `guardian scan` exits 0 when it finds patterns.
+
+BUG-063 to BUG-067 are from the independent re-probe against `4fd3ef8`: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-reprobe.md` (items R1 to R5; harness in `C:\tmp\guardian-reprobe\h\`). Every hook fix among them waits: the hook is protected (cc9182f), and the dev-versus-live split for editing it is with Michael.
+
+### BUG-063: The PreToolUse hook fails open in CommonJS projects
+
+**Status:** OPEN · **Found:** 2026-11-10 · **Severity:** HIGH
+
+Re-probe R1. `guardian init` copies the ESM scanner to `<project>/security/01-injection-guard.js`. npm 11's `npm init -y` writes `"type": "commonjs"`, and with that the scanner cannot load: the hook reports "scanner failed to load (Unexpected token 'export'). This tool call was NOT scanned." and exits 1, which Claude Code treats as a non-blocking error. Every later write goes through unscanned. A Write of `security/package.json` containing `{"type":"commonjs"}` does the same in any project, and that file is not protected.
+
+Fix: the scanner's module type must not depend on the host project's `package.json`, and the file that decides it must be protected.
+
+### BUG-064: Windows path aliases dodge the watch list and protected files
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Re-probe R2 (variants of verifier P5). All confirmed with node `fs` to land in the real folders:
+- A directory stream suffix on a folder: `.claude::$INDEX_ALLOCATION/settings.local.json`, the same under `.planning`, and `.claude::$INDEX_ALLOCATION/hooks/...`. `canonicalPath()` strips a stream suffix only from the last component.
+- 8.3 short names (on for C:): `CLAUDE~1/settings.local.json`, `PLANNI~1/STATE.md`, `CLAUDE~1/hooks/injection-guard-hook.mjs`, and `echo '{"disableAllHooks":true}' > CLAUDE~1/settings.local.json`.
+
+Fix direction: strip `::$INDEX_ALLOCATION` (and `:$I30` forms) from every component, and resolve 8.3 names with `fs.realpathSync.native` on the deepest existing parent before matching. Hook edit; waits.
+
+### BUG-065: Explicit deletes and replaces of the settings or guard files pass
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Re-probe R3 (variants of verifier P2), all allowed with the target spelled out: `find .claude -delete`, `rsync -a --delete empty/ .claude/`, `tar -xf evil.tar .claude/settings.local.json`, `cmd /c rd /s /q .claude`, `cmd.exe /c "del .claude\settings.json"`. The shell reader does not know `find -delete`, `rsync` destinations, `tar -x` members or any `cmd` built-in (see BUG-048 for `cmd /c`). `git clean -fdx` is in the documented "git operations" group. Hook edit; waits.
+
+### BUG-066: Copy forms the content check does not read
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Re-probe R4 (variants of verifier P1), all allowed: `cp -r staged/. .claude/agents/` and `cp -r staged .planning` (a directory source is never read: `readSource()` returns "" for anything but a regular file), `sort notes/x.md -o CLAUDE.md` (`-o` is not a known output flag), `cmd /c copy notes\x.md CLAUDE.md`. Hook edit; waits.
+
+### BUG-067: PowerShell parameter prefixes and encoded command payloads
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Re-probe R5 (variants of verifier P6), both confirmed to write in real PowerShell:
+- PowerShell accepts any unambiguous prefix of a parameter name; `psParse()` knows full names only. `Set-Content -LiteralP .claude/settings.local.json -Val '{"disableAllHooks":true}'` passes silently; `Set-Content -Pat CLAUDE.md -Val '<payload>'` gets an advisory only.
+- `powershell -enc <base64>`: the decoded script is read for write targets, but its text is never scanned for patterns, so a payload inside it passes. The CHANGELOG line "`-EncodedCommand` is decoded" overstated this (corrected 2026-11-10).
+
+Hook edit; waits.
 
 <!-- DETAILS END -->
