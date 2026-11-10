@@ -749,12 +749,13 @@ rmdir .claude/hooks/
 
 ### Step 4 - Optional: remove the GitHub workflow
 
-`guardian init` copies Guardian's whole `.github/` folder into a project,
-skipping files that already exist: `workflows/security-audit.yml`,
-`CODEOWNERS`, `PULL_REQUEST_TEMPLATE.md`, `secret_scanning.yml` and the
-files in `ISSUE_TEMPLATE/`. Remove each one Guardian added that you do not
-use. Check `CODEOWNERS` first in any case: Guardian's copy names
-Guardian's own maintainer (BUG-060).
+`guardian init` adds two files under `.github/`, skipping any that already
+exist: `workflows/security-audit.yml` and `secret_scanning.yml`. Remove the
+ones Guardian added that you do not use. Before 1.5.0, `init` copied
+Guardian's whole `.github/` folder, so a project set up with an older
+version may also have Guardian's `CODEOWNERS`, `PULL_REQUEST_TEMPLATE.md`
+and `ISSUE_TEMPLATE/` files. Check `CODEOWNERS` first: Guardian's copy
+names Guardian's own maintainer as owner of everything (BUG-060).
 
 ```bash
 rm -f .github/workflows/security-audit.yml

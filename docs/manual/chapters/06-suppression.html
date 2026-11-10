@@ -92,7 +92,7 @@
 
 <h3 id="sp-repo">This repo's allowlist</h3>
 
-<p><code>security/.audit-allowlist</code> in the Guardian repo has seven entries. <code>guardian init</code> copies this same file into every new project (<a href="#ch-install">chapter 05</a>), so a new project starts with these entries too. There, the three <code>security/</code> lines cover the copied Guardian files, and the other four cover whatever the project keeps at those paths.</p>
+<p><code>security/.audit-allowlist</code> in the Guardian repo has seven entries. <code>guardian init</code> gives a new project only the three <code>security/</code> lines, which cover the Guardian modules it copies there (<code>projectAllowlistText()</code>, <a href="#ch-install">chapter 05</a>). Until 2026-11-10 (BUG-060) it copied all seven, and the four <code>bin/</code> and <code>tests/</code> lines exempted whatever a project kept at those paths.</p>
 
 <div class="tbl dense"><table>
 <thead><tr><th>Path</th><th>Reason given</th></tr></thead>
@@ -107,7 +107,7 @@
 </tbody>
 </table></div>
 
-<p><code>guardian update</code> leaves a project's allowlist alone (<code>PROJECT_OWNED_SECURITY_FILES</code>). It copies the file only when it is missing, so a project's edits survive and Guardian's later changes to its own list do not arrive.</p>
+<p><code>guardian update</code> leaves a project's allowlist alone (<code>PROJECT_OWNED_SECURITY_FILES</code>). It writes the project version only when the file is missing, so a project's edits survive and Guardian's later changes to its own list do not arrive.</p>
 
 <h3 id="sp-ignorepaths">Hook exemption: otlcGuardian.ignorePaths</h3>
 

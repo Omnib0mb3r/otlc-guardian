@@ -762,6 +762,66 @@ describe("BUG-061: init and update refuse an invalid settings file before writin
 });
 
 // ---------------------------------------------------------------------------
+// BUG-060: init installs only what a project needs, not Guardian's own repo files
+// ---------------------------------------------------------------------------
+//
+// init copied Guardian's whole .github/ folder (a CODEOWNERS that routes every
+// review to Guardian's maintainer, Guardian's own PR and issue templates) and
+// Guardian's own audit allowlist, whose entries name Guardian's bin/ and
+// tests/ files.
+
+function allowlistPaths(text) {
+  return text.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#")).map((l) => l.split("#")[0].trim());
+}
+
+describe("BUG-060: init installs a project's files, not Guardian's repo files", () => {
+  test("init copies the workflow and secret scanning config, not CODEOWNERS or Guardian's templates", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      assert.ok(existsSync(path.join(dir, ".github", "workflows", "security-audit.yml")));
+      assert.ok(existsSync(path.join(dir, ".github", "secret_scanning.yml")));
+      for (const f of ["CODEOWNERS", "PULL_REQUEST_TEMPLATE.md", "ISSUE_TEMPLATE"]) {
+        assert.ok(!existsSync(path.join(dir, ".github", f)), `.github/${f} must not be copied`);
+      }
+    });
+  });
+
+  test("the project allowlist names only files that init put in the project", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      const paths = allowlistPaths(readFileSync(path.join(dir, "security", ".audit-allowlist"), "utf8"));
+      assert.ok(paths.length > 0, "the copied security modules still need their entries");
+      for (const p of paths) assert.ok(existsSync(path.join(dir, p)), `allowlist names ${p}, which init did not install`);
+      assert.ok(!paths.some((p) => p.startsWith("bin/") || p.startsWith("tests/")));
+    });
+  });
+
+  test("update creates a missing allowlist the same way and never rewrites an existing one", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      const file = path.join(dir, "security", ".audit-allowlist");
+      rmSync(file);
+      runCli(dir, "update");
+      const paths = allowlistPaths(readFileSync(file, "utf8"));
+      assert.ok(paths.length > 0 && !paths.some((p) => p.startsWith("bin/") || p.startsWith("tests/")));
+      writeFileSync(file, "# mine\nsrc/legacy.js  # reason: vendored code\n");
+      runCli(dir, "update");
+      assert.equal(readFileSync(file, "utf8"), "# mine\nsrc/legacy.js  # reason: vendored code\n");
+    });
+  });
+
+  test("a fresh init audits clean on its own copied files", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      const r = spawnSync("node", [path.join(dir, "security", "03-audit.js"), dir, "--json"], { encoding: "utf8", timeout: 60_000 });
+      const report = JSON.parse(r.stdout);
+      const guardianFindings = report.findings.filter((f) => /^security[\\/]/.test(f.file));
+      assert.deepEqual(guardianFindings.map((f) => `${f.rule?.id ?? f.id} ${f.file}`), []);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

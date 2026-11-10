@@ -71,7 +71,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-057 | OPEN | Any mention of `otlc-guardian:audit-exempt` in a file's first 4 KB exempts the whole file, including a string or a comment about the marker |
 | BUG-058 | OPEN | Hook `ignorePaths` is a substring match: an entry such as `docs` exempts every path containing it |
 | BUG-059 | OPEN | Audit exemptions do not reach the project checks: `DEP-001`, `DEP-002`, `WEB-002` still read exempt files |
-| BUG-060 | OPEN | `guardian init` copies Guardian's own `.github/` (CODEOWNERS naming Guardian's maintainer, templates) and allowlist into every project |
+| BUG-060 | SMOKE-TESTING | `guardian init` copies Guardian's own `.github/` (CODEOWNERS naming Guardian's maintainer, templates) and allowlist into every project |
 | BUG-061 | SMOKE-TESTING | `guardian init` and `update` on an invalid `.claude/settings.json` stop with a raw stack trace after earlier steps are written |
 | BUG-062 | SMOKE-TESTING | `guardian check` passes (exit 0, "correctly installed") when the hook smoke test fails, and never checks the hook is registered |
 | BUG-063 | OPEN | HIGH: the PreToolUse hook fails open in every CommonJS project: the ESM scanner cannot load under `"type": "commonjs"` |
@@ -767,9 +767,11 @@ Exempt files are skipped by per-file rules but still passed to the project check
 
 ### BUG-060: `init` copies Guardian's own repo files into projects
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 `runInit()` copies Guardian's whole `.github/` folder (skipping existing files): `CODEOWNERS` naming Guardian's maintainer, the issue and PR templates and `secret_scanning.yml`, along with the workflow. It also copies `security/.audit-allowlist` with Guardian's own seven entries, so a fresh project audits with files exempt for reasons that belong to Guardian's repo. Fix: copy only the workflow, and seed an empty allowlist with the format comment. SETUP.md's uninstall step 4 now lists the copied files.
+
+**Fix (2026-11-10).** Step 8 of `runInit()` copies only `PROJECT_GITHUB_FILES` (`workflows/security-audit.yml`, which guards its Guardian-only steps with `hashFiles()`, and `secret_scanning.yml`), each only when missing. `CODEOWNERS` and the PR and issue templates stay in Guardian's repo. The allowlist is excluded from both copy paths (`copyDirSafe()` and `refreshOwnedDir()` take an `exclude` set) and `installProjectAllowlist()` writes it when missing from `projectAllowlistText()`: the format comments plus the entries for `security/` files Guardian installs. The `security/` entries stay because those modules' pattern definitions match themselves; an empty allowlist would make a fresh project fail its own audit. Tests: `tests/init.test.js`, "BUG-060" block (4 cases; 3 failed before the fix, the fourth guards a clean audit of a fresh install). Projects set up before the fix keep the files already copied. Smoke test: `guardian init` in a new repo, then confirm `.github/` holds two files and the allowlist three entries.
 
 ### BUG-061: `init`/`update` crash on an invalid settings file
 

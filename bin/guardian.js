@@ -1162,11 +1162,12 @@ const COPY_IGNORE = new Set([
  * Never blindly overwrites an entire directory.
  * Skips any entry whose basename is in COPY_IGNORE.
  */
-function copyDirSafe(srcDir, destDir, label) {
+function copyDirSafe(srcDir, destDir, label, exclude = new Set()) {
   if (!existsSync(srcDir)) return;
   mkdirSync(destDir, { recursive: true });
 
   for (const entry of readdirSync(srcDir)) {
+    if (exclude.has(entry)) continue;
     if (COPY_IGNORE.has(entry)) {
       // Don't even announce skipped build artifacts - noise in the init
       // output. The test suite asserts this list covers the regressions
@@ -1178,7 +1179,7 @@ function copyDirSafe(srcDir, destDir, label) {
     const destPath = path.join(destDir, entry);
 
     if (statSync(srcPath).isDirectory()) {
-      copyDirSafe(srcPath, destPath, `${label}/${entry}`);
+      copyDirSafe(srcPath, destPath, `${label}/${entry}`, exclude);
     } else if (!existsSync(destPath)) {
       copyFileSync(srcPath, destPath);
       ok(`${label}/${entry} - copied`);
@@ -1203,19 +1204,19 @@ function copyDirSafe(srcDir, destDir, label) {
  *
  * @returns {{ copied: number, updated: number, current: number }}
  */
-function refreshOwnedDir(srcDir, destDir, label, skip = new Set()) {
+function refreshOwnedDir(srcDir, destDir, label, skip = new Set(), exclude = new Set()) {
   const totals = { copied: 0, updated: 0, current: 0 };
   if (!existsSync(srcDir)) return totals;
   mkdirSync(destDir, { recursive: true });
 
   for (const entry of readdirSync(srcDir)) {
-    if (COPY_IGNORE.has(entry)) continue;
+    if (COPY_IGNORE.has(entry) || exclude.has(entry)) continue;
 
     const srcPath  = path.join(srcDir, entry);
     const destPath = path.join(destDir, entry);
 
     if (statSync(srcPath).isDirectory()) {
-      const sub = refreshOwnedDir(srcPath, destPath, `${label}/${entry}`, skip);
+      const sub = refreshOwnedDir(srcPath, destPath, `${label}/${entry}`, skip, exclude);
       totals.copied += sub.copied; totals.updated += sub.updated; totals.current += sub.current;
     } else if (!existsSync(destPath)) {
       copyFileSync(srcPath, destPath);
@@ -1258,6 +1259,43 @@ function warnIfScannerNotEsm(pkgPath) {
 
 /** Files under security/ that belong to the project, not to Guardian. */
 const PROJECT_OWNED_SECURITY_FILES = new Set([".audit-allowlist"]);
+
+/**
+ * Guardian's own allowlist exempts files in Guardian's repo (bin/, tests/)
+ * and the security/ modules whose pattern definitions match themselves.
+ * A project gets only the entries for files init installs there, so it
+ * never starts with exemptions for files it does not have (BUG-060).
+ * Comment lines, which document the format, are kept.
+ */
+function projectAllowlistText() {
+  const src = readFile(path.join(ROOT, "security", ".audit-allowlist"));
+  return src.split(/\r?\n/).filter((line) => {
+    const entry = line.split("#")[0].trim();
+    if (!entry) return true;
+    return entry.startsWith("security/") && existsSync(path.join(ROOT, entry));
+  }).join("\n");
+}
+
+/** Writes the project allowlist when the project has none. Never rewrites one. */
+function installProjectAllowlist(destPath) {
+  if (existsSync(destPath)) {
+    ok("security/.audit-allowlist - project-owned, left as is");
+    return;
+  }
+  mkdirSync(path.dirname(destPath), { recursive: true });
+  writeFileSync(destPath, projectAllowlistText());
+  ok("security/.audit-allowlist - created with entries for Guardian's security/ modules only");
+}
+
+/**
+ * The parts of Guardian's .github/ a project uses. CODEOWNERS (it names
+ * Guardian's maintainer) and the PR and issue templates (they describe
+ * Guardian's own contribution process) stay in Guardian's repo (BUG-060).
+ */
+const PROJECT_GITHUB_FILES = [
+  path.join("workflows", "security-audit.yml"),
+  "secret_scanning.yml",
+];
 
 // ---------------------------------------------------------------------------
 // INIT - merge Guardian into current project without breaking anything
@@ -1420,14 +1458,17 @@ function runInit({ refresh = false } = {}) {
       path.join(CWD, "security"),
       "security",
       PROJECT_OWNED_SECURITY_FILES,
+      PROJECT_OWNED_SECURITY_FILES,
     );
   } else {
     copyDirSafe(
       path.join(ROOT, "security"),
       path.join(CWD, "security"),
-      "security"
+      "security",
+      PROJECT_OWNED_SECURITY_FILES,
     );
   }
+  installProjectAllowlist(path.join(CWD, "security", ".audit-allowlist"));
   warnIfScannerNotEsm(path.join(CWD, "security", "package.json"));
 
   // NOTE (1.1.1): `tests/` is deliberately NOT copied into user projects.
@@ -1465,13 +1506,11 @@ function runInit({ refresh = false } = {}) {
     );
   }
 
-  // ── 8. .github/ - copy only, never overwrite ──────────────────────────────
+  // ── 8. .github/ - the workflow and secret scanning config, never overwrite
   log(`\n${c.bold}── .github/${c.reset}`);
-  copyDirSafe(
-    path.join(ROOT, ".github"),
-    path.join(CWD, ".github"),
-    ".github"
-  );
+  for (const rel of PROJECT_GITHUB_FILES) {
+    copyIfNew(path.join(ROOT, ".github", rel), path.join(CWD, ".github", rel), `.github/${rel.replace(/\\/g, "/")}`);
+  }
 
   // ── DONE ──────────────────────────────────────────────────────────────────
   // The "next steps" block is written to be editor-neutral. The only
@@ -1491,7 +1530,7 @@ ${c.bold}What was merged / added:${c.reset}
   • .env.example - Guardian variables appended (yours untouched)
   • security/ - Runtime guard, audit CLI, Python parity module
   • .claude/ - Claude Code hooks merged into settings.json (Claude-only)
-  • .github/ - Workflow files added (existing files skipped)
+  • .github/ - Security audit workflow and secret scanning config (existing files skipped)
 
 ${c.bold}Next steps:${c.reset}
 

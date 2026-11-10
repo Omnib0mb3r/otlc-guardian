@@ -1703,8 +1703,8 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <text class="t3" x="734" y="420">Guardian-owned</text>
 
 <rect class="bx-soft" x="40" y="444" width="300" height="50" rx="6"/>
-<text class="t1" x="54" y="466">.github/**</text>
-<text class="t3" x="54" y="484">workflow, CODEOWNERS, templates</text>
+<text class="t1" x="54" y="466">.github/ (two files)</text>
+<text class="t3" x="54" y="484">audit workflow, secret_scanning.yml</text>
 <path class="ln" d="M340,469 L716,469" marker-end="url(#in-ah)"/>
 <text class="lbl" x="360" y="462">copy if missing / never replaced</text>
 <rect class="bx-soft" x="720" y="444" width="340" height="50" rx="6"/>
@@ -1734,15 +1734,14 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 </tbody>
 </table></div>
 
-<p>Run in an empty directory on 2026-11-10, <code>init</code> produced 21 files: the four behavior files, <code>.gitignore</code>, <code>.env.example</code>, six files in <code>security/</code> (<code>.audit-allowlist</code>, <code>01-injection-guard.js</code>, <code>02-code-security.js</code>, <code>03-audit.js</code>, <code>04-sql-guard.js</code>, <code>injection_guard.py</code>), <code>.claude/settings.json</code>, the two hook scripts, and six files under <code>.github/</code> (<code>CODEOWNERS</code>, two issue templates, <code>PULL_REQUEST_TEMPLATE.md</code>, <code>secret_scanning.yml</code>, <code>workflows/security-audit.yml</code>).</p>
+<p>Run in an empty directory on 2026-11-10, <code>init</code> produced 21 files: the four behavior files, <code>.gitignore</code>, <code>.env.example</code>, six files in <code>security/</code> (<code>.audit-allowlist</code>, <code>01-injection-guard.js</code>, <code>02-code-security.js</code>, <code>03-audit.js</code>, <code>04-sql-guard.js</code>, <code>injection_guard.py</code>), <code>.claude/settings.json</code>, the two hook scripts, and six files under <code>.github/</code> (<code>CODEOWNERS</code>, two issue templates, <code>PULL_REQUEST_TEMPLATE.md</code>, <code>secret_scanning.yml</code>, <code>workflows/security-audit.yml</code>). Since the BUG-060 fix the <code>.github/</code> part is two files (<code>PROJECT_GITHUB_FILES</code>: the workflow and <code>secret_scanning.yml</code>), and <code>security/</code> gains <code>package.json</code> (BUG-063).</p>
 
 <p><code>copyDirSafe()</code> recurses and skips any entry named in <code>COPY_IGNORE</code>: <code>__pycache__</code>, <code>.pytest_cache</code>, <code>.mypy_cache</code>, <code>.ruff_cache</code>, <code>.DS_Store</code>, <code>Thumbs.db</code> and <code>node_modules</code>. Guardian's <code>tests/</code> is not copied at all (removed in 1.1.1).</p>
 
-<p>Three things a project receives that are easy to miss:</p>
+<p>What the project gets in place of Guardian's own repo files (BUG-060, fixed 2026-11-10):</p>
 <ul>
-<li><b>Guardian's own allowlist.</b> <code>security/.audit-allowlist</code> arrives with the seven entries the Guardian repo uses for itself. Three of them name files <code>init</code> just copied (<code>security/02-code-security.js</code>, <code>03-audit.js</code>, <code>04-sql-guard.js</code>), so those are exempt from the project's audit; a fresh install audits with <code>Exempt : 3 (0 marker, 3 allowlist)</code>. The other four name <code>bin/guardian.js</code> and three files under <code>tests/</code>, and they exempt whatever the project keeps at those paths. See <a href="#ch-suppression">chapter 06</a>.</li>
-<li><b>Guardian's CODEOWNERS.</b> <code>.github/CODEOWNERS</code> is the Guardian repo's file and names <code>@Omnib0mb3r</code> as owner of everything. In a project with no CODEOWNERS file of its own, that becomes the project's review rule.</li>
-<li><b>Guardian's issue and PR templates</b>, which describe Guardian, not the project.</li>
+<li><b>Its own allowlist.</b> <code>installProjectAllowlist()</code> writes <code>security/.audit-allowlist</code> when the project has none, from <code>projectAllowlistText()</code>: Guardian's format comments plus only the entries for <code>security/</code> files Guardian installs (<code>02-code-security.js</code>, <code>03-audit.js</code>, <code>04-sql-guard.js</code>, whose pattern definitions match themselves). A fresh install audits with <code>Exempt : 3 (0 marker, 3 allowlist)</code>. Guardian's entries for its own <code>bin/</code> and <code>tests/</code> files are not copied; before the fix they exempted whatever a project kept at those paths. An existing allowlist is never rewritten, by <code>init</code> or <code>update</code>. See <a href="#ch-suppression">chapter 06</a>.</li>
+<li><b>No CODEOWNERS and no templates.</b> Guardian's <code>CODEOWNERS</code> names Guardian's maintainer as owner of everything and would have become the project's review rule; its PR and issue templates describe Guardian's contribution process. Projects that ran <code>init</code> before the fix still have them; SETUP.md, uninstall step 4, lists them.</li>
 </ul>
 
 <h3 id="in-markers">The marker block in the behavior files</h3>
@@ -1893,7 +1892,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 
 <h3 id="in-open">Known open bugs</h3>
 
-<div class="limit"><b>Open on 2026-11-10</b><p><b>BUG-060</b> (OPEN): <code>init</code> copies Guardian's whole <code>.github/</code> folder, including a <code>CODEOWNERS</code> that names Guardian's maintainer, and Guardian's own allowlist entries. <b>BUG-061</b> (SMOKE-TESTING): fixed 2026-11-10, an invalid settings file now stops the run before anything is written. <b>BUG-062</b> (SMOKE-TESTING): fixed 2026-11-10, a failed smoke test and a missing registration now fail <code>check</code>.</p><p><b>BUG-028</b> (OPEN): the registered hook command, <code>node .claude/hooks/injection-guard-hook.mjs</code>, is relative to the current directory. After a session changes directory, Node cannot find the file. The <code>$CLAUDE_PROJECT_DIR</code> form has not been tested on Windows, so <code>init</code> still writes the relative form. <b>BUG-034</b> (OPEN): Bash is now in the PreToolUse matcher, so after a <code>cd</code> every Bash call hits BUG-028 and reports a hook error. <b>BUG-035</b> (OPEN): an "ask" decision waits for a person, which stalls an unattended worker in default and acceptEdits modes; only bypass mode turns ask into deny. <b>BUG-037</b> (OPEN): the <code>update</code> migration removes Guardian's command from any block whose matcher differs from the default, including a wider custom matcher a user chose, and re-registers it under the default. Commands are compared as exact strings, so a project that changed the command to the <code>$CLAUDE_PROJECT_DIR</code> form gets the relative form added as a second registration. <b>BUG-045</b> (OPEN): the hook's settings protection treats the <code>$CLAUDE_PROJECT_DIR</code> command form as a weakening, so making that switch by hand also gets a prompt. <b>BUG-027</b> (IN-PROGRESS): the hook files and scanner can be written by the agent they guard. The in-hook half landed in 1.5.0; <code>update</code>'s own writes are outside it (see <a href="#in-hookblind">Update and the PreToolUse hook</a>). <b>BUG-025</b> (SMOKE-TESTING): <code>update</code> now overwrites Guardian-owned files; it has not yet been run on another real project. The CHANGELOG says 1.5.0 has not been rolled out to any other project.</p></div>
+<div class="limit"><b>Open on 2026-11-10</b><p><b>BUG-060</b> (SMOKE-TESTING): fixed 2026-11-10, <code>init</code> no longer copies Guardian's <code>CODEOWNERS</code>, templates or its own allowlist entries. <b>BUG-061</b> (SMOKE-TESTING): fixed 2026-11-10, an invalid settings file now stops the run before anything is written. <b>BUG-062</b> (SMOKE-TESTING): fixed 2026-11-10, a failed smoke test and a missing registration now fail <code>check</code>.</p><p><b>BUG-028</b> (OPEN): the registered hook command, <code>node .claude/hooks/injection-guard-hook.mjs</code>, is relative to the current directory. After a session changes directory, Node cannot find the file. The <code>$CLAUDE_PROJECT_DIR</code> form has not been tested on Windows, so <code>init</code> still writes the relative form. <b>BUG-034</b> (OPEN): Bash is now in the PreToolUse matcher, so after a <code>cd</code> every Bash call hits BUG-028 and reports a hook error. <b>BUG-035</b> (OPEN): an "ask" decision waits for a person, which stalls an unattended worker in default and acceptEdits modes; only bypass mode turns ask into deny. <b>BUG-037</b> (OPEN): the <code>update</code> migration removes Guardian's command from any block whose matcher differs from the default, including a wider custom matcher a user chose, and re-registers it under the default. Commands are compared as exact strings, so a project that changed the command to the <code>$CLAUDE_PROJECT_DIR</code> form gets the relative form added as a second registration. <b>BUG-045</b> (OPEN): the hook's settings protection treats the <code>$CLAUDE_PROJECT_DIR</code> command form as a weakening, so making that switch by hand also gets a prompt. <b>BUG-027</b> (IN-PROGRESS): the hook files and scanner can be written by the agent they guard. The in-hook half landed in 1.5.0; <code>update</code>'s own writes are outside it (see <a href="#in-hookblind">Update and the PreToolUse hook</a>). <b>BUG-025</b> (SMOKE-TESTING): <code>update</code> now overwrites Guardian-owned files; it has not yet been run on another real project. The CHANGELOG says 1.5.0 has not been rolled out to any other project.</p></div>
 
 </section>
 
@@ -1992,7 +1991,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 
 <h3 id="sp-repo">This repo's allowlist</h3>
 
-<p><code>security/.audit-allowlist</code> in the Guardian repo has seven entries. <code>guardian init</code> copies this same file into every new project (<a href="#ch-install">chapter 05</a>), so a new project starts with these entries too. There, the three <code>security/</code> lines cover the copied Guardian files, and the other four cover whatever the project keeps at those paths.</p>
+<p><code>security/.audit-allowlist</code> in the Guardian repo has seven entries. <code>guardian init</code> gives a new project only the three <code>security/</code> lines, which cover the Guardian modules it copies there (<code>projectAllowlistText()</code>, <a href="#ch-install">chapter 05</a>). Until 2026-11-10 (BUG-060) it copied all seven, and the four <code>bin/</code> and <code>tests/</code> lines exempted whatever a project kept at those paths.</p>
 
 <div class="tbl dense"><table>
 <thead><tr><th>Path</th><th>Reason given</th></tr></thead>
@@ -2007,7 +2006,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 </tbody>
 </table></div>
 
-<p><code>guardian update</code> leaves a project's allowlist alone (<code>PROJECT_OWNED_SECURITY_FILES</code>). It copies the file only when it is missing, so a project's edits survive and Guardian's later changes to its own list do not arrive.</p>
+<p><code>guardian update</code> leaves a project's allowlist alone (<code>PROJECT_OWNED_SECURITY_FILES</code>). It writes the project version only when the file is missing, so a project's edits survive and Guardian's later changes to its own list do not arrive.</p>
 
 <h3 id="sp-ignorepaths">Hook exemption: otlcGuardian.ignorePaths</h3>
 

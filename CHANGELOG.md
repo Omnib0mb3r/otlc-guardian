@@ -172,6 +172,15 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **`init` installs a project's files, not Guardian's repo files
+  (BUG-060).** It copied Guardian's whole `.github/` folder, including a
+  `CODEOWNERS` that made Guardian's maintainer the owner of everything, and
+  Guardian's issue and PR templates; and it copied Guardian's own audit
+  allowlist, whose `bin/` and `tests/` entries exempted whatever a project
+  kept at those paths. `init` now adds only the audit workflow and
+  `secret_scanning.yml`, and writes a project allowlist with entries for the
+  `security/` modules it installs. An existing allowlist is never rewritten.
+  Projects set up earlier keep the copied files; SETUP.md lists them.
 - **An invalid settings file stops `init` and `update` before they write
   (BUG-061).** Invalid JSON in `.claude/settings.json` was found only at step
   6, after the behavior files, `.gitignore`, `.env.example` and `security/`
