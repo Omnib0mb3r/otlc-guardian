@@ -201,6 +201,13 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **PowerShell host options in slash form are read (BUG-067, re-probe 2
+  S3).** Windows PowerShell takes `/enc`, `/EncodedCommand` and `/c` as
+  it takes `-enc`, so `powershell /enc <base64>` ran a payload or a
+  settings write the hook never decoded. Every host option is now read
+  with `-`, `--`, `/` or Git Bash's `//`; a slash word counts only when
+  it is a bare option name, so `/tmp/x.ps1` is not one.
+
 - **`find -exec` acts on what find matches (BUG-065, re-probe 2 S4).**
   The embedded command of `-exec`, `-execdir`, `-ok` and `-okdir` was
   read with `{}` as a file literally named `{}`, so

@@ -1868,6 +1868,35 @@ describe("PreToolUse hook - PowerShell parameter prefixes and encoded scripts (B
   test("a clean -EncodedCommand script is silent", () => {
     expectSilent(run("Bash", `powershell -enc ${encoded("Add-Content CLAUDE.md 'Use pnpm.'")}`, "bypassPermissions"));
   });
+
+  // Re-probe 2, S3: Windows PowerShell takes its options with "/" too
+  // (Git Bash spells a leading "/" as "//").
+  for (const [tool, command] of [
+    ["PowerShell", `powershell /enc ${encoded(`Add-Content CLAUDE.md '${CRITICAL_PAYLOAD}'`)}`],
+    ["Bash", `powershell /enc ${encoded(`Add-Content CLAUDE.md '${CRITICAL_PAYLOAD}'`)}`],
+    ["Bash", `powershell.exe //EncodedCommand ${encoded(`Add-Content CLAUDE.md '${CRITICAL_PAYLOAD}'`)}`],
+    ["PowerShell", `powershell /NoProfile /e ${encoded(`Add-Content AGENTS.md '${CRITICAL_PAYLOAD}'`)}`],
+  ]) {
+    stagedOnly(`${tool}: a payload inside a slash-form encoded script asks (S3): ${command.slice(0, 40)}`, () => {
+      const out = run(tool, command);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+      expectWarning(out, "GUARD-INJ");
+    });
+  }
+  for (const [tool, command] of [
+    ["PowerShell", `powershell /EncodedCommand ${encoded(`Set-Content .claude/settings.local.json '${DISABLE}'`)}`],
+    ["PowerShell", `powershell /c "Set-Content .claude/settings.local.json '${DISABLE}'"`],
+    ["Bash", `pwsh //Command "Remove-Item .claude/settings.json"`],
+    ["PowerShell", `powershell /ExecutionPolicy Bypass /Command "Remove-Item .claude/settings.json"`],
+  ]) {
+    stagedOnly(`${tool}: a settings write through a slash-form option asks (S3): ${command.slice(0, 40)}`, () => {
+      const out = run(tool, command);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    });
+  }
+  test("a clean slash-form encoded script is silent (S3)", () => {
+    expectSilent(run("PowerShell", `powershell /enc ${encoded("Write-Output 'Use pnpm.'")}`, "bypassPermissions"));
+  });
 });
 
 describe("PreToolUse hook - removals and read-only inline code are judged by their effect (BUG-044)", () => {

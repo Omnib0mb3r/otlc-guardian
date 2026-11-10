@@ -1402,12 +1402,17 @@ function powershellWrites(name, args, dir, ctx, stdin) {
  */
 const PS_HOST_VALUE_OPTIONS = ["executionpolicy", "windowstyle", "inputformat", "outputformat", "configurationname", "configurationfile",
   "workingdirectory", "settingsfile", "custompipename", "version", "psconsolefile", "encodedarguments"];
+// A host option: "-" or "--", or "/" as Windows PowerShell also takes it
+// (Git Bash writes a leading "/" as "//"); a slash word must be a bare
+// option name, so a path such as /tmp/x.ps1 is not one (re-probe 2, S3).
+const PS_HOST_OPTION = /^(?:--?|\/\/?(?=[a-z]+(?::|$)))/;
+
 function powershellScript(args) {
   const prefixOf = (word, option, min = 1) => word.length >= min && option.startsWith(word);
   for (let k = 0; k < args.length; k++) {
     const a = args[k].toLowerCase();
-    if (!a.startsWith("-")) return { text: args.slice(k).join(" "), encoded: false };
-    const opt = a.replace(/^--?/, "");
+    if (!PS_HOST_OPTION.test(a)) return { text: args.slice(k).join(" "), encoded: false };
+    const opt = a.replace(PS_HOST_OPTION, "");
     if (["cwa", "commandwithargs"].includes(opt) || prefixOf(opt, "command")) return { text: args.slice(k + 1).join(" "), encoded: false };
     if (opt === "ec" || prefixOf(opt, "encodedcommand")) {
       return args[k + 1] ? { text: Buffer.from(args[k + 1], "base64").toString("utf16le"), encoded: true } : null;
