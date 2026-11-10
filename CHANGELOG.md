@@ -201,6 +201,13 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **`find -exec` acts on what find matches (BUG-065, re-probe 2 S4).**
+  The embedded command of `-exec`, `-execdir`, `-ok` and `-okdir` was
+  read with `{}` as a file literally named `{}`, so
+  `find .claude -name 'settings*.json' -exec rm {} \;` deleted the settings
+  silently. `{}` now stands for each starting point, also inside a word
+  (`{}.bak`), and every clause is read, not only the first.
+
 - **Inline code that names a guarded file counts as writing it (BUG-044,
   re-probe 2 S6).** The BUG-044 change read inline interpreter code as a
   write only when it held a known write call, so an alias

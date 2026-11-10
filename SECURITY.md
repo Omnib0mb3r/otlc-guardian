@@ -50,7 +50,7 @@ Specifically:
 
   Known gaps in what it does read, logged and not yet fixed in 1.5.0 (each is a hook change, and the hook is a protected file):
   - Windows path aliases: a directory stream suffix on a folder (`.claude::$INDEX_ALLOCATION/settings.local.json`) and 8.3 short names (`CLAUDE~1/settings.local.json`, `PLANNI~1/STATE.md`) reach watched and protected files unmatched (BUG-064; fix staged in `staging/`, not yet live);
-  - deletes and replaces it does not parse: `find -delete`, `rsync --delete`, `tar -x` members (BUG-065; fix staged in `staging/`, not yet live);
+  - deletes and replaces it does not parse: `find -delete`, `find -exec rm {}`, `rsync --delete`, `tar -x` members (BUG-065; fix staged in `staging/`, not yet live);
   - `cmd /c` and `cmd.exe /c` are read by neither shell reader, so `rd`, `del`, `copy` and redirects through them pass (BUG-048, BUG-065, BUG-066; the BUG-048 fix is staged in `staging/`, not yet live);
   - a PowerShell tool command is read only for redirections and Guardian's list of cmdlets, so `git`, `bash -c`, `node -e` and `curl -o` typed into the PowerShell tool are not read (BUG-048; fix staged in `staging/`, not yet live);
   - PowerShell parameter prefixes (`-LiteralP`, `-Pat`, `-Val`) are not recognized as the parameters they abbreviate (BUG-067; fix staged in `staging/`, not yet live);

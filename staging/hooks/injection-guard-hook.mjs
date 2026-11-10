@@ -1033,18 +1033,22 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   } else if (name === "eval") {
     recurse(args.join(" "), dir);
   } else if (name === "find") {
-    const exec = args.findIndex((a) => /^-(?:exec|execdir|ok|okdir)$/.test(a));
-    if (exec >= 0) {
-      const end = args.findIndex((a, k) => k > exec && (a === ";" || a === "+"));
-      commandWrites(args.slice(exec + 1, end < 0 ? args.length : end), dir, ctx);
+    // Which files match is not visible in the command, so what find acts
+    // on is each starting point: -delete removes it (BUG-065), and in each
+    // -exec, -execdir, -ok and -okdir clause {} stands for it, also inside
+    // a word ({}.bak), so "-exec rm {} ;" removes it (re-probe 2, S4).
+    const first = args.findIndex((a) => /^[-(!]/.test(a));
+    const starts = args.slice(0, first < 0 ? args.length : first);
+    const roots = starts.length > 0 ? starts : ["."];
+    for (let k = 0; k < args.length; k++) {
+      if (!/^-(?:exec|execdir|ok|okdir)$/.test(args[k])) continue;
+      let end = args.findIndex((a, j) => j > k && (a === ";" || a === "+"));
+      if (end < 0) end = args.length;
+      const clause = args.slice(k + 1, end);
+      for (const root of roots) commandWrites(clause.map((a) => a.split("{}").join(root)), dir, ctx);
+      k = end;
     }
-    // -delete removes whatever matches under each starting point, and
-    // which files match is not visible in the command (BUG-065).
-    if (args.includes("-delete")) {
-      const first = args.findIndex((a) => /^[-(!]/.test(a));
-      const starts = args.slice(0, first < 0 ? args.length : first);
-      for (const p of starts.length > 0 ? starts : ["."]) add(dir, p);
-    }
+    if (args.includes("-delete")) for (const p of roots) add(dir, p);
   } else if (name === "tar") {
     tarWrites(args, dir, ctx);
   } else if (name === "unzip") {

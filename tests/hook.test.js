@@ -1535,6 +1535,30 @@ describe("PreToolUse hook - explicit deletes and replaces of the settings and gu
     });
   }
 
+  // Re-probe 2, S4: in -exec, {} stands for what find matches under its
+  // starting points.
+  for (const command of [
+    "find .claude -name 'settings*.json' -exec rm {} \\;",
+    "find .claude -type f -exec rm -f {} +",
+    "find .claude/hooks -execdir rm {} \\;",
+    "find security -ok rm {} \\;",
+    "find .claude -name '*.json' -exec mv {} {}.bak \\;",
+    "find .claude -type f -exec chmod 000 {} +",
+    "find . -path './.claude/*' -exec rm {} +",
+  ]) {
+    stagedOnly(`asks: ${command} (S4)`, () => {
+      const out = bash(command);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    });
+  }
+  for (const command of [
+    "find src -name '*.js' -exec grep -l TODO {} +",
+    "find build -type f -exec rm {} +",
+    "find .claude -name '*.json' -exec cat {} \\;",
+  ]) {
+    test(`silent: ${command} (S4)`, () => expectSilent(bash(command)));
+  }
+
   for (const command of [
     "find src -name '*.tmp' -delete",
     "find .claude -name '*.json'",
