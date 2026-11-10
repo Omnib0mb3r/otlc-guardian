@@ -313,6 +313,8 @@ Negative: two test files importing the same version, or two test files importing
 
 ## Item 5 - shadcn `INJ-003` allowlist
 
+> **Superseded (2026-11-10, BUG-003).** Not built. The component is not static (it writes the `id` prop and ChartConfig colours into a `<style>` element, which can break out under server rendering), so a built-in path skip or fingerprint would hide a live sink. INJ-003 stays; projects use a per-rule allowlist entry (`src/components/ui/chart.jsx  [INJ-003]  # reason: ...`). See BUGS.md BUG-003 and manual chapter 06.
+
 ### Problem
 
 `INJ-003` correctly flags `dangerouslySetInnerHTML`, but the shadcn `chart.jsx` component (which is generated boilerplate copied into many React projects) uses it for static CSS variable injection. Every shadcn user gets one HIGH finding they have to triage.

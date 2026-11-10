@@ -182,6 +182,15 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **INJ-003 on shadcn `chart.jsx` resolved without a rule change
+  (BUG-003).** The finding is right: `ChartStyle` writes the `id` prop and
+  ChartConfig colours into a `<style>` element unescaped, which can break
+  out under server rendering when config holds user data. The documented
+  fix is a per-rule allowlist line,
+  `src/components/ui/chart.jsx  [INJ-003]  # reason: ...`, recorded once
+  the project has checked its config is developer-defined (manual chapter
+  06, `guides/INDEX.md`).
+
 - **AUTHZ-001 sees auth middleware (BUG-070).** Only the handler body
   was read, so `router.delete(path, requireAuth, handler)`, the most
   common Express auth shape, was reported CRITICAL as unauthenticated.

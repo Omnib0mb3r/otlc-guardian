@@ -64,6 +64,18 @@ src/legacy/report.js         [ERR-003, CFG-001]   # reason: CLI report script, o
 <li>Several lines for one path merge: rule lists add up, and a whole-file entry wins over a per-rule one.</li>
 </ul>
 
+<h4 id="sp-shadcn">shadcn chart.jsx and INJ-003</h4>
+
+<p>Every project that adds the shadcn chart component gets one INJ-003 (HIGH) finding in <code>components/ui/chart.jsx</code> (or <code>.tsx</code>). The finding is right. Only <code>THEMES</code> in that file is a constant: <code>ChartStyle</code> writes the <code>id</code> prop and every colour in the <code>config</code> prop into a <code>&lt;style&gt;</code> element through <code>dangerouslySetInnerHTML</code>, unescaped.</p>
+
+<div class="limit"><b>Server-render risk</b><p>React does not escape <code>dangerouslySetInnerHTML</code> content when it renders on the server. In a server-rendered app (Next.js), a <code>ChartConfig</code> colour or an <code>id</code> holding <code>&lt;/style&gt;&lt;script&gt;...</code> closes the style tag and runs as script, and any value can inject CSS. That matters when chart config is built from user data, such as user-chosen dashboard colours or a stored theme. The audit reads one file at a time and cannot see where the config comes from, so it keeps reporting the sink.</p></div>
+
+<p>Once you have checked that <code>ChartConfig</code> and <code>id</code> are developer constants in your app, record that decision with a per-rule entry, which keeps every other rule running on the file:</p>
+
+<pre><code>src/components/ui/chart.jsx  [INJ-003]  # reason: stock shadcn ChartStyle; ChartConfig and id are developer constants, never user input</code></pre>
+
+<p>Do not use a whole-file entry for it, and re-check the line if you change the component or start building chart config from user data. Guardian has no built-in exemption for the component (BUG-003, resolved 2026-11-10: a path skip or fingerprint would hide the sink in the apps where it is live).</p>
+
 <p>Both warnings go to stderr through <code>console.warn</code>. The path is stored with backslashes turned into forward slashes. Nothing else is normalized.</p>
 
 <p><code>exemptionMechanism()</code> takes each scanned file's path relative to the project root, with forward slashes, and looks it up in the map. The match is exact:</p>

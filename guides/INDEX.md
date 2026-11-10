@@ -37,6 +37,21 @@ always has somewhere to send you.
 | `WEB-002` | MEDIUM | project | nginx server block with no Content-Security-Policy anywhere in the project |
 | `VAL-001` | HIGH | analyzer | Request body reaches a side effect without a schema parse |
 | `VAL-002` | CRITICAL | pattern | Raw email header built by interpolation - CRLF injection makes it an open relay |
+| `INJ-003` | HIGH | pattern | `dangerouslySetInnerHTML` - sanitize the HTML first (see [form-validation.md](form-validation.md), section 2, XSS Sanitization) |
+
+### INJ-003 and the shadcn chart component
+
+The stock shadcn `components/ui/chart.jsx` reports INJ-003, correctly: its `ChartStyle`
+writes the `id` prop and the `ChartConfig` colours into a `<style>` element unescaped,
+and under server rendering a value holding `</style>` breaks out of the style tag. If
+your chart config and ids are developer constants, never user input, record that with a
+per-rule allowlist line so every other rule still runs on the file:
+
+```
+src/components/ui/chart.jsx  [INJ-003]  # reason: stock shadcn ChartStyle; ChartConfig and id are developer constants, never user input
+```
+
+Manual chapter 06 ("shadcn chart.jsx and INJ-003") has the full reasoning.
 
 `analyzer` rules use the per-file route-handler analyzer in
 [`../security/03-audit.js`](../security/03-audit.js) rather than a regex, because

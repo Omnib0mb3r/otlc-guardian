@@ -3059,6 +3059,53 @@ describe("Per-rule allowlist entries", () => {
 });
 
 // ---------------------------------------------------------------------------
+// BUG-003: stock shadcn chart.jsx and a per-rule INJ-003 entry
+// ---------------------------------------------------------------------------
+//
+// shadcn's ChartStyle writes the `id` prop and the ChartConfig colours into
+// a <style> element through dangerouslySetInnerHTML, unescaped. INJ-003 is
+// right to report it: under server rendering a config value holding
+// `</style>` breaks out of the style tag. Whether that can happen depends
+// on where ChartConfig comes from, which a per-file audit cannot see, so
+// the rule stays and the project records its decision per rule.
+
+describe("BUG-003: shadcn chart.jsx with a per-rule INJ-003 entry", () => {
+  const chart = [
+    `const THEMES = { light: "", dark: ".dark" }`,
+    `const ChartStyle = ({ id, config }) => {`,
+    `  const colorConfig = Object.entries(config).filter(([, config]) => config.theme || config.color)`,
+    `  if (!colorConfig.length) {`,
+    `    return null`,
+    `  }`,
+    `  return (`,
+    `    (<style`,
+    `      dangerouslySetInnerHTML={{`,
+    `        __html: Object.entries(THEMES)`,
+    `          .map(([theme, prefix]) => \`${"$"}{prefix} [data-chart=${"$"}{id}] {${"$"}{colorConfig.map(([key, c]) => \`--color-${"$"}{key}: ${"$"}{c.color};\`).join("\\n")}}\`)`,
+    `          .join("\\n"),`,
+    `      }} />)`,
+    `  );`,
+    `}`,
+    `console.log("chart loaded")`,
+    ``,
+  ].join("\n");
+  const run = (allowlist) => withTempProject({
+    "src/components/ui/chart.jsx": chart,
+    ...(allowlist ? { "security/.audit-allowlist": allowlist + "\n" } : {}),
+  }, (dir) => JSON.parse(runAuditArgs(dir, "--json").stdout).findings.map((f) => f.rule.id));
+
+  test("INJ-003 still reports the stock component", () => {
+    assert.ok(run(null).includes("INJ-003"));
+  });
+
+  test("the documented per-rule line clears INJ-003 and keeps every other rule", () => {
+    const ids = run("src/components/ui/chart.jsx  [INJ-003]  # reason: stock shadcn ChartStyle; ChartConfig and id are developer constants, never user input");
+    assert.ok(!ids.includes("INJ-003"), ids.join(", "));
+    assert.ok(ids.includes("ERR-003"), `other rules must still run on the file: ${ids.join(", ")}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

@@ -14,7 +14,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 |---|---|---|
 | BUG-001 | RESOLVED | `INJ-005b` fires CRITICAL on any template literal containing a SQL-looking word, including `window.confirm` and JSX labels |
 | BUG-002 | OPEN | Audit has zero rules covering what AI agents can write to, despite the README claiming AI-attack coverage |
-| BUG-003 | OPEN | `INJ-003` fires HIGH on stock shadcn `chart.jsx` boilerplate that every shadcn user inherits |
+| BUG-003 | RESOLVED | `INJ-003` fires HIGH on stock shadcn `chart.jsx`: the rule is right; the fix is a per-rule allowlist entry |
 | BUG-004 | RESOLVED | Planned rule id `DEP-001` for npm version drift collides with the existing `DEP-001` health-check rule |
 | BUG-005 | DEFERRED | No detection of `setTimeout`-before-query race conditions (planned `RACE-001`) |
 | BUG-006 | DEFERRED | No detection of inconsistent `npm:` import versions across Deno-style project files (now `DEP-003`) |
@@ -182,8 +182,9 @@ Proposed rule shape and file globs in `HANDOFF-AUDIT-IMPROVEMENTS.md` § Item 2.
 
 ### BUG-003 - `INJ-003` fires on stock shadcn boilerplate
 
-**Status:** OPEN
+**Status:** RESOLVED
 **Found:** 2026-07-20 (originally observed 2026-04-27)
+**Fixed:** 2026-11-10 (1.5.0, no rule change)
 **Area:** `security/03-audit.js` - `INJ-003`
 
 `INJ-003` correctly flags `dangerouslySetInnerHTML`, but shadcn's generated
@@ -195,6 +196,33 @@ for the exact shadcn pattern, narrow enough that a modified version of the compo
 still fires.
 
 Proposal in `HANDOFF-AUDIT-IMPROVEMENTS.md` § Item 5.
+
+**Correction (2026-11-10).** The premise above is wrong. Read from a real copy
+(`C:\dev\Projects\OPS\Zion CMMS\src\components\ui\chart.jsx`): only `THEMES` is a
+constant. `ChartStyle` writes the `id` prop and every colour in the `config` prop
+(`ChartConfig`) into a `<style>` element through `dangerouslySetInnerHTML`, unescaped.
+React does not escape that content when it renders on the server, so under server
+rendering (Next.js) a config value holding `</style><script>...` breaks out of the style
+tag and runs as script. Whether that can happen depends on where `ChartConfig` and `id`
+come from (developer constants in most apps, user data in some, such as user-chosen
+dashboard colours), which a per-file audit cannot see. A built-in fingerprint or path
+skip would hide a live sink in exactly those apps.
+
+**Resolution (2026-11-10).** The rule is right and stays unchanged; the fix is the
+per-rule exemption (`2ffd9d9`, per-rule allowlist entries). A project that has checked
+its data flow adds one line that switches off INJ-003 in that file only, and every other
+rule still runs there:
+
+    src/components/ui/chart.jsx  [INJ-003]  # reason: stock shadcn ChartStyle; ChartConfig and id are developer constants, never user input
+
+Documented in manual chapter 06 (section "shadcn chart.jsx and INJ-003") and in
+`guides/INDEX.md` (the INJ-003 row; there is no INJ-003 field guide, and
+`guides/form-validation.md`, the XSS guide, is stored verbatim and not edited). The
+handoff proposal (path-based skip) is marked superseded. Test: `tests/audit.test.js`,
+"BUG-003" block (INJ-003 fires on the stock `ChartStyle` shape; the documented line
+clears it while ERR-003 still fires in the same file). No smoke test needed beyond the
+per-rule entry's own: add the line in a real shadcn project and see INJ-003 gone and
+`[allowlist rule] src/components/ui/chart.jsx [INJ-003]` in the audit header.
 
 ---
 
