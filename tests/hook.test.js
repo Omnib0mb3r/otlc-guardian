@@ -1165,6 +1165,61 @@ describe("PreToolUse hook: self-protection of the hook files and scanner (1.5.0 
       expectSilent(run(dir, "Write", { file_path: path.join(dir, ".claude", "hooks", "my-hook.mjs"), content: "export {};\n" }));
     });
   });
+
+  // BUG-063: security/package.json pins the scanner to ES modules; with
+  // "type": "commonjs" there (or the file gone, in a CommonJS project) the
+  // scanner cannot load and the hook fails open on every later write.
+  const PKG_REL = "security/package.json";
+  const inGuardedPackage = (fn) => inGuardedProject((dir) => {
+    writeFileSync(path.join(dir, PKG_REL), '{ "type": "module" }\n');
+    return fn(dir);
+  });
+
+  stagedOnly("BUG-063: a Write of security/package.json to commonjs asks, denied in bypass", () => {
+    inGuardedPackage((dir) => {
+      const tool_input = { file_path: path.join(dir, PKG_REL), content: '{ "type": "commonjs" }\n' };
+      const out = run(dir, "Write", tool_input);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+      expectWarning(out, "package.json", "Guardian's own enforcement");
+      assert.equal(decisionOf(run(dir, "Write", tool_input, "bypassPermissions")), "deny");
+    });
+  });
+
+  stagedOnly("BUG-063: an Edit of security/package.json asks", () => {
+    inGuardedPackage((dir) => {
+      const out = run(dir, "Edit", { file_path: path.join(dir, PKG_REL), old_string: '"module"', new_string: '"commonjs"' });
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    });
+  });
+
+  for (const command of [
+    `echo '{"type":"commonjs"}' > ${PKG_REL}`,
+    `rm ${PKG_REL}`,
+    `mv ${PKG_REL} security/package.off`,
+  ]) {
+    stagedOnly(`BUG-063: Bash that changes security/package.json asks: ${command}`, () => {
+      inGuardedPackage((dir) => assert.equal(decisionOf(run(dir, "Bash", { command })), "ask"));
+    });
+  }
+
+  stagedOnly("BUG-063: PowerShell Set-Content on security/package.json asks", () => {
+    inGuardedPackage((dir) => {
+      const command = `Set-Content -Path ${PKG_REL} -Value '{"type":"commonjs"}'`;
+      assert.equal(decisionOf(run(dir, "PowerShell", { command })), "ask");
+    });
+  });
+
+  stagedOnly("BUG-063: the package.json beside the scanner this hook runs is covered even outside the project", () => {
+    inGuardedProject((dir) => {
+      const file = path.join(ENFORCEMENT_ROOT, PKG_REL);
+      const out = run(dir, "Write", { file_path: file, content: '{ "type": "commonjs" }\n' });
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    });
+  });
+
+  test("BUG-063: reading security/package.json is silent", () => {
+    inGuardedPackage((dir) => expectSilent(run(dir, "Bash", { command: `cat ${PKG_REL}` })));
+  });
 });
 
 describe("Web content guard - 1.5.0 hardening", () => {

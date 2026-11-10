@@ -194,6 +194,20 @@ project (each project picks it up when `guardian update` is run there).
 - In `bypassPermissions` mode the hook's two "ask" decisions become "deny",
   because prompts are off there and nobody would be asked.
 
+### Staged (fixed in staging/, not yet live)
+
+These fixes are in the staged copies of the protected files
+(`staging/hooks/`, `staging/security/`) and tested by
+`npm run test:staging`. They reach the live hooks and scanner when the
+maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
+
+- **The hook protects `security/package.json` (BUG-063, second half).**
+  The file that pins the scanner to ES modules joins the hook's protected
+  set, both the project copy and the one beside the scanner the hook runs
+  from, so a Write, Edit or shell command that changes it to
+  `"type": "commonjs"` or removes it asks (denied in bypass mode) instead
+  of silently switching the scanner off.
+
 ### Fixed
 
 - **INJ-003 on shadcn `chart.jsx` resolved without a rule change

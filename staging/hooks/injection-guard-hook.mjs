@@ -25,7 +25,8 @@
 //             (hook removed, hooks disabled, ignore list grown, watch
 //             list shrunk, defaults turned off).
 //   ask       Any change to Guardian's own enforcement files: the two
-//             hook scripts and the scanner they import, both the copies
+//             hook scripts, the scanner they import and the
+//             security/package.json that lets it load, both the copies
 //             in the project and the ones this hook runs from.
 //   In bypassPermissions mode both "ask" cases above become "deny":
 //   prompts are switched off there, so nobody would be asked.
@@ -138,6 +139,10 @@ const DEFAULT_WATCH_FILE_PATTERNS = [
 
 const GUARDIAN_HOOK_FILES = ["injection-guard-hook.mjs", "web-content-guard.mjs"];
 const GUARDIAN_SCANNER_FILE = path.join("security", "01-injection-guard.js");
+// Pins the scanner to ES modules whatever the host project's package.json
+// says. Changed to "commonjs", or removed in a CommonJS project, the
+// scanner no longer loads and this hook fails open (BUG-063).
+const GUARDIAN_SCANNER_PACKAGE = path.join("security", "package.json");
 const SETTINGS_FILE_PATTERN = /(?:^|\/)\.claude\/settings(?:\.local)?\.json$/i;
 
 // ---------------------------------------------------------------------------
@@ -998,7 +1003,8 @@ process.stdin.on("end", () => {
 
     // ── Self-protection: Guardian's own enforcement files ─────────────
     // The hook scripts and the scanner decide every verdict above, so a
-    // change to them can switch Guardian off without touching settings.
+    // change to them can switch Guardian off without touching settings;
+    // so can a change to the package.json that lets the scanner load.
     // Their content is code, which the scanner cannot judge, so any
     // change is confirmed by a person. Both the project's copies and the
     // files this process actually runs are covered: a settings command
@@ -1006,9 +1012,11 @@ process.stdin.on("end", () => {
     const guardFiles = [
       ...GUARDIAN_HOOK_FILES.map((f) => path.join(projectRoot, ".claude", "hooks", f)),
       path.join(projectRoot, GUARDIAN_SCANNER_FILE),
+      path.join(projectRoot, GUARDIAN_SCANNER_PACKAGE),
       hookPath,
       ...GUARDIAN_HOOK_FILES.map((f) => path.join(__dirname, f)),
       guardModulePath,
+      path.join(path.dirname(guardModulePath), "package.json"),
     ].filter((f, i, all) => all.findIndex((g) => watchKey(g) === watchKey(f)) === i);
     const guardFileHit = (target) => guardFiles.find((f) => covers(target, f));
     const guardTargets = write.kind === "file" ? write.targets.map(resolve) : bashWrites;

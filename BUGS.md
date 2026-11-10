@@ -860,6 +860,8 @@ Fix: the scanner's module type must not depend on the host project's `package.js
 
 **Still open, so the bug stays OPEN:** the hook does not protect `security/package.json`. An agent can still write `{"type":"commonjs"}` there and switch the scanner off. Adding it to the protected set in `.claude/hooks/injection-guard-hook.mjs` (`guardFiles`, beside `GUARDIAN_SCANNER_FILE`) is a hook edit, which waits with the other hook fixes for a session that prompts.
 
+**Second half: fixed in staging (2026-11-10), not yet live.** Staging commit: recorded in `staging/APPLY.md`. `staging/hooks/injection-guard-hook.mjs` adds `GUARDIAN_SCANNER_PACKAGE` (`security/package.json`) to `guardFiles`, both `<project>/security/package.json` and the `package.json` beside the scanner the hook loaded (`guardModulePath`), so any Write, Edit, MultiEdit, NotebookEdit or shell write, move or delete of it asks, and is denied in bypass mode. Tests: `tests/hook.test.js`, "BUG-063" tests in the self-protection group, written with `stagedOnly()`; 7 of the 8 failed against the staged hook before the fix (the eighth checks that reading the file stays silent). The bug stays IN-PROGRESS until Michael applies the staged hook; then it goes to SMOKE-TESTING. Smoke test after applying: in a session with prompts on, ask Claude to write `{"type":"commonjs"}` to `security/package.json` and see the "Guardian's own enforcement" prompt.
+
 ### BUG-064: Windows path aliases dodge the watch list and protected files
 
 **Status:** OPEN · **Found:** 2026-11-10
