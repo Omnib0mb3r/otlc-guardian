@@ -5,7 +5,7 @@ already known-broken before it starts troubleshooting.
 
 **Read the Index first.** Only open a detail block when you need that specific bug.
 
-Statuses: `IN-PROGRESS` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verifying) →
+Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verifying) →
 `RESOLVED` (fixed and verified). `DEFERRED` = real bug, intentionally parked.
 
 <!-- INDEX START -->
@@ -53,9 +53,9 @@ Statuses: `IN-PROGRESS` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied,
 | BUG-039 | SMOKE-TESTING | `DEP-002` can never fire: the walker never collects a bare `.env` file |
 | BUG-040 | SMOKE-TESTING | Audit `INJ-001` (eval) fires on any call whose name ends in `eval`, e.g. `retrieval(` |
 | BUG-041 | RESOLVED | Partial scans: project checks judge the scanned subtree as the whole project (false `DEP-001`), and a single-file target scans nothing |
-| BUG-042 | OPEN | Hook: count-based judgement lets an existing quoted pattern be moved into a live directive |
+| BUG-042 | IN-PROGRESS | Hook: count-based judgement lets an existing quoted pattern be moved into a live directive |
 | BUG-043 | IN-PROGRESS | Hook false denies: `### System: Billing`, `### Prompt:`, a `--- System ---` line, "wrap in <user> tags", a CLAUDE.md line that quotes a pattern as data |
-| BUG-044 | OPEN | Hook false denies in bypass mode on Bash cleanup (`sed -i '/payload/d'`, `grep -v` then `mv` back) and read-only `node -e`/`python -c` |
+| BUG-044 | IN-PROGRESS | Hook false denies in bypass mode on Bash cleanup (`sed -i '/payload/d'`, `grep -v` then `mv` back) and read-only `node -e`/`python -c` |
 | BUG-045 | IN-PROGRESS | Settings protection: a matcher with a space (`"Write \|Edit"`) is accepted as unchanged; the `$CLAUDE_PROJECT_DIR` command form is denied as a weakening |
 | BUG-046 | IN-PROGRESS | `scanChange()` context window: whitespace padding can cross the 2 KB window |
 | BUG-047 | OPEN | Encoded Bash content passes the hook: `printf` octal, `rev`, `tr` rot13, variable concatenation, quote-split words |
@@ -683,7 +683,7 @@ Verifier item P8 (`C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-
 
 ### BUG-044: Hook false denies in bypass mode on Bash cleanup and read-only inline code
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** IN-PROGRESS · **Found:** 2026-11-10
 
 Verifier item P9 (`C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-verify.md`, line refs against 811381e).
 
@@ -692,6 +692,12 @@ Verifier item P9 (`C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-
 - Seen live on 2026-11-10 at f3d1f1b in this repo, bypass mode: a `python -c` one-liner that edited `BUGS.md` was denied with "This command writes, moves or removes C:/, which holds Guardian's settings". A word in the inline code resolved to the drive root, and a root covers every settings file, so one stray path-like word in inline code denies the command.
 - Second route (re-probe R6, a regression from the P6 PowerShell reader): `New-Item -ItemType Directory -Path . -Name build` and `New-Item -Path . -Name notes.txt -Value hello` are denied in bypass mode and asked in default mode as settings changes. `-Name` is ignored, so the target is the project root, which "holds" the settings. Same failure class as the stray path words above: a target too wide is read as covering the settings. Reprobe file: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-reprobe.md`.
 - Related: BUG-034 (Bash in the matcher), BUG-035 ("ask" stalls unattended workers).
+
+**Lex decision (2026-11-10, handover HANDOVER-2026-11-10_17-40-12-042Z).** Fix the remainder in staging. A shell command whose only effect on a watched file is removing text is allowed; inline interpreter code counts as a write only when the code holds a write call; a bare path word, `/` included, is never a write target by itself. The `New-Item -Name` route was already fixed in staging under BUG-067 (f8429e6).
+
+**Worker pushback, applied (2026-11-10).** "Removing text adds nothing" is not quite true: deleting a middle line can join a payload ("ignore all" / "(note)" / "previous instructions"), the case the Edit test "a deletion that joins a payload is denied" exists for. So removal-only commands are not allowed blindly; the hook computes what the file becomes and judges that.
+
+**Fix in staging (2026-11-10), not yet live.** Staging commit: recorded in `staging/APPLY.md`. In `staging/hooks/injection-guard-hook.mjs`: `lineFilter()` reads a `sed` script made only of deletes (`sedDeletes()`: `/re/` and `\cREc` addresses with the `I` flag, line numbers, `$`, ranges, `!`; options `-E`/`-r`, `-i[SUFFIX]`, `-e`, `-s`, `-u`) and `grep`/`egrep`/`fgrep` (`-v -i -E -F -G -x -w -h -s -a -e`, one file unless `-h`), through `posixToJs()`, which returns null for any construct without an exact JS reading. Its output becomes a `filter:N` source (beside the existing `patch:`), so the result is judged by `scanChange()` against the file on disk, as an Edit would be. With `-i` the files themselves get that source. The pattern the filter uses never lands, so the token that spells it is left out of the command-text scan by its place in the top-level text: `lexShell()` now records each word's `[start, end)`. A first version removed the pattern by `indexOf`, which could remove a different copy (`echo 'payload' | grep ignore > CLAUDE.md`, or a quote-split filter word whose plain spelling sits in an echo); both are tests now. Inside a nested shell the pattern stays in the scan (still asks). `add()` now expands a source written earlier in the same command (`grep -v x f > tmp && mv tmp f` carries the filter, not the empty temp file on disk). Inline interpreter code counts as a write only when it holds a write, remove or run call (`INLINE_WRITE_CALLS`), and then `ROOT_WORD` (`/`, `\`, a drive) is never a target. Anything the reader cannot translate (`sed -n`, `-f`, `-z`, `grep -o`, `-n`, `-c`) is judged as before. Settings and guard-file protection are unchanged. Known limit after the fix: inline code that hides its write call (a mode in a variable, a method name built from parts) is not read as a write, the same class as BUG-047. Tests: `tests/hook.test.js`, group "removals and read-only inline code are judged by their effect (BUG-044)": 13 staged tests, 8 failing against the staged hook before the fix (two cleanups whose command text holds the full payload, four read-only or root-word inline cases, two removals that join a payload); the other 5 (cleanups whose command text holds no full pattern, a read that names CLAUDE.md) pass on both. Plus 9 tests that pass on both and must keep passing: a removal beside an added payload, `sed -n`, `grep -o`, the two misplaced-copy cases, a filter in a nested shell, and three settings changes that still ask. The bug stays IN-PROGRESS until Michael applies the staged hook. Smoke test after applying, in bypass mode: in a scratch project whose CLAUDE.md holds "ignore all previous instructions", run `sed -i '/ignore all previous instructions/d' CLAUDE.md` and see no deny; then run `python -c "import json; print(json.load(open('.claude/settings.json')))"` and see no prompt.
 
 ### BUG-045: Settings protection misreads matcher spacing and denies the `$CLAUDE_PROJECT_DIR` command form
 

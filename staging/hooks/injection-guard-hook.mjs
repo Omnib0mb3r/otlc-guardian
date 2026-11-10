@@ -407,6 +407,318 @@ const METADATA_COMMANDS = new Set(["chmod", "chown", "chgrp", "chattr", "setfacl
 const CONTENT_PASSERS   = new Set(["cat", "tac", "head", "tail", "sort", "uniq", "nl", "paste", "cut", "grep", "egrep", "fgrep", "sed", "awk", "type", "more"]);
 const MAX_SHELL_DEPTH   = 4;
 
+// ---------------------------------------------------------------------------
+// LINE FILTERS (BUG-044): sed scripts that only delete lines, and grep.
+// Their output is a selection of the lines they read, so what lands in a
+// file is computed and judged, and the pattern they filter on (which never
+// lands) is left out of the command-text scan. A deletion can still join a
+// payload ("ignore all" / "(note)" / "previous instructions"), so the
+// result is judged by scanChange() as an Edit would be. Anything the
+// reader cannot translate exactly returns null and is judged as before.
+// ---------------------------------------------------------------------------
+
+const POSIX_CLASSES = {
+  alpha: "A-Za-z", digit: "0-9", alnum: "A-Za-z0-9", upper: "A-Z", lower: "a-z",
+  space: " \\t\\n\\r\\f\\v", blank: " \\t", xdigit: "0-9A-Fa-f", punct: "!-\\/:-@\\[-`{-~",
+};
+
+/**
+ * A POSIX basic (BRE, GNU extensions) or extended (ERE) regex as a JS
+ * regex source, or null for a construct with no exact JS equivalent.
+ * Only used to test whether a line matches, where leftmost-longest and
+ * leftmost-first agree.
+ */
+function posixToJs(body, ere) {
+  let out = "";
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (c === "\\") {
+      const n = body[++i];
+      if (n === undefined) return null;
+      if ("(){}|+?".includes(n)) out += ere ? `\\${n}` : n;
+      else if (".*[]^$\\/".includes(n)) out += `\\${n}`;
+      else if ("nt".includes(n)) out += `\\${n}`;
+      else if ("wWsSbB123456789".includes(n)) out += `\\${n}`;
+      else if (n === "<" || n === ">") out += "\\b";
+      else return null;
+    } else if (c === "[") {
+      let j = i + 1;
+      let cls = "[";
+      if (body[j] === "^") { cls += "^"; j++; }
+      if (body[j] === "]") { cls += "\\]"; j++; }
+      for (; j < body.length && body[j] !== "]"; j++) {
+        if (body[j] === "[" && ":=.".includes(body[j + 1])) {
+          const m = /^\[:([a-z]+):\]/.exec(body.slice(j));
+          if (!m || !POSIX_CLASSES[m[1]]) return null;
+          cls += POSIX_CLASSES[m[1]];
+          j += m[0].length - 1;
+        } else {
+          cls += "\\[]^".includes(body[j]) ? `\\${body[j]}` : body[j];
+        }
+      }
+      if (j >= body.length) return null;
+      out += `${cls}]`;
+      i = j;
+    } else if (!ere && "(){}|+?".includes(c)) {
+      out += `\\${c}`;
+    } else if (c === "*" && (out === "" || out === "^" || out.endsWith("(") || out.endsWith("|"))) {
+      out += "\\*"; // a leading star is literal in a BRE, an error in JS
+    } else {
+      out += c;
+    }
+  }
+  return out;
+}
+
+function compiles(source, flags) {
+  try {
+    return new RegExp(source, flags);
+  } catch {
+    return null; // no exact JS reading: the filter is judged as before
+  }
+}
+
+/** Splits text into lines, remembering whether it ended in a newline. */
+function toLines(text) {
+  const lines = text.split("\n");
+  const ended = lines.length > 1 && lines[lines.length - 1] === "";
+  if (ended) lines.pop();
+  return { lines: text === "" ? [] : lines, ended };
+}
+const fromLines = (lines, ended) => (lines.length === 0 ? "" : lines.join("\n") + (ended ? "\n" : ""));
+
+/** One sed address at `s[i]`: { test(line, n, last) }, and where it ends. */
+function sedAddress(s, i, ere) {
+  const num = /^\d+/.exec(s.slice(i));
+  if (num) {
+    const n = Number(num[0]);
+    return n === 0 ? null : { addr: (_, k) => k === n, end: i + num[0].length, line: n };
+  }
+  if (s[i] === "$") return { addr: (_, k, last) => k === last, end: i + 1 };
+  let delim = s[i];
+  let at = i + 1;
+  if (delim === "\\") { delim = s[i + 1]; at = i + 2; }
+  else if (delim !== "/") return null;
+  if (!delim || delim === "\n" || delim === "\\") return null;
+  let body = "";
+  for (; at < s.length && s[at] !== delim; at++) {
+    if (s[at] === "\n") return null;
+    if (s[at] === "\\" && s[at + 1] === delim) { body += delim === "/" ? "\\/" : delim; at++; }
+    else if (s[at] === "\\") { body += s[at] + (s[at + 1] ?? ""); at++; }
+    else body += s[at];
+  }
+  if (at >= s.length) return null;
+  at++;
+  let flags = "";
+  if (s[at] === "I") { flags = "i"; at++; }
+  if (s[at] === "M") return null;
+  const source = posixToJs(body, ere);
+  const re = source === null ? null : compiles(source, flags);
+  return re ? { addr: (line) => re.test(line), end: at } : null;
+}
+
+/**
+ * A sed script made only of delete commands ([addr[,addr]][!]d, joined by
+ * ";" or newlines) as a function from lines to the lines kept, or null.
+ */
+function sedDeletes(script, ere) {
+  const commands = [];
+  let i = 0;
+  const skip = (re) => { while (i < script.length && re.test(script[i])) i++; };
+  for (;;) {
+    skip(/[\s;]/);
+    if (i >= script.length) break;
+    const first = sedAddress(script, i, ere);
+    let second = null;
+    if (first) {
+      i = first.end;
+      if (script[i] === ",") {
+        second = sedAddress(script, i + 1, ere);
+        if (!second) return null;
+        i = second.end;
+      }
+    } else if (script[i] !== "d" && script[i] !== "!") {
+      return null;
+    }
+    skip(/[ \t]/);
+    let negate = false;
+    while (script[i] === "!") { negate = !negate; i++; skip(/[ \t]/); }
+    if (script[i] !== "d") return null;
+    i++;
+    skip(/[ \t]/);
+    if (i < script.length && script[i] !== ";" && script[i] !== "\n") return null;
+    commands.push({ first, second, negate, active: false });
+  }
+  if (commands.length === 0) return null;
+  return (lines) => {
+    const last = lines.length;
+    for (const c of commands) c.active = false;
+    return lines.filter((line, idx) => {
+      const k = idx + 1;
+      let deleted = false;
+      for (const c of commands) {
+        let hit;
+        if (!c.first) hit = true;
+        else if (!c.second) hit = c.first.addr(line, k, last);
+        else if (c.active) {
+          hit = true;
+          if (c.second.line !== undefined ? k >= c.second.line : c.second.addr(line, k, last)) c.active = false;
+        } else if (c.first.addr(line, k, last)) {
+          hit = true;
+          // A line-number end at or before the start closes the range at once.
+          c.active = c.second.line !== undefined ? c.second.line > k : true;
+        } else {
+          hit = false;
+        }
+        if (hit !== c.negate) { deleted = true; break; }
+      }
+      return !deleted;
+    });
+  };
+}
+
+/**
+ * How `sed` (deletes only) or `grep` changes the text it reads: { files,
+ * inPlace, apply(text), texts } where `texts` are the words that hold
+ * the filter's patterns, or null when the command is anything else.
+ */
+function lineFilter(name, args) {
+  if (name === "sed") {
+    let ere = false;
+    let inPlace = false;
+    const scripts = [];
+    const files = [];
+    let operandsOnly = false;
+    for (let k = 0; k < args.length; k++) {
+      const a = args[k];
+      if (operandsOnly || !a.startsWith("-") || a === "-") {
+        if (scripts.length === 0) scripts.push(a);
+        else files.push(a);
+      } else if (a === "--") operandsOnly = true;
+      else if (a === "-e" || a === "--expression") { if (args[k + 1] === undefined) return null; scripts.push(args[++k]); }
+      else if (a.startsWith("--expression=")) scripts.push(a.slice(13));
+      else if (a === "--regexp-extended") ere = true;
+      else if (a.startsWith("--in-place")) inPlace = true;
+      else if (["--separate", "--unbuffered", "--posix", "--follow-symlinks"].includes(a)) continue;
+      else if (a.startsWith("--")) return null;
+      else {
+        // A cluster of short options; -i takes the rest as a backup suffix.
+        for (let p = 1; p < a.length; p++) {
+          const o = a[p];
+          if (o === "E" || o === "r") ere = true;
+          else if (o === "s" || o === "u") continue;
+          else if (o === "i") { inPlace = true; break; }
+          else if (o === "e" && p === a.length - 1) { if (args[k + 1] === undefined) return null; scripts.push(args[++k]); }
+          else return null; // -n, -z, -f and the rest change what is printed or read
+        }
+      }
+    }
+    const keep = scripts.length > 0 ? sedDeletes(scripts.join("\n"), ere) : null;
+    if (!keep) return null;
+    return {
+      files,
+      inPlace,
+      texts: scripts,
+      apply: (text) => {
+        const { lines, ended } = toLines(text);
+        return fromLines(keep(lines), ended);
+      },
+    };
+  }
+  if (name === "grep" || name === "egrep" || name === "fgrep") {
+    let mode = name === "egrep" ? "E" : name === "fgrep" ? "F" : "G";
+    let invert = false;
+    let flags = "";
+    let whole = "";
+    let noNames = false;
+    const patterns = [];
+    const operands = [];
+    let operandsOnly = false;
+    const LONG = { "--invert-match": "v", "--ignore-case": "i", "--extended-regexp": "E", "--fixed-strings": "F", "--basic-regexp": "G",
+      "--line-regexp": "x", "--word-regexp": "w", "--no-messages": "s", "--no-filename": "h", "--text": "a" };
+    const option = (o) => {
+      if (o === "v") invert = true;
+      else if (o === "i") flags = "i";
+      else if ("EFG".includes(o)) mode = o;
+      else if (o === "x" || o === "w") whole = o;
+      else if (o === "h") noNames = true;
+      else if (o !== "s" && o !== "a") return false; // -o, -n, -c, -l, -r, -A... change the output
+      return true;
+    };
+    for (let k = 0; k < args.length; k++) {
+      const a = args[k];
+      if (operandsOnly || !a.startsWith("-") || a === "-") operands.push(a);
+      else if (a === "--") operandsOnly = true;
+      else if (a === "-e" || a === "--regexp") { if (args[k + 1] === undefined) return null; patterns.push(args[++k]); }
+      else if (a.startsWith("--regexp=")) patterns.push(a.slice(9));
+      else if (a.startsWith("--")) { if (!LONG[a] || !option(LONG[a])) return null; }
+      else {
+        for (let p = 1; p < a.length; p++) {
+          if (a[p] === "e") {
+            const rest = a.slice(p + 1) || args[++k];
+            if (rest === undefined) return null;
+            patterns.push(rest);
+            break;
+          }
+          if (!option(a[p])) return null;
+        }
+      }
+    }
+    if (patterns.length === 0) {
+      if (operands.length === 0) return null;
+      patterns.push(operands.shift());
+    }
+    if (operands.length > 1 && !noNames) return null; // each line gains a "file:" prefix
+    const tests = [];
+    for (const pattern of patterns.flatMap((p) => p.split("\n"))) {
+      let source = mode === "F" ? pattern.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&") : posixToJs(pattern, mode === "E");
+      if (source === null) return null;
+      if (whole === "x") source = `^(?:${source})$`;
+      if (whole === "w") source = `(?<![\\w])(?:${source})(?![\\w])`;
+      const re = compiles(source, flags);
+      if (!re) return null;
+      tests.push(re);
+    }
+    return {
+      files: operands,
+      inPlace: false,
+      texts: patterns,
+      apply: (text) => {
+        const { lines } = toLines(text);
+        return fromLines(lines.filter((line) => tests.some((re) => re.test(line)) !== invert), true);
+      },
+    };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// INLINE CODE (BUG-044). `node -e`, `python -c` and the like count as a
+// write only when the code holds a call that writes, removes or runs
+// something; then its path-like words are its possible targets, except a
+// bare root ("/", "\", "C:"), which is never a target by itself. Code that
+// hides its write call (a mode in a variable, a name built from parts)
+// passes, like the encoded shell content of BUG-047.
+// ---------------------------------------------------------------------------
+
+const INLINE_WRITE_CALLS = [
+  // names that only ever write, however they are reached (require('fs').rmSync)
+  /\b(?:(?:write|append)(?:Text)?File(?:Sync)?|createWriteStream|(?:copyFile|cp|rm|rmdir|rename|unlink|truncate|symlink|link|chmod|chown|mkdir|utimes)Sync|write_text|write_bytes|symlink_to|hardlink_to|file_put_contents|rmtree|makedirs|removedirs)\s*\(|\bBun\.write\s*\(/,
+  // a module's write, remove, copy or move call (fs.rm, os.remove, shutil.move, File.write)
+  /\b(?:fs|fsp|promises|os|shutil|Deno|File|FileUtils|IO|Dir)\.\w*(?:write|append|copy|cp|rename|replace|move|rm|unlink|remove|delete|truncate|symlink|link|chmod|chown|mkdir|utime|touch)\w*\s*\(/,
+  // the same names called on what a call returns (require('fs/promises').rm, Path('x').unlink)
+  /\)\s*\.\s*(?:write|append|copy|cp|rename|rm|rmdir|unlink|remove|truncate|symlink|link|chmod|chown|mkdir|touch)\w*\s*\(/,
+  /\bos\.open\s*\([^)]*\bO_(?:WRONLY|RDWR|CREAT|APPEND|TRUNC)\b/,
+  /\b(?:Path|pathlib)\b[\s\S]*\.(?:unlink|rename|replace|rmdir|touch|mkdir|chmod)\s*\(/,
+  // bare calls (PHP, destructured imports): not a method of something else
+  /(?<![.\w$])(?:fwrite|fputs|unlink|rename|copy|rmdir|mkdir|touch|symlink|link|chmod|chown|truncate|rm|cp)\s*\(/,
+  // open for writing: open(p, "w"), fs.openSync(p, "a+"), open(FH, ">out")
+  /\b(?:f?open|openSync)\s*\([^)]*['"](?:[rbt]*[wax+][rwabxt+]*|\s*\+?(?:>>?|\|)[^'"]*)['"]/,
+  // anything that runs a command can write anything
+  /\b(?:subprocess|child_process)\b|(?<![.\w$])(?:exec|execSync|execFile|execFileSync|spawn|spawnSync|system|popen|proc_open|shell_exec|passthru)\s*\(|\bos\.(?:system|popen|exec\w*|spawn\w*)\s*\(/,
+];
+const ROOT_WORD = /^(?:[\\/]+|[A-Za-z]:[\\/]*)$/;
+
 /** Index just past the ")" that closes a "$(" opened before `from`. */
 function closingParen(text, from) {
   let depth = 1;
@@ -450,6 +762,7 @@ function lexShell(text, dialect = "bash") {
   const subs = [];
   const heredocs = [];
   let word = null;
+  let wordStart = 0; // where the current word's raw text starts
   let expectDelimiter = null;
 
   const flush = () => {
@@ -458,7 +771,7 @@ function lexShell(text, dialect = "bash") {
       heredocs.push({ delimiter: word, strip: expectDelimiter === "<<-" });
       expectDelimiter = null;
     }
-    tokens.push({ word });
+    tokens.push({ word, start: wordStart, end: i });
     word = null;
   };
   const substitution = (start, isBacktick) => {
@@ -471,6 +784,7 @@ function lexShell(text, dialect = "bash") {
   let i = 0;
   while (i < text.length) {
     const ch = text[i];
+    if (word === null) wordStart = i;
     if (ch === ESC) {
       if (text[i + 1] !== "\n") word = `${word ?? ""}${text[i + 1] ?? ""}`;
       i += 2;
@@ -538,16 +852,22 @@ function pathLikeWords(text) {
  *
  * @param {string} command
  * @param {string} cwd - the session's working directory
- * @param {string[]} decoded - collects the text of each script the command
- *   carries encoded (powershell -EncodedCommand), so it is scanned with
- *   the command text (BUG-067)
+ * @param {{ decoded: string[], filters: Array, quiet: string[] }} found -
+ *   collects, across nested shells: `decoded`, the text of each script the
+ *   command carries encoded (powershell -EncodedCommand), scanned with the
+ *   command text (BUG-067); `filters`, the line filters that "filter:N"
+ *   sources name; `quiet`, the [start, end) places in the top-level
+ *   command text of filter patterns, which never land and are left out of
+ *   the command-text scan (BUG-044)
  * @returns {Map<string, { sources: Set<string>, append: boolean }>}
  *   absolute target -> absolute source files. A source prefixed "patch:"
- *   is a patch file, of which only the added lines land. `append` is true
- *   when the write adds to the file (>>, tee -a, a patch) instead of
- *   replacing it.
+ *   is a patch file, of which only the added lines land; "filter:N" is
+ *   what found.filters[N] keeps of its inputs. `append` is true when the
+ *   write adds to the file (>>, tee -a, a patch) instead of replacing it.
+ *   A copy of a file this command wrote earlier carries what was written
+ *   there (`grep -v x f > tmp && mv tmp f`).
  */
-function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", decoded = []) {
+function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { decoded: [], filters: [], quiet: [] }) {
   const targets = new Map();
   if (depth > MAX_SHELL_DEPTH) return targets;
   const abs = (dir, p) => path.resolve(dir, p.replace(/^~(?=$|[\\/])/, os.homedir())).replace(/\\/g, "/");
@@ -555,19 +875,24 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", decoded = 
     if (!p || p === "-" || /^&?\d+$/.test(p)) return;
     const key = abs(dir, p);
     const entry = targets.get(key) ?? { sources: new Set(), append: false };
-    for (const s of sources) entry.sources.add(s);
+    for (const s of sources) {
+      const earlier = s !== key ? targets.get(s) : undefined;
+      if (!earlier || earlier.sources.size === 0 || earlier.append) entry.sources.add(s);
+      if (earlier) for (const e of earlier.sources) entry.sources.add(e);
+    }
     entry.append ||= append;
     targets.set(key, entry);
   };
   const recurse = (text, dir, inner = dialect) => {
-    for (const [key, entry] of shellWriteTargets(text, dir, depth + 1, inner, decoded)) {
+    for (const [key, entry] of shellWriteTargets(text, dir, depth + 1, inner, found)) {
       const mine = targets.get(key) ?? { sources: new Set(), append: false };
       for (const s of entry.sources) mine.sources.add(s);
       mine.append ||= entry.append;
       targets.set(key, mine);
     }
   };
-  const ctx = { add, abs, recurse, dialect, decoded };
+  const filter = (inputs, apply) => `filter:${found.filters.push({ inputs, apply }) - 1}`;
+  const ctx = { add, abs, recurse, dialect, decoded: found.decoded, quiet: [], filter };
 
   const { tokens, subs } = lexShell(command, dialect);
   for (const sub of subs) recurse(sub, cwd);
@@ -579,22 +904,33 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", decoded = 
 
   let dir = cwd;
   let words = [];
+  let stageWords = []; // this command's word tokens, with their places in the text
   let writes = [];   // [{ word, append }] from > and >> redirections
   let reads = [];    // files read through <
   let pipeIn = [];   // sources whose content arrives on stdin through a pipe
   const finish = (op) => {
     const stage = commandWrites(words, dir, ctx, { pipeIn, reads: reads.map((r) => abs(dir, r)) });
+    // A filter pattern is left out of the scan only where it is written:
+    // the token of this command that spells it, in the top-level text.
+    for (const q of ctx.quiet.splice(0)) {
+      const k = depth === 0 ? stageWords.findIndex((tok) => tok.word === q) : -1;
+      if (k >= 0) found.quiet.push([stageWords[k].start, stageWords[k].end]);
+      if (k >= 0) stageWords.splice(k, 1);
+    }
     for (const w of writes) add(dir, w.word, stage.out, w.append);
     dir = stage.dir;
     pipeIn = op === "|" || op === "|&" ? stage.out : [];
     words = [];
+    stageWords = [];
     writes = [];
     reads = [];
   };
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i];
-    if (tok.word !== undefined) words.push(tok.word);
-    else if (CONTROL_OPERATORS.has(tok.op)) finish(tok.op);
+    if (tok.word !== undefined) {
+      words.push(tok.word);
+      stageWords.push(tok);
+    } else if (CONTROL_OPERATORS.has(tok.op)) finish(tok.op);
     else if (WRITE_REDIRECTS.has(tok.op) || READ_REDIRECTS.has(tok.op)) {
       const next = tokens[i + 1];
       if (next?.word === undefined) continue;
@@ -629,6 +965,17 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   const name = commandName(words[0]);
   const args = words.slice(1);
   const operands = args.filter((a) => !a.startsWith("-") && !(ctx.dialect === "cmd" && CMD_SWITCH.test(a)));
+
+  // sed deletes and grep: what they write is computed (BUG-044).
+  const lines = ctx.dialect === "cmd" ? null : lineFilter(name, args);
+  if (lines) {
+    ctx.quiet.push(...lines.texts);
+    if (lines.inPlace) {
+      for (const f of lines.files) add(dir, f, [ctx.filter([abs(dir, f)], lines.apply)]);
+      return { dir, out: stdin };
+    }
+    return { dir, out: [ctx.filter(lines.files.length > 0 ? lines.files.map((f) => abs(dir, f)) : stdin, lines.apply)] };
+  }
   // A command that copies what it reads to stdout (cat, sort, head...)
   // carries its file operands' content; any other carries its stdin's.
   const out = CONTENT_PASSERS.has(name) ? [...stdin, ...operands.map((p) => abs(dir, p))] : stdin;
@@ -703,7 +1050,10 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     for (const p of operands) add(dir, p);
   } else if (INTERPRETERS.has(name)) {
     const flag = args.findIndex((a) => INLINE_CODE_FLAGS.has(a));
-    if (flag >= 0) for (const p of pathLikeWords(args.slice(flag + 1).join(" "))) add(dir, p);
+    const code = flag >= 0 ? args.slice(flag + 1).join(" ") : "";
+    if (INLINE_WRITE_CALLS.some((re) => re.test(code))) {
+      for (const p of pathLikeWords(code)) if (!ROOT_WORD.test(p)) add(dir, p);
+    }
   } else if (COPY_COMMANDS.has(name)) {
     const t = args.findIndex((a) => a === "-t" || a === "--target-directory");
     const inline = args.find((a) => a.startsWith("--target-directory="));
@@ -1417,8 +1767,8 @@ process.stdin.on("end", () => {
     // Paths a Bash command writes, resolved against the session cwd, and
     // the scripts it carries encoded, which are scanned with its text.
     const sessionCwd = (typeof data.cwd === "string" && data.cwd) || projectRoot;
-    const decodedScripts = [];
-    const bashTargets = write.kind === "bash" ? shellWriteTargets(write.content, sessionCwd, 0, write.dialect, decodedScripts) : new Map();
+    const shellRead = { decoded: [], filters: [], quiet: [] };
+    const bashTargets = write.kind === "bash" ? shellWriteTargets(write.content, sessionCwd, 0, write.dialect, shellRead) : new Map();
     const bashWrites = [...bashTargets.keys()];
 
     // ── Self-protection: settings changes that weaken Guardian ────────
@@ -1504,9 +1854,15 @@ process.stdin.on("end", () => {
     for (const target of written) {
       const { sources, append } = bashTargets.get(target);
       if (sources.size === 0) continue;
-      const incoming = [...sources]
-        .map((s) => (s.startsWith("patch:") ? addedLines(readSource(s.slice(6))) : readSource(s)))
-        .join("\n");
+      const sourceText = (s) => {
+        if (s.startsWith("patch:")) return addedLines(readSource(s.slice(6)));
+        if (s.startsWith("filter:")) {
+          const { inputs, apply } = shellRead.filters[Number(s.slice(7))];
+          return apply(inputs.map(sourceText).join("\n").replace(/\r\n/g, "\n"));
+        }
+        return readSource(s);
+      };
+      const incoming = [...sources].map(sourceText).join("\n");
       if (!incoming.trim()) continue;
       const before = readSource(canonicalPath(target)).replace(/\r\n/g, "\n");
       const after = append ? `${before}\n${incoming}` : incoming;
@@ -1534,9 +1890,14 @@ process.stdin.on("end", () => {
     //                     place is judged as appended text.
     //   NotebookEdit      the new cell source alone (cells are JSON strings
     //                     on disk, so a pattern cannot run across them).
-    // Bash is judged on its command text and any script it carries encoded.
+    // Bash is judged on its command text and any script it carries encoded,
+    // less the patterns of line filters, whose results were judged above.
+    let commandText = write.content;
+    for (const [start, end] of shellRead.quiet.sort((a, b) => b[0] - a[0])) {
+      commandText = `${commandText.slice(0, start)} ${commandText.slice(end)}`;
+    }
     let before = "";
-    let after = [write.content, ...decodedScripts].join("\n");
+    let after = [commandText, ...shellRead.decoded].join("\n");
     if (toolName === "Write") {
       before = readCurrent(resolve(watched[0]));
     } else if (toolName === "Edit" || toolName === "MultiEdit") {

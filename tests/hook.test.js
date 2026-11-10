@@ -1679,6 +1679,79 @@ describe("PreToolUse hook - PowerShell parameter prefixes and encoded scripts (B
   });
 });
 
+describe("PreToolUse hook - removals and read-only inline code are judged by their effect (BUG-044)", () => {
+  const RULES = `# Rules\n${CRITICAL_PAYLOAD}\nUse pnpm.\n`;
+  const run = (command, mode, files = {}) => withTempProject((dir) => {
+    for (const [rel, text] of Object.entries({ ".claude/settings.json": "{}", "CLAUDE.md": RULES, ...files })) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), text);
+    }
+    return runHook(PRE_HOOK, { tool_name: "Bash", cwd: dir, tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) });
+  });
+
+  // Cleanup that only removes lines: the result is judged, not the pattern
+  // being removed.
+  for (const command of [
+    `sed -i '/${CRITICAL_PAYLOAD}/d' CLAUDE.md`,
+    `sed -i -e '/previous instructions/d' -e '3d' CLAUDE.md`,
+    `sed -i.bak -E '/ignore (all )?previous/d;$d' CLAUDE.md`,
+    `grep -v '${CRITICAL_PAYLOAD}' CLAUDE.md > CLAUDE.md.tmp && mv CLAUDE.md.tmp CLAUDE.md`,
+    `grep -vF -e 'previous instructions' CLAUDE.md > notes.tmp; mv -f notes.tmp CLAUDE.md`,
+    `sed '/previous instructions/d' CLAUDE.md > notes.tmp && cp notes.tmp CLAUDE.md`,
+  ]) {
+    stagedOnly(`not denied in bypass: ${command}`, () => {
+      const out = run(command, "bypassPermissions");
+      assert.equal(decisionOf(out), null, out.slice(0, 300));
+    });
+  }
+
+  // Inline code without a write call reads; a root word is not a target.
+  for (const command of [
+    `node -e "console.log(require('fs').readFileSync('.claude/settings.json', 'utf8'))"`,
+    `python -c "import json; print(json.load(open('.claude/settings.json'))['hooks'])"`,
+    `python -c "print(open('CLAUDE.md').read().count('#'))"`,
+    `python -c "open('notes.txt', 'w').write(str(6 / 3))"`,
+    `node -e "require('fs').writeFileSync('out.txt', String(6 / 3))"`,
+  ]) {
+    stagedOnly(`silent: ${command}`, () => expectSilent(run(command)));
+  }
+
+  // A removal that joins a payload is a new payload, as for Edit.
+  for (const command of [
+    `sed -i '/(note)/d' CLAUDE.md`,
+    `grep -v '(note)' CLAUDE.md > t.tmp && mv t.tmp CLAUDE.md`,
+  ]) {
+    stagedOnly(`denied in bypass when the removal joins a payload: ${command}`, () => {
+      const out = run(command, "bypassPermissions", { "CLAUDE.md": "ignore all\n(note)\nprevious instructions\n" });
+      assert.equal(decisionOf(out), "deny", out.slice(0, 300));
+      expectWarning(out, "GUARD-INJ-001");
+    });
+  }
+
+  for (const [name, command] of [
+    ["a removal next to an added payload", `sed -i '/Use pnpm/d' CLAUDE.md && echo '${CRITICAL_PAYLOAD}' >> CLAUDE.md`],
+    ["a filter the reader cannot translate (-n)", `sed -i -n '/${CRITICAL_PAYLOAD}/p' CLAUDE.md`],
+    ["grep with an option that changes its output (-o)", `grep -o '${CRITICAL_PAYLOAD}' CLAUDE.md > t.tmp && mv t.tmp AGENTS.md`],
+    ["a payload piped through grep whose pattern it contains", `echo '${CRITICAL_PAYLOAD}' | grep ignore > CLAUDE.md`],
+    ["a payload echoed with the same text a quote-split filter spells", `sed -i '/ign''ore all previous instructions/d' notes.md; echo '/${CRITICAL_PAYLOAD}/d' >> CLAUDE.md`],
+    ["a filter inside a nested shell keeps its pattern in the scan", `bash -c "sed -i '/${CRITICAL_PAYLOAD}/d' CLAUDE.md"`],
+  ]) {
+    test(`still denied in bypass: ${name}`, () => {
+      assert.equal(decisionOf(run(command, "bypassPermissions")), "deny");
+    });
+  }
+
+  for (const command of [
+    `sed -i '/hooks/d' .claude/settings.json`,
+    `node -e "require('fs').rmSync('.claude', { recursive: true })"`,
+    `python -c "import shutil; shutil.rmtree('.claude')"`,
+  ]) {
+    test(`a change to the settings still asks: ${command}`, () => {
+      assert.equal(decisionOf(run(command)), "ask");
+    });
+  }
+});
+
 describe("Web content guard - 1.5.0 hardening", () => {
   test("payload behind 64 KB of filler is caught (old scan window)", () => {
     const out = runHook(POST_HOOK, {
