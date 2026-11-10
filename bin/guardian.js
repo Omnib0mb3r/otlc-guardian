@@ -131,8 +131,9 @@ ${c.bold}COMMANDS${c.reset}
       guardian audit . --json
 
   ${c.cyan}guardian scan${c.reset} "<text>"
-    Scan a string for prompt injection patterns.
+    Scan a string (or piped stdin) for prompt injection and secret patterns.
     Useful for testing your input before wiring up the runtime guard.
+    Exit 0 clean, 1 at least one pattern found, 2 nothing was scanned.
 
     Examples:
       guardian scan "ignore all previous instructions"
@@ -230,6 +231,10 @@ function readStdinSync(timeoutMs = 5000) {
   });
 }
 
+// Exit codes, so `cat untrusted.txt | guardian scan && send-to-model`
+// stops on a finding. Before 1.5.0 a finding exited 0 (BUG-068).
+const SCAN_EXIT = Object.freeze({ CLEAN: 0, FOUND: 1, NOT_SCANNED: 2 });
+
 async function runScan() {
   // 1.3.1: accept input from EITHER positional args OR piped stdin.
   // Pre-1.3.1 the CLI required `guardian scan "text"` and could not be
@@ -250,7 +255,7 @@ async function runScan() {
     err("Usage: guardian scan \"<text to scan>\"");
     err("       echo \"<text>\" | guardian scan");
     err("       guardian scan < input.txt");
-    process.exit(1);
+    process.exit(SCAN_EXIT.NOT_SCANNED);
   }
 
   // Dynamic import() requires a `file://` URL on Windows - a raw
@@ -260,7 +265,15 @@ async function runScan() {
   // macOS. Fixed in 1.1.1 after the CLI broke on every Windows install.
   const guardPath   = path.join(ROOT, "security", "01-injection-guard.js");
   const guardModule = pathToFileURL(guardPath).href;
-  const { scan, reportViolations } = await import(guardModule);
+  let scan, reportViolations;
+  try {
+    ({ scan, reportViolations } = await import(guardModule));
+  } catch (e) {
+    // An uncaught import error would exit 1, which reads as "patterns
+    // found". Nothing was scanned, so say that and use its own code.
+    err(`guardian scan could not load the scanner at ${guardPath}: ${e?.message ?? e}`);
+    process.exit(SCAN_EXIT.NOT_SCANNED);
+  }
 
   log(`\n${c.bold}[OTLC GUARDIAN] SCANNING INPUT${c.reset}`);
   log(`${c.dim}Text: "${text.slice(0, 100)}${text.length > 100 ? "..." : ""}"${c.reset}\n`);
@@ -276,6 +289,7 @@ async function runScan() {
     log(`\n  Recommendation: Do not pass this input to an AI API without sanitization.`);
   }
   log("");
+  process.exitCode = violations.length === 0 ? SCAN_EXIT.CLEAN : SCAN_EXIT.FOUND;
 }
 
 // ---------------------------------------------------------------------------

@@ -258,10 +258,12 @@ guardian audit . --fail-on-error  # exit 1 if any CRITICAL/HIGH findings
 guardian audit . --json           # machine-readable output for CI
 ```
 
-**`guardian scan`** - Test a specific string for prompt injection. Useful during
-development.
+**`guardian scan`** - Test a specific string, or piped stdin, for prompt injection
+and secret patterns. Useful during development and in pipelines: it exits 0 when
+the text is clean, 1 when a pattern is found, and 2 when nothing was scanned.
 ```bash
 guardian scan "some text you want to check"
+cat untrusted.txt | guardian scan && send-to-model   # stops on a finding
 ```
 
 **`guardian check`** - Verify Guardian is correctly installed. Includes a hook smoke

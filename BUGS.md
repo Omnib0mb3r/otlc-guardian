@@ -79,7 +79,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-065 | OPEN | Settings and guard-file protection miss explicit deletes and replaces: `find -delete`, `rsync --delete`, `tar -x`, `cmd /c rd` and `del` |
 | BUG-066 | OPEN | Copies into watched paths not judged: directory sources (`cp -r dir/. .claude/agents/`), `sort -o`, `cmd /c copy` |
 | BUG-067 | OPEN | PowerShell parameter prefixes (`-LiteralP`, `-Pat`, `-Val`) are not recognized; `-EncodedCommand` payload text is never scanned |
-| BUG-068 | OPEN | `guardian scan` exits 0 when it finds injection or secret patterns, so a script or pipeline cannot act on the result |
+| BUG-068 | SMOKE-TESTING | `guardian scan` exits 0 when it finds injection or secret patterns, so a script or pipeline cannot act on the result |
 
 <!-- INDEX END -->
 
@@ -852,8 +852,10 @@ Hook edit; waits.
 
 ### BUG-068: `guardian scan` exits 0 on a finding
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 From code (`runScan()` in `bin/guardian.js`), first noted under BUG-062: the command prints the violations and a warning, then returns, so the process exits 0 whether the text is clean or carries a CRITICAL injection or a secret. Exit 1 is used only for "no text given". `cat untrusted.txt | guardian scan && send-to-model` therefore sends the poisoned text. Manual chapter 05 documents the 0 as current behavior. Fix in `bin/` (not a protected file): a distinct non-zero exit on a finding, and a usage error kept apart from a finding.
+
+**Fix (2026-11-10).** `runScan()` in `bin/guardian.js` sets `process.exitCode` from `SCAN_EXIT` (`CLEAN` 0, `FOUND` 1 for any violation, `NOT_SCANNED` 2). No text is now exit 2 (was 1, which would read as a finding), and a failed scanner import prints the reason and exits 2 instead of an uncaught exit 1. The help text states the codes. Tests: `tests/init.test.js`, "BUG-068" block (clean 0; injection argument, secret alone and piped injection 1; no text 2; the 4 non-clean cases failed before the fix). The import-failure branch has no test: the scanner is loaded from the CLI's own install, which a test cannot break without editing the protected scanner. Docs: README.md, manual chapters 03 and 05. Smoke test: `echo "ignore all previous instructions" | guardian scan; echo $?` prints 1 on an installed CLI.
 
 <!-- DETAILS END -->

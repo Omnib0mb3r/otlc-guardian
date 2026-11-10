@@ -172,6 +172,12 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **`guardian scan` exits non-zero on a finding (BUG-068).** It printed
+  the findings and exited 0, so `cat untrusted.txt | guardian scan &&
+  send-to-model` sent poisoned text on. Exit codes are now 0 clean, 1 at
+  least one pattern, 2 nothing scanned (no text, which used to be 1, or a
+  scanner that failed to load, which used to be an uncaught exit 1).
+
 - **A project under a folder named `test`, `tests` or `spec` keeps its
   rules (BUG-052).** The test-file exclusions ran on the absolute path,
   so every file of such a project counted as test code and lost the 17
