@@ -505,6 +505,58 @@ function* ruleMatches(rule, view) {
   for (const m of view.matchAll(new RegExp(rule.pattern.source, flags))) yield m[0];
 }
 
+/**
+ * The context is counted in characters that are not padding (BUG-046).
+ * Padding is what some scan view reads as whitespace or as nothing:
+ * whitespace, invisible characters, markdown emphasis markers, and
+ * entities or %-escapes of whitespace. Counted by raw length, 5,000
+ * spaces between "ignore all" on disk and "previous instructions" added
+ * would push the old half out of the window. The text itself is never
+ * changed, so every view still reads it as written.
+ */
+const INVISIBLE_CLASS = INVISIBLE_STRIP_PATTERN.source.slice(1, -1);
+const CONTEXT_TOKEN = new RegExp(
+  `((?:[\\s*_\`~]|[${INVISIBLE_CLASS}])+)` +              // 1: padding run
+  `|(&#?[0-9A-Za-z]{1,8};|(?:%[0-9A-Fa-f]{2})+)` +        // 2: entity or %-run
+  `|[^\\s*_\`~&%${INVISIBLE_CLASS}]+|[^]`,                // text
+  "gu",
+);
+
+function tokenWeight([token, padding, encoded]) {
+  if (padding) return 0;
+  if (encoded && /^\s+$/u.test(decodeHtmlEntities(percentDecodeTolerant(token)))) return 0;
+  return token.length;
+}
+
+/** Where the context before `end` starts: CHANGE_CONTEXT weighed characters back. */
+function contextStart(text, end) {
+  for (let span = CHANGE_CONTEXT * 4; ; span *= 4) {
+    const start  = Math.max(0, end - span);
+    const tokens = [...text.slice(start, end).matchAll(CONTEXT_TOKEN)];
+    let need = CHANGE_CONTEXT;
+    for (let k = tokens.length - 1; k >= 0; k--) {
+      const weight = tokenWeight(tokens[k]);
+      if (weight >= need) return start + tokens[k].index + tokens[k][0].length - need;
+      need -= weight;
+    }
+    if (start === 0) return 0;
+  }
+}
+
+/** Where the context after `begin` ends: CHANGE_CONTEXT weighed characters on. */
+function contextEnd(text, begin) {
+  for (let span = CHANGE_CONTEXT * 4; ; span *= 4) {
+    const end = Math.min(text.length, begin + span);
+    let need = CHANGE_CONTEXT;
+    for (const token of text.slice(begin, end).matchAll(CONTEXT_TOKEN)) {
+      const weight = tokenWeight(token);
+      if (weight >= need) return begin + token.index + need;
+      need -= weight;
+    }
+    if (end === text.length) return end;
+  }
+}
+
 /** Trims the common prefix and suffix, keeping CHANGE_CONTEXT around the change. */
 function changedWindows(before, after) {
   const shorter = Math.min(before.length, after.length);
@@ -512,8 +564,8 @@ function changedWindows(before, after) {
   while (head < shorter && before.charCodeAt(head) === after.charCodeAt(head)) head++;
   let tail = 0;
   while (tail < shorter - head && before.charCodeAt(before.length - 1 - tail) === after.charCodeAt(after.length - 1 - tail)) tail++;
-  const from = Math.max(0, head - CHANGE_CONTEXT);
-  const keep = Math.max(0, tail - CHANGE_CONTEXT);
+  const from = contextStart(before, head);
+  const keep = before.length - contextEnd(before, before.length - tail);
   return [before.slice(from, before.length - keep), after.slice(from, after.length - keep)];
 }
 

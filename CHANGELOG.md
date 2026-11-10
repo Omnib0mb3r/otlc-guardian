@@ -201,6 +201,14 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Padding no longer crosses the change window (BUG-046).**
+  `scanChange()` counts its 2 KB of context in characters that are not
+  padding: whitespace, invisible characters, markdown emphasis markers,
+  and entities or %-escapes of whitespace do not use it up. So "ignore
+  all" on disk, 5,000 spaces, and "previous instructions" added is
+  reported, where the window used to cut the old half off. The text
+  every view reads is unchanged.
+
 - **Settings protection reads matchers and hook commands as Claude Code
   does (BUG-045).** A matcher is read as Claude Code documents it: a list
   of exact names split on `|` or `,` (spaces allowed), or else an
