@@ -172,6 +172,14 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **What an audit exemption means for the project checks is defined
+  (BUG-059).** An exemption silences findings about a file and never
+  hides the file as evidence. The absence checks DEP-001 and WEB-002
+  keep reading exempt files (a health route or CSP header there still
+  counts); the presence check DEP-002 now leaves exempt files out, so an
+  allowlisted `.env` is not reported. Tested and documented in manual
+  chapter 06.
+
 - **Only a marker comment exempts a file (BUG-057).** Any occurrence of
   `otlc-guardian:audit-exempt` in a file's first 4 KB used to exempt it,
   including a string, a regex or a sentence about the marker. The marker

@@ -1974,13 +1974,21 @@ function runAudit(targetDir, options = {}) {
   // gets the project root's files and its finding names the project
   // root. A presence check (DEP-002) keeps the scanned files: a hit
   // there is true for the part the user asked about.
+  //
+  // BUG-059: an exemption silences findings about a file, it never hides
+  // the file as evidence. An absence check therefore reads exempt files
+  // too (a health route in an exempt file is still a health route). A
+  // presence check is a finding about the file itself, so exempt files
+  // are left out of its evidence.
   let projectFiles = null;
   for (const rule of AUDIT_RULES) {
     if (!rule.checkFn) continue;
     const wholeProject = rule.evidence === "project";
-    const evidence = wholeProject && projectRoot !== scanRoot
-      ? (projectFiles ??= collectFiles(projectRoot, allExtensions))
-      : files;
+    const evidence = !wholeProject
+      ? files.filter((f) => !exemptPaths.has(f))
+      : projectRoot !== scanRoot
+        ? (projectFiles ??= collectFiles(projectRoot, allExtensions))
+        : files;
     if (rule.checkFn(evidence, projectRoot)) {
       allFindings.push({ file: wholeProject ? projectRoot : targetDir, line: null, content: null, rule });
     }

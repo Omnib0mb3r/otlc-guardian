@@ -1909,7 +1909,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <div class="tbl dense"><table>
 <thead><tr><th>Mechanism</th><th>Applies to</th><th>Syntax</th><th>Visible where</th><th>Guarded how</th></tr></thead>
 <tbody>
-<tr><td>Central allowlist</td><td>Audit: every pattern and analyzer rule, whole file. Not the project checks.</td><td><code>&lt;path&gt;  # reason: &lt;text&gt;</code> in <code>security/.audit-allowlist</code>, path relative to the project root</td><td><code>Exempt :</code> line and <code>[allowlist]</code> list on every run; <code>exempt.allowlist</code> in <code>--json</code>; count in the CI step summary</td><td>A line without <code>reason:</code> is ignored with a warning. CODEOWNERS in the Guardian repo. <code>update</code> never overwrites it. The hook does not watch or protect it.</td></tr>
+<tr><td>Central allowlist</td><td>Audit: every pattern and analyzer rule, whole file, and the presence check DEP-002. Never hides a file as evidence for an absence check (DEP-001, WEB-002).</td><td><code>&lt;path&gt;  # reason: &lt;text&gt;</code> in <code>security/.audit-allowlist</code>, path relative to the project root</td><td><code>Exempt :</code> line and <code>[allowlist]</code> list on every run; <code>exempt.allowlist</code> in <code>--json</code>; count in the CI step summary</td><td>A line without <code>reason:</code> is ignored with a warning. CODEOWNERS in the Guardian repo. <code>update</code> never overwrites it. The hook does not watch or protect it.</td></tr>
 <tr><td>Per-file marker</td><td>Same as the allowlist</td><td>A comment line that starts with <code>otlc-guardian:audit-exempt</code>, within the file's first 4096 characters</td><td><code>[marker]</code> list on every run; <code>exempt.marker</code> in <code>--json</code>; CI count</td><td>Visibility only</td></tr>
 <tr><td>Built-in rule scope</td><td>The rules that declare it; the file walker</td><td>Code in <code>03-audit.js</code>: <code>excludePatterns</code>, <code>excludeLinePatterns</code>, <code>SKIP_DIRS</code></td><td>Not reported</td><td>Only by editing the audit; CODEOWNERS in the Guardian repo</td></tr>
 <tr><td>CSP text anywhere (a defect)</td><td><code>WEB-002</code> only</td><td>Any text matching <code>CSP_ANYWHERE</code>, comments included</td><td>Not reported</td><td>None. BUG-038, open.</td></tr>
@@ -1967,7 +1967,11 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 
 <h3 id="sp-notcovered">What an audit exemption does not cover</h3>
 
-<p>The three project checks (<code>DEP-001</code>, <code>DEP-002</code>, <code>WEB-002</code>) are <code>checkFn</code> rules. <code>runAudit()</code> passes them the full file list, or the project root's files on a partial scan (BUG-041), without filtering out <code>exemptPaths</code>. An exempt file still counts as evidence for them: a health route in an exempt file still satisfies <code>DEP-001</code>, and a CSP header in an exempt file still clears <code>WEB-002</code>. No exemption removes a project check's finding.</p>
+<p>The three project checks (<code>DEP-001</code>, <code>DEP-002</code>, <code>WEB-002</code>) are <code>checkFn</code> rules. The rule, decided under BUG-059 (2026-11-10): an exemption silences findings <i>about</i> a file, and never hides the file as evidence.</p>
+<ul>
+<li><b>Absence checks</b> (<code>evidence: "project"</code>: <code>DEP-001</code> no health route, <code>WEB-002</code> no CSP) get every file, exempt or not, or the project root's files on a partial scan (BUG-041). A health route in an exempt file still satisfies <code>DEP-001</code>; a CSP header in an exempt file still clears <code>WEB-002</code>. No exemption removes their finding: the finding is about the whole project, so the fix is in the project.</li>
+<li><b>Presence checks</b> (<code>DEP-002</code>, a committed <code>.env</code>) get the scanned files minus <code>exemptPaths</code>. The finding is about the file itself, so an allowlist line such as <code>.env  # reason: committed defaults, no secrets</code> silences it, and the file shows in the <code>[allowlist]</code> list like any other.</li>
+</ul>
 
 <h3 id="sp-builtin">Built-in rule scope</h3>
 
@@ -2062,7 +2066,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 <li><b>The runtime guard</b> (<code>security/01-injection-guard.js</code>, <code>injection_guard.py</code>) has no exemption parameter or marker.</li>
 </ul>
 
-<div class="limit"><b>Open on 2026-11-10</b><p><b>BUG-038</b>: a comment naming the CSP header clears WEB-002 and is not reported as an exemption. <b>BUG-058</b>: hook <code>ignorePaths</code> is a substring match. <b>BUG-059</b>: audit exemptions do not reach the project checks.</p></div>
+<div class="limit"><b>Open on 2026-11-10</b><p><b>BUG-038</b>: a comment naming the CSP header clears WEB-002 and is not reported as an exemption. <b>BUG-058</b>: hook <code>ignorePaths</code> is a substring match.</p></div>
 
 <h3 id="sp-policy">When to use one</h3>
 

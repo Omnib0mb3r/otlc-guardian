@@ -2462,6 +2462,58 @@ describe("BUG-057: the audit-exempt marker must be its own comment line", () => 
 });
 
 // ---------------------------------------------------------------------------
+// BUG-059: what an audit exemption means for the project checks
+// ---------------------------------------------------------------------------
+//
+// An exemption silences findings about a file; it never hides the file
+// as evidence. An absence check (DEP-001, WEB-002: "nothing in the
+// project does X") still reads exempt files, so a health route or a CSP
+// header in one still counts. A presence check (DEP-002: "this file is
+// committed") is a finding about the file itself, so an exempt file is
+// left out of its evidence.
+
+describe("BUG-059: exemptions and the project checks", () => {
+  const express = JSON.stringify({ dependencies: { express: "4.21.2" } });
+
+  test("DEP-001: a health route in an allowlisted file still counts", () => {
+    assert.ok(!auditFires({
+      "package.json": express,
+      "src/server.js": "app.get('/health', (req, res) => res.send('ok'));\napp.listen(3000);\n",
+      "security/.audit-allowlist": "src/server.js  # reason: fixture\n",
+    }, "DEP-001"));
+  });
+
+  test("DEP-001: a health route in a marker-exempt file still counts", () => {
+    assert.ok(!auditFires({
+      "package.json": express,
+      "src/server.js": "// otlc-guardian:" + "audit-exempt - fixture\napp.get('/health', (req, res) => res.send('ok'));\napp.listen(3000);\n",
+    }, "DEP-001"));
+  });
+
+  test("WEB-002: a CSP header set in an allowlisted file still clears it", () => {
+    assert.ok(!auditFires({
+      "nginx/site.conf": "server {\n  listen 80;\n  server_name example.com;\n}\n",
+      "src/app.js": "app.use(helmet());\n",
+      "security/.audit-allowlist": "src/app.js  # reason: fixture\n",
+    }, "WEB-002"));
+  });
+
+  test("WEB-002 still fires when no file sets a CSP", () => {
+    assert.ok(auditFires({
+      "nginx/site.conf": "server {\n  listen 80;\n  server_name example.com;\n}\n",
+      "src/app.js": "export const a = 1;\n",
+    }, "WEB-002"));
+  });
+
+  test("DEP-002: an allowlisted .env is not reported", () => {
+    assert.ok(!auditFires({
+      ".env": "PORT=3000\n",
+      "security/.audit-allowlist": ".env  # reason: committed defaults, no secrets\n",
+    }, "DEP-002"));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

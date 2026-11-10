@@ -70,7 +70,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-056 | SMOKE-TESTING | Audit allowlist accepts an entry with an empty `# reason:`, though SECURITY.md says entries without a reason are rejected |
 | BUG-057 | SMOKE-TESTING | Any mention of `otlc-guardian:audit-exempt` in a file's first 4 KB exempts the whole file, including a string or a comment about the marker |
 | BUG-058 | OPEN | Hook `ignorePaths` is a substring match: an entry such as `docs` exempts every path containing it |
-| BUG-059 | OPEN | Audit exemptions do not reach the project checks: `DEP-001`, `DEP-002`, `WEB-002` still read exempt files |
+| BUG-059 | SMOKE-TESTING | Audit exemptions do not reach the project checks: `DEP-001`, `DEP-002`, `WEB-002` still read exempt files |
 | BUG-060 | SMOKE-TESTING | `guardian init` copies Guardian's own `.github/` (CODEOWNERS naming Guardian's maintainer, templates) and allowlist into every project |
 | BUG-061 | SMOKE-TESTING | `guardian init` and `update` on an invalid `.claude/settings.json` stop with a raw stack trace after earlier steps are written |
 | BUG-062 | SMOKE-TESTING | `guardian check` passes (exit 0, "correctly installed") when the hook smoke test fails, and never checks the hook is registered |
@@ -772,9 +772,11 @@ The marker check looks for the string anywhere in the first 4096 characters, so 
 
 ### BUG-059: Audit exemptions do not reach project checks
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 Exempt files are skipped by per-file rules but still passed to the project checks, so DEP-001, DEP-002 and WEB-002 read them. Possibly intended for absence checks (an exempt file can still hold the health route); undocumented either way. Decide and document; test the chosen behavior.
+
+**Fix (2026-11-10).** Decision: an exemption silences findings about a file and never hides the file as evidence. In `runAudit()` (`security/03-audit.js`) a presence check (no `evidence: "project"`, today only DEP-002) now gets `files` minus `exemptPaths`; the absence checks DEP-001 and WEB-002 keep every file. Tests: `tests/audit.test.js`, "BUG-059" block (health route in an allowlisted file and in a marker-exempt file, CSP in an allowlisted file, WEB-002 still firing with no CSP, an allowlisted `.env`). They pass on the old code too: the absence behavior was already the chosen one, and DEP-002 cannot fire until BUG-039 is fixed, so the `.env` test guards the BUG-039 fix. Manual chapter 06 rewritten for it. Smoke test: after BUG-039, a project with a committed `.env` reports DEP-002, and adding `.env  # reason: ...` to its allowlist clears it.
 
 ### BUG-060: `init` copies Guardian's own repo files into projects
 
