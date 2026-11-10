@@ -46,6 +46,12 @@ jobs:
         if: hashFiles('tests/injection-guard.test.js') != ''
         run: npm test
 
+      - name: Run Guardian tests against the staged enforcement files
+        # Guardian's own repo only: staging/ holds the candidate next
+        # versions of the hooks and scanner (see staging/README.md).
+        if: hashFiles('tests/staging.mjs') != ''
+        run: npm run test:staging
+
       - name: Run guardian check
         if: hashFiles('bin/guardian.js') != ''
         run: node bin/guardian.js check

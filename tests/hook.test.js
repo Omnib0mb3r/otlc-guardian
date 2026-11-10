@@ -34,16 +34,21 @@
 
 import { strict as assert } from "assert";
 import { spawnSync } from "child_process";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 import path from "path";
 import os from "os";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "fs";
-import { scan } from "../security/01-injection-guard.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT      = path.resolve(__dirname, "..");
-const PRE_HOOK  = path.join(ROOT, ".claude", "hooks", "injection-guard-hook.mjs");
-const POST_HOOK = path.join(ROOT, ".claude", "hooks", "web-content-guard.mjs");
+// The hooks and scanner under test. GUARDIAN_ENFORCEMENT_ROOT names a
+// folder laid out like an install (.claude/hooks/, security/); unset, the
+// live files in this repo are tested. tests/staging.mjs points it at a
+// copy of staging/.
+const ENFORCEMENT_ROOT = process.env.GUARDIAN_ENFORCEMENT_ROOT ? path.resolve(process.env.GUARDIAN_ENFORCEMENT_ROOT) : ROOT;
+const PRE_HOOK  = path.join(ENFORCEMENT_ROOT, ".claude", "hooks", "injection-guard-hook.mjs");
+const POST_HOOK = path.join(ENFORCEMENT_ROOT, ".claude", "hooks", "web-content-guard.mjs");
+const { scan }  = await import(pathToFileURL(path.join(ENFORCEMENT_ROOT, "security", "01-injection-guard.js")).href);
 
 // ---------------------------------------------------------------------------
 // MINI TEST RUNNER
@@ -69,6 +74,18 @@ function test(name, fn) {
 function describe(group, fn) {
   console.log(`\n📋 ${group}`);
   fn();
+}
+
+// A test for a fix that so far exists only in staging/ (the candidate next
+// versions of the protected files). Against the live files it is listed and
+// skipped, never failed; npm run test:staging runs it. Remove the wrapper
+// once the fix is applied live (staging/APPLY.md).
+const TESTING_STAGED = ENFORCEMENT_ROOT !== ROOT;
+let skipped = 0;
+function stagedOnly(name, fn) {
+  if (TESTING_STAGED) return test(name, fn);
+  console.log(`  ⏸  ${name} (fixed in staging only; runs under npm run test:staging)`);
+  skipped++;
 }
 
 // ---------------------------------------------------------------------------
@@ -1124,7 +1141,7 @@ describe("PreToolUse hook: self-protection of the hook files and scanner (1.5.0 
 
   test("the files this hook runs from are covered even outside the project", () => {
     inGuardedProject((dir) => {
-      for (const file of [PRE_HOOK, POST_HOOK, path.join(ROOT, SCANNER_REL)]) {
+      for (const file of [PRE_HOOK, POST_HOOK, path.join(ENFORCEMENT_ROOT, SCANNER_REL)]) {
         const out = run(dir, "Write", { file_path: file, content: "process.exit(0)\n" });
         assert.equal(decisionOf(out), "ask", `${file}: ${out.slice(0, 200)}`);
       }
@@ -1176,6 +1193,7 @@ console.log(`\n${"─".repeat(60)}`);
 console.log(`🔍 [OTLC GUARDIAN] hook.test.js RESULTS`);
 console.log(`   Passed : ${passed}`);
 console.log(`   Failed : ${failed}`);
+if (skipped > 0) console.log(`   Skipped: ${skipped} (fixed in staging only, not yet live)`);
 console.log(`   Total  : ${passed + failed}`);
 
 if (failures.length > 0) {

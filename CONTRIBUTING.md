@@ -17,6 +17,10 @@ guardian audit    # scans the repo for issues
 
 If `npm test` is green and `guardian audit` reports no findings, your environment is ready.
 
+### Changing the hooks or the scanner
+
+`.claude/hooks/injection-guard-hook.mjs`, `.claude/hooks/web-content-guard.mjs` and `security/01-injection-guard.js` are protected: the live hook asks a person before any change to them. Make the change in their copies under `staging/` instead (`staging/hooks/`, `staging/security/`), with its tests, and run `npm run test:staging`, which runs the hook and scanner suites against the staged copies. A test that only passes against the staged copies is written with `stagedOnly()`. The maintainer applies staged files to the live paths by hand, in a session with permission prompts on, following `staging/APPLY.md`. See `staging/README.md`.
+
 ---
 
 ## What kinds of contributions are welcome

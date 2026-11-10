@@ -46,7 +46,8 @@
     "test:hook":    "node tests/hook.test.js",
     "test:agents":  "node tests/agents-md.test.js",
     "test:audit":   "node tests/audit.test.js",
-    "test:sql":     "node tests/sql-guard.test.js"
+    "test:sql":     "node tests/sql-guard.test.js",
+    "test:staging": "node tests/staging.mjs"
   },
   "keywords": [
     "security",

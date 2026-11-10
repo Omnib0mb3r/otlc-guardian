@@ -150,6 +150,20 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Added
 
+- **staging/ for the protected files (Guardian's own repo).** The candidate
+  next versions of the two hooks and the scanner live in `staging/hooks/`
+  and `staging/security/`, outside every path the live hook watches or
+  protects, and hook and scanner fixes land there first.
+  `npm run test:staging` (`tests/staging.mjs`) lays them out like an
+  install in a temporary folder and runs `tests/injection-guard.test.js`
+  and `tests/hook.test.js` against them through `GUARDIAN_ENFORCEMENT_ROOT`;
+  `npm test` still tests the live files. A test that only the staged files
+  pass is written with `stagedOnly()` and listed as skipped against the
+  live files. The CI workflow runs the staged suites when
+  `tests/staging.mjs` exists, so installed projects are not affected.
+  staging/ is not in the npm package. The maintainer applies staged files
+  by hand with permission prompts on (`staging/APPLY.md`).
+
 - **Per-rule allowlist entries.** `<path>  [RULE-ID, ...]  # reason: ...`
   in `security/.audit-allowlist` suppresses only the named audit rules in
   that file; every other rule still runs on it, as with

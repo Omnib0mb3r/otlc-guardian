@@ -17,7 +17,16 @@
 
 import { strict as assert } from "assert";
 import { readFileSync } from "fs";
-import {
+import path from "path";
+import { pathToFileURL } from "url";
+
+// The scanner under test. GUARDIAN_ENFORCEMENT_ROOT names a folder laid out
+// like an install (security/01-injection-guard.js); unset, the live scanner
+// in this repo is tested. tests/staging.mjs points it at a copy of staging/.
+const SCANNER_URL = process.env.GUARDIAN_ENFORCEMENT_ROOT
+  ? pathToFileURL(path.join(path.resolve(process.env.GUARDIAN_ENFORCEMENT_ROOT), "security", "01-injection-guard.js")).href
+  : new URL("../security/01-injection-guard.js", import.meta.url).href;
+const {
   INJECTION_PATTERNS,
   scan,
   scanChange,
@@ -25,7 +34,7 @@ import {
   guardInput,
   guardOutput,
   GuardianError,
-} from "../security/01-injection-guard.js";
+} = await import(SCANNER_URL);
 
 // ---------------------------------------------------------------------------
 // MINI TEST RUNNER (zero dependencies)
@@ -51,6 +60,18 @@ function test(name, fn) {
 function describe(group, fn) {
   console.log(`\n📋 ${group}`);
   fn();
+}
+
+// A test for a fix that so far exists only in staging/ (the candidate next
+// versions of the protected files). Against the live files it is listed and
+// skipped, never failed; npm run test:staging runs it. Remove the wrapper
+// once the fix is applied live (staging/APPLY.md).
+const TESTING_STAGED = Boolean(process.env.GUARDIAN_ENFORCEMENT_ROOT);
+let skipped = 0;
+function stagedOnly(name, fn) {
+  if (TESTING_STAGED) return test(name, fn);
+  console.log(`  ⏸  ${name} (fixed in staging only; runs under npm run test:staging)`);
+  skipped++;
 }
 
 // ---------------------------------------------------------------------------
@@ -670,6 +691,7 @@ console.log(`\n${"─".repeat(60)}`);
 console.log(`🔍 [OTLC GUARDIAN] TEST RESULTS`);
 console.log(`   Passed : ${passed}`);
 console.log(`   Failed : ${failed}`);
+if (skipped > 0) console.log(`   Skipped: ${skipped} (fixed in staging only, not yet live)`);
 console.log(`   Total  : ${passed + failed}`);
 
 if (failures.length > 0) {
