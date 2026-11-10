@@ -79,6 +79,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-065 | OPEN | Settings and guard-file protection miss explicit deletes and replaces: `find -delete`, `rsync --delete`, `tar -x`, `cmd /c rd` and `del` |
 | BUG-066 | OPEN | Copies into watched paths not judged: directory sources (`cp -r dir/. .claude/agents/`), `sort -o`, `cmd /c copy` |
 | BUG-067 | OPEN | PowerShell parameter prefixes (`-LiteralP`, `-Pat`, `-Val`) are not recognized; `-EncodedCommand` payload text is never scanned |
+| BUG-068 | OPEN | `guardian scan` exits 0 when it finds injection or secret patterns, so a script or pipeline cannot act on the result |
 
 <!-- INDEX END -->
 
@@ -836,5 +837,11 @@ Re-probe R5 (variants of verifier P6), both confirmed to write in real PowerShel
 - `powershell -enc <base64>`: the decoded script is read for write targets, but its text is never scanned for patterns, so a payload inside it passes. The CHANGELOG line "`-EncodedCommand` is decoded" overstated this (corrected 2026-11-10).
 
 Hook edit; waits.
+
+### BUG-068: `guardian scan` exits 0 on a finding
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+From code (`runScan()` in `bin/guardian.js`), first noted under BUG-062: the command prints the violations and a warning, then returns, so the process exits 0 whether the text is clean or carries a CRITICAL injection or a secret. Exit 1 is used only for "no text given". `cat untrusted.txt | guardian scan && send-to-model` therefore sends the poisoned text. Manual chapter 05 documents the 0 as current behavior. Fix in `bin/` (not a protected file): a distinct non-zero exit on a finding, and a usage error kept apart from a finding.
 
 <!-- DETAILS END -->
