@@ -1872,11 +1872,31 @@ describe("PreToolUse hook - removals and read-only inline code are judged by the
     });
   }
 
-  // Inline code without a write call reads; a root word is not a target.
+  // Re-probe 2, S6: inline code that names a guarded file (or a folder
+  // holding one) counts as writing it whatever API it uses. Before S6 the
+  // first two of these, which only read, were asserted silent.
   for (const command of [
+    `python -c "import os as o; o.remove('.claude/settings.json')"`,
+    `python -c "from os import remove; remove('.claude/settings.json')"`,
+    `node -e "const f=require('fs'); f.rm('.claude',{recursive:true},()=>{})"`,
+    `perl -e 'unlink ".claude/settings.json"'`,
+    `ruby -e 'File.delete(".claude/hooks/injection-guard-hook.mjs")'`,
+    `node -e "const f=require('fs'); f.unlinkSync('security/01-injection-guard.js')"`,
+    `python -c "p='security/package.json'; __import__('os').remove(p)"`,
     `node -e "console.log(require('fs').readFileSync('.claude/settings.json', 'utf8'))"`,
     `python -c "import json; print(json.load(open('.claude/settings.json'))['hooks'])"`,
+  ]) {
+    stagedOnly(`inline code naming a guarded file asks (S6): ${command}`, () => {
+      const out = run(command);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 300));
+    });
+  }
+
+  // Inline code without a write call reads; a root word is not a target.
+  for (const command of [
     `python -c "print(open('CLAUDE.md').read().count('#'))"`,
+    `python -c "print('/'.join(['a', 'b']))"`,
+    `node -p "require('path').join('src', 'index.ts')"`,
     `python -c "open('notes.txt', 'w').write(str(6 / 3))"`,
     `node -e "require('fs').writeFileSync('out.txt', String(6 / 3))"`,
   ]) {

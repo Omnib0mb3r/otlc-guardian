@@ -201,6 +201,20 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Inline code that names a guarded file counts as writing it (BUG-044,
+  re-probe 2 S6).** The BUG-044 change read inline interpreter code as a
+  write only when it held a known write call, so an alias
+  (`import os as o; o.remove(...)`), a bare imported name
+  (`from os import remove`), `f.rm` on a renamed `fs`, or perl's
+  `unlink` deleted `.claude/settings.json` silently. Code given to
+  `node -e`, `python -c`, `perl -e`, `ruby -e` and the like that names
+  the settings files, a hook script, the scanner, `security/package.json`,
+  or the folders holding them (`.claude`, `.claude/hooks`, `security`)
+  now asks whatever it calls (denied in bypass mode). That includes code
+  that only reads them; use the Read tool or `cat` to read Guardian's
+  files. Instruction files keep the write-call judgement, and a bare `/`
+  is still never a target.
+
 - **Any change to the `env` block of either settings file asks (BUG-045,
   re-probe 2 S9).** Claude Code passes `env` to every hook it runs, so
   `"env": {"NODE_OPTIONS": "--require exit0.cjs"}` in

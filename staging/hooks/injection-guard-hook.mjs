@@ -715,7 +715,10 @@ function lineFilter(name, args) {
 // something; then its path-like words are its possible targets, except a
 // bare root ("/", "\", "C:"), which is never a target by itself. Code that
 // hides its write call (a mode in a variable, a name built from parts)
-// passes, like the encoded shell content of BUG-047.
+// passes, like the encoded shell content of BUG-047. Code that names a
+// guarded file, or a folder holding one, counts as writing it whatever it
+// calls (re-probe 2, S6): an alias (`import os as o`), a bare imported
+// name or a perl builtin is not a call the list can know.
 // ---------------------------------------------------------------------------
 
 const INLINE_WRITE_CALLS = [
@@ -735,6 +738,16 @@ const INLINE_WRITE_CALLS = [
   /\b(?:subprocess|child_process)\b|(?<![.\w$])(?:exec|execSync|execFile|execFileSync|spawn|spawnSync|system|popen|proc_open|shell_exec|passthru)\s*\(|\bos\.(?:system|popen|exec\w*|spawn\w*)\s*\(/,
 ];
 const ROOT_WORD = /^(?:[\\/]+|[A-Za-z]:[\\/]*)$/;
+// The guarded files and the folders that hold them, as path endings.
+// Matched by ending because the shell reader does not know the project
+// root; the folders are named so "." or ".." never count.
+const GUARD_ENDINGS = [
+  "/.claude", "/.claude/hooks", "/security",
+  "/.claude/settings.json", "/.claude/settings.local.json",
+  ...GUARDIAN_HOOK_FILES.map((f) => `/.claude/hooks/${f}`),
+  `/${GUARDIAN_SCANNER_FILE.replace(/\\/g, "/")}`, `/${GUARDIAN_SCANNER_PACKAGE.replace(/\\/g, "/")}`,
+];
+const namesGuardFile = (absPath) => GUARD_ENDINGS.some((e) => watchKey(absPath).endsWith(e));
 
 /** Index just past the ")" that closes a "$(" opened before `from`. */
 function closingParen(text, from) {
@@ -1068,8 +1081,9 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   } else if (INTERPRETERS.has(name)) {
     const flag = args.findIndex((a) => INLINE_CODE_FLAGS.has(a));
     const code = flag >= 0 ? args.slice(flag + 1).join(" ") : "";
-    if (INLINE_WRITE_CALLS.some((re) => re.test(code))) {
-      for (const p of pathLikeWords(code)) if (!ROOT_WORD.test(p)) add(dir, p);
+    const writes = INLINE_WRITE_CALLS.some((re) => re.test(code));
+    for (const p of pathLikeWords(code)) {
+      if (!ROOT_WORD.test(p) && (writes || namesGuardFile(abs(dir, p)))) add(dir, p);
     }
   } else if (COPY_COMMANDS.has(name)) {
     const t = args.findIndex((a) => a === "-t" || a === "--target-directory");
