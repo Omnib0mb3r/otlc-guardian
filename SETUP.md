@@ -285,10 +285,11 @@ it can only warn. If a hook itself fails, the tool call is not blocked,
 but the failure is printed and reported as a hook error. Both are wired up
 automatically by `guardian init` and registered in `.claude/settings.json`.
 
-### Hook 1 — `injection-guard-hook.mjs` (PreToolUse on Write/Edit)
+### Hook 1 — `injection-guard-hook.mjs` (PreToolUse on Write, Edit, MultiEdit, NotebookEdit, Bash)
 
-Fires every time Claude writes or edits a file in a watched location and
-scans the content for the same 28 injection patterns the runtime guard
+Fires every time Claude writes or edits a file in a watched location, or
+runs a Bash command that names or writes one, and scans the content for
+the same 28 injection patterns the runtime guard
 uses (single source of truth — the hook imports them directly from
 `security/01-injection-guard.js`, so they cannot drift).
 
@@ -303,7 +304,7 @@ Claude session as instructions, memory, or research:
 - `MEMORY.md` — auto-memory index
 - `.env*` — environment files (sometimes contain embedded payloads)
 
-### Hook 2 — `web-content-guard.mjs` (PostToolUse on WebFetch/WebSearch)
+### Hook 2 — `web-content-guard.mjs` (PostToolUse on WebFetch, WebSearch, `mcp__firecrawl__crawl`, `mcp__exa__search`)
 
 Fires every time Claude fetches a URL or runs a web search, and scans the
 returned content **before Claude reasons about it**. This is the entry

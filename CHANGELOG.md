@@ -119,6 +119,12 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **Docs that disagreed with the code (review finding 15).** The audit
+  rule breakdown is now the audit's own header (34 pattern, 5 analyzer,
+  3 project; 42 in all) in README.md and the skill, which still said 33.
+  SECURITY.md said 9 secret patterns; there are 16. SETUP.md listed the
+  PreToolUse hook as Write/Edit only, and README.md and SETUP.md gave the
+  web hook's matcher without the MCP tool names it registers.
 - **`guardian update` did nothing for an existing install (BUG-025).** It
   was an alias for `init`, which never overwrites a file, so no fix ever
   reached a project that already had Guardian. `update` now replaces

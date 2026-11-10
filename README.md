@@ -245,8 +245,9 @@ guardian update
 ```
 
 **`guardian audit`** — Scan your project for security and quality problems. 42 rules
-in 1.4.x — 28 regex patterns, 3 per-file analyzers, 2 project-level checks. The audit
-prints the live breakdown on every run, so that line is always the authoritative count.
+in 1.5.x: 34 regex patterns, 5 per-file analyzers, 3 project-level checks. The audit
+prints the live breakdown on every run (`Rules : 34 pattern · 5 analyzer · 3 project`), so
+that line is always the authoritative count.
 Run regularly.
 ```bash
 guardian audit
@@ -423,7 +424,7 @@ builtin, which you can verify by grepping the source tree.
 **Full step-by-step uninstall instructions live in [`SETUP.md`](SETUP.md#uninstalling).** It walks through:
 
 1. **Un-merging files Guardian appended into** — open `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `STANDARDS.md`, `.gitignore`, and `.env.example` in your editor and delete only the content between the `<!-- OTLC-GUARDIAN-START -->` and `<!-- OTLC-GUARDIAN-END -->` markers (or `# OTLC-GUARDIAN-START` for shell-comment files).
-2. **Cleaning `.claude/settings.json`** — remove only the two Guardian hook entries (PreToolUse `Write|Edit|MultiEdit|NotebookEdit|Bash` → `injection-guard-hook.mjs` and PostToolUse `WebFetch|WebSearch` → `web-content-guard.mjs`). Leave every other hook alone.
+2. **Cleaning `.claude/settings.json`** — remove only the two Guardian hook entries (PreToolUse `Write|Edit|MultiEdit|NotebookEdit|Bash` → `injection-guard-hook.mjs` and PostToolUse `WebFetch|WebSearch|mcp__firecrawl__crawl|mcp__exa__search` → `web-content-guard.mjs`). Leave every other hook alone.
 3. **Deleting pure-Guardian files individually by name** — `security/01-injection-guard.js`, `security/02-code-security.js`, `security/03-audit.js`, `security/04-sql-guard.js`, `security/injection_guard.py`, `.claude/hooks/injection-guard-hook.mjs`, `.claude/hooks/web-content-guard.mjs`. **Never** `rm -rf security/` or `rm -rf .claude/hooks/` — those would also delete any custom files you added.
 4. **Optionally uninstalling the global CLI** — `npm uninstall -g otlc-guardian`.
 
