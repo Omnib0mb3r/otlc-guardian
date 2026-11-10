@@ -57,7 +57,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-043 | IN-PROGRESS | Hook false denies: `### System: Billing`, `### Prompt:`, a `--- System ---` line, "wrap in <user> tags", a CLAUDE.md line that quotes a pattern as data |
 | BUG-044 | OPEN | Hook false denies in bypass mode on Bash cleanup (`sed -i '/payload/d'`, `grep -v` then `mv` back) and read-only `node -e`/`python -c` |
 | BUG-045 | IN-PROGRESS | Settings protection: a matcher with a space (`"Write \|Edit"`) is accepted as unchanged; the `$CLAUDE_PROJECT_DIR` command form is denied as a weakening |
-| BUG-046 | OPEN | `scanChange()` context window: whitespace padding can cross the 2 KB window |
+| BUG-046 | IN-PROGRESS | `scanChange()` context window: whitespace padding can cross the 2 KB window |
 | BUG-047 | OPEN | Encoded Bash content passes the hook: `printf` octal, `rev`, `tr` rot13, variable concatenation, quote-split words |
 | BUG-048 | IN-PROGRESS | PowerShell tool commands are not read for `git`, `bash -c`, `node -e` or `curl -o` writes, and `cmd /c` is read by neither shell reader |
 | BUG-049 | IN-PROGRESS | Runtime `scan()` with an unknown `mode` runs no rules and returns clean (fails open on a typo) |
@@ -704,7 +704,7 @@ Verifier item P10 (`C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f
 
 ### BUG-046: `scanChange()` context window can be crossed with whitespace
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** IN-PROGRESS · **Found:** 2026-11-10
 
 Verifier item P11 (`C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-verify.md`, line refs against 811381e).
 
