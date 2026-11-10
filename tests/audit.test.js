@@ -3409,6 +3409,26 @@ describe("BUG-002: AGT-001, a Base44 agent may create, update or delete a high-r
 });
 
 // ---------------------------------------------------------------------------
+// Gate plan step 0: docs/coverage.md maps every rule
+// ---------------------------------------------------------------------------
+//
+// The coverage map is edited by hand. Its section 6 index lists every rule
+// id once, with the rows it fills, so a rule added without a coverage entry
+// fails here and a rule removed leaves a stale id that fails too.
+
+describe("docs/coverage.md indexes every audit rule", () => {
+  test("section 6 names each AUDIT_RULES id exactly once, and no other id", () => {
+    const doc = readFileSync(path.resolve(__dirname, "..", "docs", "coverage.md"), "utf8");
+    const index = doc.split(/^## 6\. /m)[1] ?? "";
+    assert.ok(index, "docs/coverage.md has no section 6 (rule index)");
+    const listed = [...index.matchAll(/^\| ([A-Z]+-\d+b?) \|/gm)].map((m) => m[1]);
+    const ids = AUDIT_RULES.map((r) => r.id);
+    assert.deepEqual([...listed].sort(), [...ids].sort());
+    assert.equal(new Set(listed).size, listed.length, "an id is listed twice");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

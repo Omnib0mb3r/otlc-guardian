@@ -1,6 +1,7 @@
 # OTLC Guardian coverage map
 
-State of 1.5.0 (unreleased), commit `0fa32ce`, 2026-11-10. Gate plan step 0, item 4.
+State of 1.5.0 (unreleased), commit `759d5c2` plus this update, 2026-11-10: 48 audit rules
+(37 pattern, 7 analyzer, 4 project). Gate plan step 0, item 4.
 
 This map says what Guardian checks, by language and against two public lists:
 OWASP ASVS 5.0 (chapters V1 to V17) and the CWE Top 25 for 2025. It is a
@@ -20,7 +21,8 @@ per-file analyzer, so it finds common shapes of a weakness, not all of them.
 Sources: CWE Top 25 2025 from https://cwe.mitre.org/top25/archive/2025/2025_cwe_top25.html
 and ASVS 5.0 chapter names from https://github.com/OWASP/ASVS/tree/master/5.0/en,
 both read on 2026-11-10. Rule ids and file types from `security/03-audit.js`
-(rule table, lines about 835 to 1430, and the extension constants near line 86).
+(`AUDIT_RULES` and the extension constants near line 86). Section 6 indexes every
+rule id; `tests/audit.test.js` fails when it does not match `AUDIT_RULES`.
 
 ## 1. By language
 
@@ -35,11 +37,15 @@ project.
 | HTML and components | `.html .htm .vue .svelte` | WEB-001 (`.html .vue .svelte`); REP-001, REP-003, REP-004 (`.html .htm`) |
 | Data and config | `.env .json .yaml .yml` | SEC (all secret rules, not on a bare `.env`). A bare `.env` is collected by name for DEP-002 only (BUG-039) |
 | nginx config | read by the project check | WEB-002 (no Content-Security-Policy anywhere in the project) |
-| Any project | project checks | DEP-001 (no health route, only when the project looks like an HTTP server), DEP-002, WEB-002 |
+| Agent instruction files | `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` in any folder, `.md` under `.claude/agents/` and `.claude/commands/`, any `SKILL.md`; chosen by path, any case | AGT-002 (CRITICAL findings of the runtime scanner). No other rule reads Markdown |
+| Claude Code settings | `.claude/settings.json`; `.claude/settings.local.json` unless git keeps it out | AGT-003 (project check); the SEC rules read them as `.json` |
+| Base44 agent configs | `base44/agents/<agent>.jsonc` or `.json`, by path | AGT-001. The SEC rules read the `.json` form only: a secret in a `.jsonc` config is not seen |
+| Any project | project checks | DEP-001 (no health route, only when the project looks like an HTTP server), DEP-002, WEB-002, AGT-003 |
 | Any text, at runtime | not file based | Runtime guard `GUARD-INJ-*` and `GUARD-SEC-*` on AI model input and output; the PreToolUse hook on agent writes to watched paths |
 
 Not scanned by any audit rule: Go, Rust, Java, C#, C and C++, PHP, Ruby,
-shell scripts, SQL files, Dockerfiles, CI workflow files, Terraform.
+shell scripts, SQL files, Dockerfiles, CI workflow files, Terraform. Agent
+configurations of frameworks other than Base44 have no common format and no rule.
 
 ## 2. OWASP ASVS 5.0
 
@@ -59,7 +65,7 @@ shell scripts, SQL files, Dockerfiles, CI workflow files, Terraform.
 | V12 Secure Communication | not covered | none | TLS configuration, plain `http://` endpoints |
 | V13 Configuration | partial | SEC-001 to SEC-014 (hardcoded secrets), CFG-001 to CFG-003 (hardcoded hosts), DEP-002 (`.env` that git does not keep out) | Whether ASVS 5.0 places secret management in V13 or elsewhere needs check |
 | V14 Data Protection | needs check | Runtime `guardOutput` scans model output for secrets (`GUARD-SEC-*`) | Mapping to a V14 requirement needs check; no rules for PII in logs or caching headers |
-| V15 Secure Coding and Architecture | needs check | TS-001 (`any` type), INJ-001 (`eval`, BUG-040) | Dependency auditing is planned (Self-Growing Gate, Lane 4), not built; no deserialization rule. Mapping needs check |
+| V15 Secure Coding and Architecture | needs check | TS-001 (`any` type), INJ-001 (`eval(`, `new Function(`) | Dependency auditing is planned (Self-Growing Gate, Lane 4), not built; no deserialization rule. Mapping needs check |
 | V16 Security Logging and Error Handling | partial | ERR-001 (silent catch), ERR-002 (catch that only logs to console), ERR-003 (`console.log` in non-test code) | JS/TS only; no check that security events are logged, or that logs hold no secrets |
 | V17 WebRTC | not covered | none | |
 
@@ -76,7 +82,7 @@ shell scripts, SQL files, Dockerfiles, CI workflow files, Terraform.
 | 7 | CWE-416 | Use After Free | not covered | none | Memory safety |
 | 8 | CWE-125 | Out-of-bounds Read | not covered | none | Memory safety |
 | 9 | CWE-78 | OS Command Injection | not covered | none | No `exec`/`spawn` with input rule |
-| 10 | CWE-94 | Code Injection | partial | INJ-001 | `eval(` only, JS/TS; misses `new Function`; BUG-040 false positives |
+| 10 | CWE-94 | Code Injection | partial | INJ-001 | `eval(` and `new Function(` in JS/TS; no Python `exec`/`eval`, no `vm` module; the BUG-040 false positives on names ending in `eval` are fixed (SMOKE-TESTING) |
 | 11 | CWE-120 | Classic Buffer Overflow | not covered | none | Memory safety |
 | 12 | CWE-434 | Unrestricted Upload of File with Dangerous Type | not covered | none | |
 | 13 | CWE-476 | NULL Pointer Dereference | not covered | none | |
@@ -87,7 +93,7 @@ shell scripts, SQL files, Dockerfiles, CI workflow files, Terraform.
 | 18 | CWE-20 | Improper Input Validation | partial | VAL-001; runtime `guardInput` for AI model input | JS/TS only for VAL-001 |
 | 19 | CWE-284 | Improper Access Control | partial | AUTHZ family | Parent of 862 and 863; same gaps |
 | 20 | CWE-200 | Exposure of Sensitive Information | partial | SEC family (secrets in source), WEB-001, runtime `guardOutput` | Error detail sent to clients is not checked |
-| 21 | CWE-306 | Missing Authentication for Critical Function | partial | AUTHZ-001, AUTHZ-011 | BUG-070 |
+| 21 | CWE-306 | Missing Authentication for Critical Function | partial | AUTHZ-001, AUTHZ-011 | Per-file: auth applied in another file is not seen. Route-level middleware is read since BUG-070 (SMOKE-TESTING) |
 | 22 | CWE-918 | Server-Side Request Forgery | not covered | none | |
 | 23 | CWE-77 | Command Injection | not covered | none | |
 | 24 | CWE-639 | Authorization Bypass Through User-Controlled Key | partial | AUTHZ-003, AUTHZ-013 | AUTHZ-013 requires the check to name the caller (BUG-030) |
@@ -102,10 +108,13 @@ memory safety weaknesses in languages Guardian does not scan.
 | Area | Grade | Where |
 |---|---|---|
 | Prompt injection into an AI model (CWE-1427; OWASP LLM01) | partial | Runtime guard, 28 `GUARD-INJ-*` patterns, normalization and decode passes (chapter 03 of the manual); pattern based, so reworded instructions pass |
-| Indirect injection through files agents load (CLAUDE.md, memory, plans) | partial | PreToolUse hook, deny on CRITICAL additions to watched paths; routes it cannot see are listed in `SECURITY.md` |
+| Indirect injection through files agents load (CLAUDE.md, memory, plans) | partial | PreToolUse hook, deny on CRITICAL additions to watched paths; routes it cannot see are listed in `SECURITY.md`. AGT-002 reads the committed instruction files (CRITICAL patterns only; HIGH role phrases are what subagent files hold) |
+| Excessive agency (OWASP LLM06:2025) | partial | AGT-001: a Base44 agent's create, update or delete on a money, identity, access or stock entity. No rule for other frameworks, or for Claude Code subagents without `tools:` (their calls pass Claude Code's permissions and the hook) |
+| Guardian switched off by committed settings | partial | AGT-003: invalid or wrong-typed settings, `disableAllHooks: true`, Guardian's hooks installed and not registered. Keys Claude Code adds after the 2026-11-10 schema, enum values and number ranges are not checked |
 | Indirect injection through web content | partial | PostToolUse web content guard; warns only |
 | Hardcoded credentials (CWE-798) | partial | SEC-001 to SEC-014 in the audit; `GUARD-SEC-*` at runtime (BUG-026 for formats added in 1.5.0; BUG-054 brought the audit to the same set) |
 | AV reputation of shipped static sites | partial | REP-001 to REP-005 |
+| Operational readiness | partial | DEP-001: an HTTP server with no health route |
 
 ## 5. How to keep this current
 
@@ -114,3 +123,60 @@ touches in the same commit. A row moves to covered only with fixtures for
 each form the row names, in `tests/audit.test.js`. The Self-Growing Gate
 spec (`TODO.md`) plans a coverage report generated from the rule table;
 until then this file is edited by hand.
+
+## 6. Rule index
+
+Every rule in `AUDIT_RULES`, in its order, with the rows above it fills. A rule
+added or removed changes this table in the same commit; the test in
+`tests/audit.test.js` ("docs/coverage.md indexes every audit rule") fails otherwise.
+
+| Rule | Rows |
+|---|---|
+| SEC-001 | V13; CWE-200; hardcoded credentials (section 4) |
+| SEC-010 | V13; CWE-200; hardcoded credentials |
+| SEC-001b | V13; CWE-200; hardcoded credentials |
+| SEC-002 | V13; CWE-200; hardcoded credentials |
+| SEC-003 | V13; CWE-200; hardcoded credentials |
+| SEC-004 | V13; CWE-200; hardcoded credentials |
+| SEC-005 | V13; CWE-200; hardcoded credentials |
+| SEC-006 | V13; CWE-200; hardcoded credentials |
+| SEC-011 | V13; CWE-200; hardcoded credentials |
+| SEC-012 | V13; CWE-200; hardcoded credentials |
+| SEC-013 | V13; CWE-200; hardcoded credentials |
+| SEC-014 | V13; CWE-200; hardcoded credentials |
+| CFG-001 | V13 |
+| CFG-002 | V13 |
+| CFG-003 | V13 |
+| ERR-001 | V16 |
+| ERR-002 | V16 |
+| ERR-003 | V16 |
+| API-001 | V4 (needs check) |
+| INJ-001 | V15; CWE-94 |
+| INJ-002 | V1; V3; CWE-79 |
+| INJ-003 | V1; V3; CWE-79 |
+| INJ-004 | V1; CWE-89 |
+| INJ-005 | V1; CWE-89 |
+| INJ-005b | V1; CWE-89 |
+| INJ-006 | V1; CWE-89 |
+| DEP-001 | operational readiness (section 4) |
+| DEP-002 | V13 |
+| AUTHZ-001 | V6; CWE-306; CWE-284 |
+| AUTHZ-002 | V8; CWE-863; CWE-284 |
+| AUTHZ-003 | V8; CWE-862; CWE-639; CWE-284 |
+| AUTHZ-004 | V6; V11 |
+| AUTHZ-005 | V8; CWE-862; CWE-863; CWE-284 |
+| VAL-001 | V2; CWE-20 |
+| VAL-002 | V1 |
+| AUTHZ-011 | V6; CWE-306; CWE-284 |
+| AUTHZ-013 | V8; CWE-862; CWE-639; CWE-284 |
+| WEB-001 | V3; V7; CWE-200 |
+| WEB-002 | V3 |
+| TS-001 | V15 |
+| REP-001 | AV reputation (section 4) |
+| REP-002 | AV reputation |
+| REP-003 | V3; AV reputation |
+| REP-004 | V3; AV reputation |
+| REP-005 | AV reputation |
+| AGT-001 | excessive agency (section 4) |
+| AGT-002 | indirect injection through files agents load (section 4) |
+| AGT-003 | Guardian switched off by committed settings (section 4) |
