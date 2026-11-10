@@ -59,6 +59,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-045 | OPEN | Settings protection: a matcher with a space (`"Write \|Edit"`) is accepted as unchanged; the `$CLAUDE_PROJECT_DIR` command form is denied as a weakening |
 | BUG-046 | OPEN | `scanChange()` context window: whitespace padding can cross the 2 KB window |
 | BUG-047 | OPEN | Encoded Bash content passes the hook: `printf` octal, `rev`, `tr` rot13, variable concatenation, quote-split words |
+| BUG-048 | OPEN | PowerShell tool commands are not read for `git`, `bash -c`, `node -e` or `curl -o` writes, and `cmd /c` is read by neither shell reader |
 
 <!-- INDEX END -->
 
@@ -648,5 +649,22 @@ Verifier item P12 (`C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f
 
 - A Bash command can build its payload so the command text carries no pattern: `printf` octal escapes, `rev`, `tr` rot13, variable concatenation, and words split by quotes all pass. The hook judges command text and cannot run the shell.
 - Documented in `SECURITY.md`, "What the PreToolUse hook cannot see" (3286e9b). Not to be chased inside the content hook: it is an input for the hard-no hook (`TODO.md`, Self-Growing Gate spec), which judges a command by its effect. LOW.
+
+### BUG-048: PowerShell tool commands skip the git, nested-shell and inline-code readers; `cmd /c` is read by neither dialect
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Found by the manual writer reading `commandWrites()` in `.claude/hooks/injection-guard-hook.mjs` at `0fa32ce`, then reproduced against the live hook with a scratch project (`.claude/settings.json` present), default permission mode:
+
+| Command | Bash tool | PowerShell tool |
+|---|---|---|
+| `git checkout HEAD~3 -- .claude/settings.json` | ask | silent |
+| `bash -c 'echo x > .claude/settings.json'` | ask | silent |
+| `cmd /c "echo x > .claude\settings.json"` | silent | silent |
+| `echo x > .claude/settings.json` | ask | ask |
+
+- Cause: for the PowerShell dialect `commandWrites()` returns right after `powershellWrites()`, so the readers the Bash path runs (`gitWrites()`, nested `bash -c`/`sh -c`, inline interpreter code, `curl -o`) never see a PowerShell tool command. Only redirections and the listed cmdlets are read. No reader handles `cmd /c` or `cmd.exe /c`.
+- Impact: HIGH on this machine, where PowerShell is the primary shell. Verifier P2 (git checkout of the settings) and P1-class copies are closed for Bash only. The P3 guard-file protection has the same hole through the PowerShell tool.
+- The fix is in the hook, which is now protected (cc9182f), so it must be made in a session that prompts, not in bypass mode. Tests first in `tests/hook.test.js`: the table above for both tools, plus the guard files.
 
 <!-- DETAILS END -->

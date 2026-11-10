@@ -318,7 +318,9 @@ the fetched content.
 
 ### Customizing the watch list
 
-Both hooks honor an `otlcGuardian` config block in `.claude/settings.json`:
+The PreToolUse hook reads an `otlcGuardian` config block in
+`.claude/settings.json` (not in `settings.local.json`). The web content
+guard does not read it; its tool list is fixed in the script.
 
 ```json
 {
