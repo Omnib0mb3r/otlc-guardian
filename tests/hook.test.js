@@ -1717,6 +1717,35 @@ describe("PreToolUse hook - settings protection reads matchers and hook commands
       assert.equal(decisionOf(change(() => settings(), () => settings(PRE_TOOLS, command))), "ask");
     });
   }
+
+  // Re-probe 2, S2: a field on Guardian's entry can switch it off
+  // ("async": true runs it in the background, so it blocks nothing).
+  const withFields = (fields) => {
+    const s = settings();
+    Object.assign(s.hooks.PreToolUse[0].hooks[0], fields);
+    return s;
+  };
+  for (const fields of [{ async: true }, { async: false }, { statusMessage: "checking" }, { once: true }, { shell: "powershell" }]) {
+    stagedOnly(`adding ${JSON.stringify(fields)} to Guardian's hook entry asks (S2)`, () => {
+      const out = change(() => settings(), () => withFields(fields));
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+      expectWarning(out, Object.keys(fields)[0]);
+    });
+  }
+
+  stagedOnly("changing a field already on Guardian's hook entry asks (S2)", () => {
+    assert.equal(decisionOf(change(() => withFields({ async: false }), () => withFields({ async: true }))), "ask");
+  });
+
+  for (const [name, from, to] of [
+    ["raising the timeout", () => settings(), () => withFields({ timeout: 120 })],
+    ["keeping a field as it was", () => withFields({ async: false }), () => withFields({ async: false })],
+    ["removing an added field", () => withFields({ async: true }), () => settings()],
+  ]) {
+    test(`${name} on Guardian's hook entry is unchanged (S2)`, () => {
+      expectSilent(change(from, to));
+    });
+  }
 });
 
 describe("PreToolUse hook - PowerShell parameter prefixes and encoded scripts (BUG-067)", () => {

@@ -1527,6 +1527,17 @@ function extractWrite(toolName, toolInput) {
 // directory the hook starts in (BUG-045).
 
 const DEFAULT_HOOK_TIMEOUT_S = 60; // Claude Code's default for command hooks
+// Fields of a hook entry whose effect Guardian judges itself (timeout by
+// value). Any other field can change how the hook runs ("async": true runs
+// it in the background, so it blocks nothing), so adding or changing one
+// on Guardian's entry is a weakening (re-probe 2, S2).
+const JUDGED_HOOK_FIELDS = new Set(["type", "command", "timeout"]);
+
+/** The entry's other fields, as one comparable string ("" when none). */
+function hookExtras(h) {
+  const extra = Object.keys(h).filter((k) => !JUDGED_HOOK_FIELDS.has(k)).sort();
+  return extra.length === 0 ? "" : JSON.stringify(extra.map((k) => [k, h[k]]));
+}
 
 // Tools a matcher is tested against, besides every name a matcher lists:
 // the ones Guardian's two hooks are registered for. The web guard covers
@@ -1593,7 +1604,11 @@ function hookIdentity(command, root) {
   return { id: `node ${watchKey(file)}`, anchored: fromRoot || path.isAbsolute(word) };
 }
 
-/** @returns {Map<string, { timeout: number, anchored: boolean }>} "event \0 tool \0 hook" -> its strongest registration */
+/**
+ * @returns {Map<string, { timeout: number, anchored: boolean, extras: Set<string> }>}
+ *   "event \0 tool \0 hook" -> its strongest registration, and the extra
+ *   fields (hookExtras()) of every registration
+ */
 function hookCoverage(settings, root, tools) {
   const coverage = new Map();
   const hooks = settings?.hooks && typeof settings.hooks === "object" ? settings.hooks : {};
@@ -1604,11 +1619,16 @@ function hookCoverage(settings, root, tools) {
         if (typeof h?.command !== "string" || (h.type !== undefined && h.type !== "command")) continue;
         const timeout = typeof h.timeout === "number" ? h.timeout : DEFAULT_HOOK_TIMEOUT_S;
         const { id, anchored } = hookIdentity(h.command, root);
+        const extras = hookExtras(h);
         for (const tool of tools) {
           if (!matcherCovers(block.matcher, tool)) continue;
           const key = `${event}\u0000${tool}\u0000${id}`;
           const seen = coverage.get(key);
-          coverage.set(key, { timeout: Math.max(seen?.timeout ?? 0, timeout), anchored: Boolean(seen?.anchored) || anchored });
+          coverage.set(key, {
+            timeout: Math.max(seen?.timeout ?? 0, timeout),
+            anchored: Boolean(seen?.anchored) || anchored,
+            extras: new Set([...(seen?.extras ?? []), extras]),
+          });
         }
       }
     }
@@ -1623,7 +1643,11 @@ function guardianPosture(projectText, localText, root, tools) {
   const coverage = hookCoverage(project, root, tools);
   for (const [key, entry] of hookCoverage(local, root, tools)) {
     const seen = coverage.get(key);
-    coverage.set(key, { timeout: Math.max(seen?.timeout ?? 0, entry.timeout), anchored: Boolean(seen?.anchored) || entry.anchored });
+    coverage.set(key, {
+      timeout: Math.max(seen?.timeout ?? 0, entry.timeout),
+      anchored: Boolean(seen?.anchored) || entry.anchored,
+      extras: new Set([...(seen?.extras ?? []), ...entry.extras]),
+    });
   }
   // The hook reads its own config from settings.json only (loadSettings).
   const cfg = project?.otlcGuardian && typeof project.otlcGuardian === "object" ? project.otlcGuardian : {};
@@ -1706,6 +1730,11 @@ function settingsWeakening(absPath, after) {
     else if (kept.timeout < need.timeout) reasons.push(`Guardian hook timeout on ${event} ${tool} lowered from ${need.timeout} s to ${kept.timeout} s`);
     else if (need.anchored && !kept.anchored) {
       reasons.push(`Guardian hook command on ${event} now depends on the session's directory (a relative path stops working after a cd)`);
+    } else if (![...kept.extras].some((e) => e === "" || need.extras.has(e))) {
+      // Kept as it was, or with every extra field removed: anything else
+      // adds or changes a field whose effect Guardian does not judge.
+      const fields = [...new Set([...kept.extras].flatMap((e) => JSON.parse(e).map(([k]) => k)))];
+      reasons.push(`Guardian hook entry on ${event} gains or changes ${fields.map((f) => `"${f}"`).join(", ")}, which can change how the hook runs`);
     }
   }
   if (was.extendDefaults && !now.extendDefaults) reasons.push("otlcGuardian.extendDefaults is turned off (default watch list dropped)");

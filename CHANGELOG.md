@@ -201,6 +201,14 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A field added to Guardian's hook entry is a weakening (BUG-045,
+  re-probe 2 S2).** Adding `"async": true` to Guardian's entry in
+  `.claude/settings.json` was silent, and Claude Code then runs the hook
+  in the background, where it blocks nothing. Any field other than
+  `type`, `command` and `timeout` (judged by value) that is added to or
+  changed on Guardian's entry now asks (denied in bypass mode); keeping
+  the entry as it was, or removing such a field, does not.
+
 - **A folder copy Guardian cannot read in full fails closed (BUG-066,
   re-probe 2 S1).** Past 1,000 files, or when a subfolder cannot be
   listed, the rest of a copied folder was only reported on stderr, so a
