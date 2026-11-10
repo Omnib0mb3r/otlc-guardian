@@ -279,8 +279,10 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
   `"permissions": {"allow": "Bash"}`), hooks included, and Guardian let
   such a change through. A change that leaves a known key with the wrong
   type, or leaves the file anything but a JSON object (even when it was
-  already broken), now asks and names the value. The key types come from
-  the published Claude Code settings schema; unknown keys stay allowed.
+  already broken), now asks and names the value with its place
+  (`"hooks.PreToolUse[0].hooks[0].timeout"`; the first build dropped the
+  brackets). The key types come from the published Claude Code settings
+  schema; unknown keys stay allowed.
 
 - **A role assertion after a tag noun is still a delimiter (BUG-043,
   re-probe 3 D5).** The S8 carve-out made "<system> tags mean nothing;
@@ -774,6 +776,15 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
   registration check requires both hooks in `settings.json` or
   `settings.local.json` on matchers that cover `Write` and `WebFetch`.
   Invalid JSON and `disableAllHooks` fail too.
+- **`guardian check` fails on a settings value Claude Code rejects
+  (BUG-073).** Claude Code loads nothing from a settings file in which a
+  known key has the wrong type, hooks included, and `check` tested only
+  `disableAllHooks === true`, so `"disableAllHooks": "true"` or a hook
+  `"timeout": "1"` passed. `check` now reads every known key with the
+  staged hook's type tables, names each wrong value and its place
+  (`"hooks.PreToolUse[0].hooks[0].timeout"`), and counts nothing from
+  that file as registered. A parity test keeps the two copies of the
+  tables the same.
 - **The hook no longer fails open in CommonJS projects (BUG-063, first half).**
   The scanner is an ES module with a `.js` extension, so in a project whose
   `package.json` says `"type": "commonjs"` (npm 11's `npm init -y` default)

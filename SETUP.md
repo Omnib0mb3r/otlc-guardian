@@ -588,7 +588,8 @@ The command `node "${CLAUDE_PROJECT_DIR}/.claude/hooks/injection-guard-hook.mjs"
 PreToolUse hook, and reads `.claude/settings.json` and `settings.local.json` for both
 registrations (the PreToolUse hook on a matcher that covers `Write`, the web content guard
 on one that covers `WebFetch`). A hook that does not fire, a missing registration, invalid
-JSON or `disableAllHooks` each fail `check` with exit 1.
+JSON, `disableAllHooks`, or a known settings key with a value of the wrong type (Claude Code
+then loads nothing from that file) each fail `check` with exit 1.
 
 **GitHub Actions failing on Gitleaks scan**
 

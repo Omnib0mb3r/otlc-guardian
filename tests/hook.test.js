@@ -1935,7 +1935,7 @@ describe("PreToolUse hook - settings protection reads matchers and hook commands
   for (const [name, next, field] of [
     ['"disableAllHooks": "true"', () => ({ ...settings(), disableAllHooks: "true" }), "disableAllHooks"],
     ['"disableAllHooks": 1', () => ({ ...settings(), disableAllHooks: 1 }), "disableAllHooks"],
-    ['Guardian\'s "timeout": "1"', () => withFields({ timeout: "1" }), "timeout"],
+    ['Guardian\'s "timeout": "1"', () => withFields({ timeout: "1" }), '"hooks.PreToolUse[0].hooks[0].timeout"'],
     ['"permissions": { "allow": "Bash" }', () => ({ ...settings(), permissions: { allow: "Bash" } }), "permissions.allow"],
     ['"model": 5', () => ({ ...settings(), model: 5 }), "model"],
     ['"cleanupPeriodDays": 1.5', () => ({ ...settings(), cleanupPeriodDays: 1.5 }), "cleanupPeriodDays"],

@@ -1101,6 +1101,71 @@ describe("BUG-002: an init'd project's instruction files scan clean", () => {
 });
 
 // ---------------------------------------------------------------------------
+// BUG-073: check fails when Claude Code would refuse to load a settings file
+// ---------------------------------------------------------------------------
+//
+// Claude Code loads nothing from a settings file in which a known key has
+// the wrong type, hooks included. check used to test only
+// `disableAllHooks === true`, so it reported Guardian installed while no
+// hook ran.
+
+describe("BUG-073: guardian check reads settings value types the way Claude Code does", () => {
+  for (const [label, file, mutate, named] of [
+    ["disableAllHooks as a string in settings.json", "settings.json", (s) => { s.disableAllHooks = "true"; }, "disableAllHooks"],
+    ["disableAllHooks as a number in settings.json", "settings.json", (s) => { s.disableAllHooks = 1; }, "disableAllHooks"],
+    ["Guardian's timeout as a string", "settings.json", (s) => { s.hooks.PreToolUse[0].hooks[0].timeout = "1"; }, "hooks.PreToolUse[0].hooks[0].timeout"],
+    ["permissions.allow as a string", "settings.json", (s) => { s.permissions = { allow: "Bash" }; }, "permissions.allow"],
+    ["model as a number", "settings.json", (s) => { s.model = 5; }, "model"],
+    ["hooks.Stop as an object", "settings.json", (s) => { s.hooks.Stop = {}; }, "hooks.Stop"],
+    ["a wrong type in settings.local.json", "settings.local.json", (s) => { s.cleanupPeriodDays = 1.5; }, "cleanupPeriodDays"],
+  ]) {
+    test(`${label} fails check and names the value`, () => {
+      withTempDir((dir) => {
+        runCli(dir, "init");
+        const at = path.join(dir, ".claude", file);
+        const settings = existsSync(at) ? JSON.parse(readFileSync(at, "utf8")) : {};
+        mutate(settings);
+        writeFileSync(at, JSON.stringify(settings, null, 2));
+        const r = runCheck(dir);
+        assert.equal(r.status, 1, (r.stdout + r.stderr).slice(-400));
+        assert.ok((r.stdout + r.stderr).includes(`"${named}"`), `check must name ${named}`);
+        assert.ok((r.stdout + r.stderr).includes(`.claude/${file}`), `check must name .claude/${file}`);
+      });
+    });
+  }
+
+  // The hook asks before a change leaves a wrong type (re-probe 3, D2) and
+  // check reports one already there; both must read the same tables. The
+  // tables are compared as source text, from SETTINGS_KEY_TYPES up to
+  // TYPE_WORDS. The staged hook is the source: after the apply it equals
+  // the live one.
+  test("check's settings type tables are the hook's", () => {
+    const tables = (file) => {
+      const source = readFileSync(file, "utf8").replace(/\r\n/g, "\n");
+      const from = source.indexOf("const SETTINGS_KEY_TYPES");
+      const to = source.indexOf("const TYPE_WORDS");
+      assert.ok(from !== -1 && to > from, `no type tables in ${file}`);
+      return source.slice(from, to);
+    };
+    const hook = tables(path.join(path.dirname(GUARDIAN_CLI), "..", "staging", "hooks", "injection-guard-hook.mjs"));
+    assert.equal(tables(GUARDIAN_CLI), hook);
+    assert.ok(hook.includes("disableAllHooks") && hook.includes("HOOK_FIELD_TYPES"));
+  });
+
+  test("an unknown key of any type and known keys of the right types pass check", () => {
+    withTempDir((dir) => {
+      runCli(dir, "init");
+      editSettings(dir, (s) => {
+        Object.assign(s, { someFutureKey: 5, anotherOne: { a: 1 }, disableAllHooks: false, model: "opus",
+          cleanupPeriodDays: 30, forceLoginOrgUUID: ["a", "b"], teammateDefaultModel: null });
+      });
+      const r = runCheck(dir);
+      assert.equal(r.status, 0, (r.stdout + r.stderr).slice(-400));
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

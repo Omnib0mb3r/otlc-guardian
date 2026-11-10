@@ -510,6 +510,131 @@ function relativeHookCommands(root) {
   return notes;
 }
 
+// Base types of Claude Code's top-level settings keys, taken from the
+// schemastore claude-code-settings schema (2026-11-10). Claude Code loads
+// nothing from a settings file in which one of these has another type,
+// hooks and permission rules included, and says so only in its startup
+// notice (re-probe 3, D2). A key not listed is allowed: Claude Code
+// ignores an unknown key. "strings" is an array of strings.
+//
+// These tables are a copy of the ones of the same names in
+// staging/hooks/injection-guard-hook.mjs; a parity test in
+// tests/init.test.js fails when the two differ (BUG-073).
+const SETTINGS_KEY_TYPES = Object.fromEntries(Object.entries({
+  boolean: "agentPushNotifEnabled allowAllClaudeAiMcps allowManagedHooksOnly allowManagedMcpServersOnly " +
+    "allowManagedPermissionRulesOnly alwaysThinkingEnabled autoCompactEnabled autoConnectIde autoInstallIdeExtension " +
+    "autoMemoryEnabled autoScrollEnabled awaySummaryEnabled axScreenReader channelsEnabled disableAgentView " +
+    "disableAllHooks disableArtifact disableBrowserExternalNavigation disableBundledSkills disableClaudeAiConnectors " +
+    "disableMobileSimulatorTools disableRemoteControl disableSideloadFlags disableSkillShellExecution disableWorkflows " +
+    "emojiCompletionEnabled enableAllProjectMcpServers enableArtifact enforceAvailableModels externalEditorContext " +
+    "fastMode fastModePerSessionOptIn fileCheckpointingEnabled forceRemoteSettingsRefresh includeCoAuthoredBy " +
+    "includeGitInstructions inputNeededNotifEnabled permissionExplainerEnabled prefersReducedMotion " +
+    "remoteControlAtStartup requireCoworkFullVmSandbox respectGitignore respondToBashCommands " +
+    "showClearContextOnPlanAccept showThinkingSummaries showTurnDuration skipDangerousModePermissionPrompt " +
+    "skipWebFetchPreflight spinnerTipsEnabled syntaxHighlightingDisabled terminalProgressBarEnabled " +
+    "useAutoModeDuringPlan verbose voiceEnabled wheelScrollAccelerationEnabled workflowKeywordTriggerEnabled " +
+    "wslInheritsWindowsSettings",
+  string: "$schema advisorModel agent apiKeyHelper askUserQuestionTimeout autoMemoryDirectory autoUpdatesChannel " +
+    "awsAuthRefresh awsCredentialExport browserExternalPageTools claudeMd defaultShell diffTool disableAutoMode " +
+    "disableDeepLinkRegistration editorMode effortLevel forceLoginGatewayUrl forceLoginMethod gcpAuthRefresh language " +
+    "minimumVersion model otelHeadersHelper outputStyle parentSettingsBehavior plansDirectory pluginTrustMessage " +
+    "prUrlTemplate preferredNotifChannel processWrapper requiredMaximumVersion requiredMinimumVersion teammateMode " +
+    "theme tui viewMode workflowSizeGuideline",
+  integer: "cleanupPeriodDays skillListingMaxDescChars",
+  number: "feedbackSurveyRate skillListingBudgetFraction",
+  object: "attribution autoMode enabledPlugins env extraKnownMarketplaces fileSuggestion hooks modelOverrides " +
+    "permissions pluginConfigs policyHelper sandbox skillOverrides spinnerTipsOverride spinnerVerbs statusLine " +
+    "subagentStatusLine vimInsertModeRemaps voice worktree",
+  strings: "allowedHttpHookUrls availableModels claudeMdExcludes companyAnnouncements disabledMcpjsonServers " +
+    "enabledMcpjsonServers fallbackModel httpHookAllowedEnvVars pluginSuggestionMarketplaces skippedMarketplaces " +
+    "skippedPlugins sshHostAllowlist",
+  array: "allowedChannelPlugins allowedMcpServers blockedMarketplaces deniedMcpServers footerLinksRegexes " +
+    "managedMcpServers sshConfigs strictKnownMarketplaces",
+  "boolean|strings": "strictPluginOnlyCustomization",
+  "string|strings": "forceLoginOrgUUID",
+  "null|string": "teammateDefaultModel",
+}).flatMap(([types, keys]) => keys.split(" ").map((key) => [key, types.split("|")])));
+
+// The fields inside the settings objects that carry Guardian's standing.
+const SETTINGS_FIELD_TYPES = {
+  permissions: { allow: "strings", deny: "strings", ask: "strings", additionalDirectories: "strings",
+    defaultMode: "string", disableBypassPermissionsMode: "string", disableAutoMode: "string" },
+  statusLine: { type: "string", command: "string", padding: "number", refreshInterval: "integer", hideVimModeIndicator: "boolean" },
+};
+// Every field of a hook entry, across the command, prompt, agent, http and mcp kinds.
+const HOOK_FIELD_TYPES = { type: "string", command: "string", timeout: "number", async: "boolean", asyncRewake: "boolean",
+  shell: "string", if: "string", statusMessage: "string", args: "strings", prompt: "string", model: "string",
+  continueOnBlock: "boolean", url: "string", headers: "object", allowedEnvVars: "strings", server: "string",
+  tool: "string", input: "object" };
+
+const TYPE_WORDS = { boolean: "a boolean", string: "a string", integer: "an integer", number: "a number", null: "null",
+  object: "an object", array: "an array", strings: "an array of strings" };
+
+function jsonTypeIs(value, type) {
+  switch (type) {
+    case "boolean":
+    case "string":  return typeof value === type;
+    case "number":  return typeof value === "number" && Number.isFinite(value);
+    case "integer": return Number.isInteger(value);
+    case "null":    return value === null;
+    case "object":  return value !== null && typeof value === "object" && !Array.isArray(value);
+    case "array":   return Array.isArray(value);
+    case "strings": return Array.isArray(value) && value.every((v) => typeof v === "string");
+    default:        return true;
+  }
+}
+
+function jsonTypeWord(value) {
+  if (value === undefined) return "missing";
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "an array";
+  if (Number.isInteger(value)) return "an integer";
+  return TYPE_WORDS[typeof value] ?? typeof value;
+}
+
+/**
+ * Known settings keys whose value has a type Claude Code rejects. Claude
+ * Code then loads nothing from the file, hooks included (BUG-073).
+ * @param {object} settings - a parsed settings object
+ * @returns {string[]} one line per wrong value, naming where it is
+ */
+function settingsTypeProblems(settings) {
+  const problems = [];
+  const printable = (key) => String(key).replace(/[^\x20-\x7E]/g, "?").slice(0, 80);
+  const check = (where, value, types) => {
+    if (types.some((t) => jsonTypeIs(value, t))) return true;
+    problems.push(`"${where}" is ${jsonTypeWord(value)} where Claude Code expects ${types.map((t) => TYPE_WORDS[t]).join(" or ")}`);
+    return false;
+  };
+  for (const [key, types] of Object.entries(SETTINGS_KEY_TYPES)) {
+    if (Object.hasOwn(settings, key)) check(key, settings[key], types);
+  }
+  for (const [key, fields] of Object.entries(SETTINGS_FIELD_TYPES)) {
+    if (!jsonTypeIs(settings[key], "object")) continue;
+    for (const [field, type] of Object.entries(fields)) {
+      if (Object.hasOwn(settings[key], field)) check(`${key}.${field}`, settings[key][field], [type]);
+    }
+  }
+  if (!jsonTypeIs(settings.hooks, "object")) return problems;
+  for (const [event, blocks] of Object.entries(settings.hooks)) {
+    const name = `hooks.${printable(event)}`;
+    if (!check(name, blocks, ["array"])) continue;
+    blocks.forEach((block, i) => {
+      const at = `${name}[${i}]`;
+      if (!check(at, block, ["object"])) return;
+      if (Object.hasOwn(block, "matcher")) check(`${at}.matcher`, block.matcher, ["string"]);
+      if (!check(`${at}.hooks`, block.hooks, ["array"])) return;
+      block.hooks.forEach((h, j) => {
+        if (!check(`${at}.hooks[${j}]`, h, ["object"])) return;
+        for (const [field, type] of Object.entries(HOOK_FIELD_TYPES)) {
+          if (Object.hasOwn(h, field)) check(`${at}.hooks[${j}].${field}`, h[field], [type]);
+        }
+      });
+    });
+  }
+  return problems;
+}
+
 /** The two settings layers Claude Code merges, parsed, and why any could not be read. */
 function settingsLayers(root) {
   const problems = [];
@@ -522,7 +647,9 @@ function settingsLayers(root) {
       if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
         problems.push(`.claude/${name} is not a JSON object, so Claude Code registers no hooks from it`);
       } else {
-        layers.push(parsed);
+        const wrong = settingsTypeProblems(parsed);
+        for (const w of wrong) problems.push(`.claude/${name}: ${w}, so Claude Code loads nothing from the file, hooks included`);
+        if (wrong.length === 0) layers.push(parsed);
       }
     } catch (e) {
       problems.push(`.claude/${name} is not valid JSON (${e.message}), so Claude Code registers no hooks from it`);

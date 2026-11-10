@@ -2067,7 +2067,7 @@ function settingsTypeProblems(settings) {
   const problems = [];
   const check = (where, value, types) => {
     if (types.some((t) => jsonTypeIs(value, t))) return true;
-    problems.push(`"${safeEcho(where, 80)}" is ${jsonTypeWord(value)} where Claude Code expects ${types.map((t) => TYPE_WORDS[t]).join(" or ")}`);
+    problems.push(`"${where}" is ${jsonTypeWord(value)} where Claude Code expects ${types.map((t) => TYPE_WORDS[t]).join(" or ")}`);
     return false;
   };
   for (const [key, types] of Object.entries(SETTINGS_KEY_TYPES)) {
@@ -2081,9 +2081,11 @@ function settingsTypeProblems(settings) {
   }
   if (!jsonTypeIs(settings.hooks, "object")) return problems;
   for (const [event, blocks] of Object.entries(settings.hooks)) {
-    if (!check(`hooks.${event}`, blocks, ["array"])) continue;
+    // Only an event name comes from the file; the rest of a place is ours.
+    const name = `hooks.${safeEcho(event, 40)}`;
+    if (!check(name, blocks, ["array"])) continue;
     blocks.forEach((block, i) => {
-      const at = `hooks.${event}[${i}]`;
+      const at = `${name}[${i}]`;
       if (!check(at, block, ["object"])) return;
       if (Object.hasOwn(block, "matcher")) check(`${at}.matcher`, block.matcher, ["string"]);
       if (!check(`${at}.hooks`, block.hooks, ["array"])) return;
