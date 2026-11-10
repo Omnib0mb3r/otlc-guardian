@@ -2,7 +2,7 @@
  * ============================================================
  * OTLC GUARDIAN — AGENTS.md + editor-coverage tests
  * // tests · onthelevelconcepts.com
- * Version: 1.0.0
+ * Version: 1.5.0
  * ============================================================
  *
  * Verifies the multi-agent posture added in the Node 22 + multi-agent

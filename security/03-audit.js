@@ -3,7 +3,7 @@
  * ============================================================
  * OTLC GUARDIAN — Safety Audit Tool
  * // security · onthelevelconcepts.com
- * Version: 1.4.1
+ * Version: 1.5.0
  * ============================================================
  *
  * Scans an existing codebase for security and quality violations.
@@ -13,7 +13,7 @@
  *   node security/03-audit.js                  # audit current directory
  *   node security/03-audit.js ./src            # audit specific path
  *   node security/03-audit.js --json           # output as JSON
- *   node security/03-audit.js --fail-on-error  # exit code 1 if issues found
+ *   node security/03-audit.js --fail-on-error  # exit 1 on any CRITICAL or HIGH finding
  *
  * Note: this file is exempted from auditing via the central allowlist
  * at security/.audit-allowlist because its pattern definitions

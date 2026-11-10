@@ -2,7 +2,7 @@
  * ============================================================
  * OTLC GUARDIAN — Hook integration tests
  * // tests · onthelevelconcepts.com
- * Version: 1.0.0
+ * Version: 1.5.0
  * ============================================================
  *
  * Tests both Claude Code hooks end-to-end by piping JSON payloads

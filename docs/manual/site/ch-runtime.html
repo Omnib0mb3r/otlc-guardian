@@ -311,7 +311,7 @@
 
 <h3 id="rg-codesec">02-code-security.js: server helpers</h3>
 
-<p>Express helpers for a Node API (file header still says version 1.4.1). Imported as <code>otlc-guardian/security</code> or from the copied file. It is on the audit allowlist (<code>security/.audit-allowlist</code>) because the logger has to call <code>console.*</code> to be the logger.</p>
+<p>Express helpers for a Node API. Imported as <code>otlc-guardian/security</code> or from the copied file. It is on the audit allowlist (<code>security/.audit-allowlist</code>) because the logger has to call <code>console.*</code> to be the logger.</p>
 
 <div class="tbl dense"><table><thead><tr><th>Export</th><th>What it does</th><th>Failure behavior and notes</th></tr></thead><tbody>
 <tr><td><code>validateEnv(required, recommended)</code></td><td>Checks <code>process.env</code> for each name. Logs the missing required names, then throws; logs missing recommended names as a warning; logs success on <code>console.info</code>.</td><td>Throws <code>GuardianConfigError</code> with <code>missing</code>. Never calls <code>process.exit</code>: the caller decides. An empty string counts as missing.</td></tr>
@@ -333,7 +333,7 @@
 
 <h3 id="rg-sql">04-sql-guard.js: the parameterized SQL helper</h3>
 
-<p>A zero-dependency tagged template that makes the parameterized query the easy path (file header version 1.4.1). It is not a filter: it never inspects values and never rejects SQL text. The static audit (<code>03-audit.js</code>) is what flags string-built SQL; this helper is the safe replacement.</p>
+<p>A zero-dependency tagged template that makes the parameterized query the easy path. It is not a filter: it never inspects values and never rejects SQL text. The static audit (<code>03-audit.js</code>) is what flags string-built SQL; this helper is the safe replacement.</p>
 
 <h4>Exports</h4>
 <div class="tbl dense"><table><thead><tr><th>Export</th><th>Use</th></tr></thead><tbody>
@@ -403,7 +403,6 @@
 <tr><td>README.md secret list names OpenAI, Anthropic <code>sk-ant-api03-</code>, Google, GitHub, AWS, private keys, passwords, connection strings</td><td>16 rules; also Anthropic OAuth and admin keys, GitHub fine-grained and server tokens, Slack, Stripe live keys, inline API keys and context-adjacent base64.</td></tr>
 <tr><td>Comment on <code>MAX_SCAN_LENGTH</code> in <code>01-injection-guard.js</code>: <code>scan()</code> is used directly by "the audit CLI"</td><td><code>03-audit.js</code> imports only <code>fs</code> and <code>path</code>. The caller is the <code>guardian scan</code> command in <code>bin/guardian.js</code>.</td></tr>
 <tr><td>Test group comment for 027/028: "Rewritten with lazy <code>[\s\S]*?</code>"</td><td>Both modules use the linear comment walker; the comment predates BUG-023.</td></tr>
-<tr><td>File headers of <code>02-code-security.js</code> and <code>04-sql-guard.js</code>: version 1.4.1</td><td><code>package.json</code> is 1.5.0 and 02 changed in 1.5.0 (rate-limit sweep).</td></tr>
 </tbody></table></div>
 <p>Counts agree: README.md, SECURITY.md and SETUP.md say 28 injection patterns, and SECURITY.md says 16 secret patterns; the code has 28 and 16 (plus the two findings <code>scan()</code> raises itself, which no doc counts).</p>
 
