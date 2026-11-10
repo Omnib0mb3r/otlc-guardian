@@ -201,6 +201,14 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A second Guardian entry with other fields asks (BUG-045, re-probe 3
+  D4).** Claude Code runs one copy of an identical hook command, so a
+  copy of Guardian's entry in `settings.local.json` with `"async": true`
+  or a lower timeout could be the one that runs, and Guardian let it
+  through because the plain copy in `settings.json` still matched. Every
+  registration is now judged: the lowest timeout counts, and a copy that
+  gains a field asks.
+
 - **A settings change that adds a command asks (BUG-074, re-probe 3
   D3).** A SessionStart or Stop hook, a second PreToolUse hook, or a
   `statusLine` or `apiKeyHelper` command can delete Guardian's files

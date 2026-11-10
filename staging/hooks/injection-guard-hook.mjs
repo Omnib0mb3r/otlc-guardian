@@ -1881,8 +1881,10 @@ function hookIdentity(command, root) {
 
 /**
  * @returns {Map<string, { timeout: number, anchored: boolean, extras: Set<string> }>}
- *   "event \0 tool \0 hook" -> its strongest registration, and the extra
- *   fields (hookExtras()) of every registration
+ *   "event \0 tool \0 hook" -> the lowest timeout and the extra fields
+ *   (hookExtras()) of all its registrations. Claude Code runs one copy of
+ *   an identical command, and it may be either one, so the weakest
+ *   registration is what counts (re-probe 3, D4).
  */
 function hookCoverage(settings, root, tools) {
   const coverage = new Map();
@@ -1900,7 +1902,7 @@ function hookCoverage(settings, root, tools) {
           const key = `${event}\u0000${tool}\u0000${id}`;
           const seen = coverage.get(key);
           coverage.set(key, {
-            timeout: Math.max(seen?.timeout ?? 0, timeout),
+            timeout: Math.min(seen?.timeout ?? Infinity, timeout),
             anchored: Boolean(seen?.anchored) || anchored,
             extras: new Set([...(seen?.extras ?? []), extras]),
           });
@@ -1966,7 +1968,7 @@ function guardianPosture(projectText, localText, root, tools) {
   for (const [key, entry] of hookCoverage(local, root, tools)) {
     const seen = coverage.get(key);
     coverage.set(key, {
-      timeout: Math.max(seen?.timeout ?? 0, entry.timeout),
+      timeout: Math.min(seen?.timeout ?? Infinity, entry.timeout),
       anchored: Boolean(seen?.anchored) || entry.anchored,
       extras: new Set([...(seen?.extras ?? []), ...entry.extras]),
     });
@@ -2066,11 +2068,15 @@ function settingsWeakening(absPath, after) {
     else if (kept.timeout < need.timeout) reasons.push(`Guardian hook timeout on ${event} ${tool} lowered from ${need.timeout} s to ${kept.timeout} s`);
     else if (need.anchored && !kept.anchored) {
       reasons.push(`Guardian hook command on ${event} now depends on the session's directory (a relative path stops working after a cd)`);
-    } else if (![...kept.extras].some((e) => e === "" || need.extras.has(e))) {
-      // Kept as it was, or with every extra field removed: anything else
-      // adds or changes a field whose effect Guardian does not judge.
-      const fields = [...new Set([...kept.extras].flatMap((e) => JSON.parse(e).map(([k]) => k)))];
-      reasons.push(`Guardian hook entry on ${event} gains or changes ${fields.map((f) => `"${f}"`).join(", ")}, which can change how the hook runs`);
+    } else {
+      // Each registration kept as it was, or with every extra field
+      // removed: any other adds or changes a field whose effect Guardian
+      // does not judge, on a copy that may be the one Claude Code runs.
+      const added = [...kept.extras].filter((e) => e !== "" && !need.extras.has(e));
+      const fields = [...new Set(added.flatMap((e) => JSON.parse(e).map(([k]) => k)))];
+      if (fields.length > 0) {
+        reasons.push(`Guardian hook entry on ${event} gains or changes ${fields.map((f) => `"${f}"`).join(", ")}, which can change how the hook runs`);
+      }
     }
   }
   if (was.extendDefaults && !now.extendDefaults) reasons.push("otlcGuardian.extendDefaults is turned off (default watch list dropped)");

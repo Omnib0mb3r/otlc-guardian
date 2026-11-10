@@ -1938,6 +1938,39 @@ describe("PreToolUse hook - settings protection reads matchers and hook commands
     });
   }
 
+  // Re-probe 3, D4 (T3): Claude Code runs one copy of an identical
+  // command, so a second Guardian entry with other fields can be the one
+  // that runs (an "async" copy blocks nothing).
+  const guardianCopy = (fields) => {
+    const block = settings().hooks.PreToolUse[0];
+    return { ...block, hooks: [{ ...block.hooks[0], ...fields }] };
+  };
+  for (const [name, fields, what] of [
+    ['"async": true', { async: true }, "async"],
+    ['"timeout": 1', { timeout: 1 }, "timeout"],
+    ['"statusMessage"', { statusMessage: "x" }, "statusMessage"],
+  ]) {
+    stagedOnly(`a second Guardian entry with ${name} in settings.local.json asks (D4)`, () => {
+      const out = writeLocal(null, { hooks: { PreToolUse: [guardianCopy(fields)] } });
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+      expectWarning(out, what);
+    });
+  }
+  stagedOnly('a second Guardian entry with "async": true in settings.json asks (D4)', () => {
+    const out = change(() => settings(), () => {
+      const s = settings();
+      s.hooks.PreToolUse.push(guardianCopy({ async: true }));
+      return s;
+    });
+    assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+  });
+  test("an identical second Guardian entry in settings.local.json is unchanged (D4)", () => {
+    expectSilent(writeLocal(null, { hooks: { PreToolUse: [guardianCopy({})] } }));
+  });
+  test("removing a second Guardian entry that had a lower timeout is unchanged (D4)", () => {
+    expectSilent(writeLocal({ hooks: { PreToolUse: [guardianCopy({ timeout: 1 })] } }, {}));
+  });
+
   // Re-probe 3, D3 (T16): a command Claude Code runs from settings can
   // delete Guardian before the first tool call, and a second PreToolUse
   // hook can rewrite the tool input. Guardian cannot judge a command, so
