@@ -561,8 +561,11 @@ On Windows, also confirm the variables are set in System Environment Variables i
 **Claude Code hook not activating**
 
 Confirm `.claude/settings.json` is in the **project root** (not a subdirectory).  
-The command `node .claude/hooks/injection-guard-hook.js` must resolve from the project root.  
-Run `guardian check` to verify the hook is registered correctly.
+The command `node .claude/hooks/injection-guard-hook.mjs` must resolve from the project root.  
+`guardian check` confirms the hook files exist and pipes a test payload through the
+PreToolUse hook. It does not read `.claude/settings.json`, so it cannot tell you the hook
+is registered: open that file and look for the command. A failed smoke test is printed as
+a warning and `check` still exits 0.
 
 **GitHub Actions failing on Gitleaks scan**
 
@@ -660,10 +663,11 @@ Files to un-merge this way:
 - `.gitignore` — remove the `# OTLC-GUARDIAN-START` ... `# OTLC-GUARDIAN-END` block
 - `.env.example` — same marker pair
 
-If a file you ran `guardian init` against does **not** contain Guardian's
-markers, that means Guardian created the file from scratch (you didn't have
-your own version). In that case, the entire file is Guardian content and is
-safe to delete:
+A Markdown file Guardian created from scratch (you had no version of your
+own) also carries the markers, with nothing above the START marker. Only in
+that case is the entire file Guardian content and safe to delete. A file
+with text of yours above the START marker is un-merged as above, never
+deleted:
 
 ```bash
 # Only delete the file if you had no pre-existing version when you ran guardian init.
@@ -674,6 +678,10 @@ safe to delete:
 
 Open `.claude/settings.json` in your editor and remove only the two hook
 entries Guardian added. Leave every other hook alone.
+
+If Guardian created `.claude/settings.json` from scratch, it also holds an
+`otlcGuardian` block (watch list and ignore list for the PreToolUse hook);
+remove it too.
 
 Remove from `hooks.PreToolUse`:
 
@@ -711,7 +719,9 @@ They contain only Guardian content and are always safe to delete:
 rm -f security/01-injection-guard.js
 rm -f security/02-code-security.js
 rm -f security/03-audit.js
+rm -f security/04-sql-guard.js
 rm -f security/injection_guard.py
+rm -f security/.audit-allowlist   # only if you never added entries of your own
 rm -f .claude/hooks/injection-guard-hook.mjs
 rm -f .claude/hooks/web-content-guard.mjs
 ```
@@ -737,8 +747,12 @@ rmdir .claude/hooks/
 
 ### Step 4 — Optional: remove the GitHub workflow
 
-If `.github/workflows/security-audit.yml` was added by Guardian and you don't
-use it for anything else:
+`guardian init` copies Guardian's whole `.github/` folder into a project,
+skipping files that already exist: `workflows/security-audit.yml`,
+`CODEOWNERS`, `PULL_REQUEST_TEMPLATE.md`, `secret_scanning.yml` and the
+files in `ISSUE_TEMPLATE/`. Remove each one Guardian added that you do not
+use. Check `CODEOWNERS` first in any case: Guardian's copy names
+Guardian's own maintainer (BUG-060).
 
 ```bash
 rm -f .github/workflows/security-audit.yml

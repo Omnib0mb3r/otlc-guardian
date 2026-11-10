@@ -67,6 +67,13 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-053 | OPEN | Importing `security/03-audit.js` (package export `./audit`) runs an audit of the cwd as a side effect |
 | BUG-054 | OPEN | Audit secret rules lag the runtime guard: SEC-003 matches only `ghp_`, SEC-004 misses OpenSSH, EC and encrypted keys |
 | BUG-055 | OPEN | `DEP-001` reads files with no error handling, so one unreadable file crashes the audit |
+| BUG-056 | OPEN | Audit allowlist accepts an entry with an empty `# reason:`, though SECURITY.md says entries without a reason are rejected |
+| BUG-057 | OPEN | Any mention of `otlc-guardian:audit-exempt` in a file's first 4 KB exempts the whole file, including a string or a comment about the marker |
+| BUG-058 | OPEN | Hook `ignorePaths` is a substring match: an entry such as `docs` exempts every path containing it |
+| BUG-059 | OPEN | Audit exemptions do not reach the project checks: `DEP-001`, `DEP-002`, `WEB-002` still read exempt files |
+| BUG-060 | OPEN | `guardian init` copies Guardian's own `.github/` (CODEOWNERS naming Guardian's maintainer, templates) and allowlist into every project |
+| BUG-061 | OPEN | `guardian init` and `update` on an invalid `.claude/settings.json` stop with a raw stack trace after earlier steps are written |
+| BUG-062 | OPEN | `guardian check` passes (exit 0, "correctly installed") when the hook smoke test fails, and never checks the hook is registered |
 
 <!-- INDEX END -->
 
@@ -721,5 +728,49 @@ From code: SEC-003 is `/ghp_[a-zA-Z0-9]{36}/` and SEC-004 matches only `BEGIN PR
 **Status:** OPEN · **Found:** 2026-11-10
 
 From code: DEP-001's `checkFn` calls `fs.readFileSync(f, "utf8")` for every file with no try/catch (about line 1203), unlike every other read in the engine. A file that disappears or cannot be read mid-scan throws out of `runAudit`. Fix: the same guarded read the other checks use, with the unreadable file reported.
+
+BUG-056 to BUG-062 were found by the manual writer for chapters 05 and 06 (2026-11-10), from `security/03-audit.js` and `bin/guardian.js` at `0fa32ce`, with `init`, `check` and `update` run in a scratch directory. BUG-062 was confirmed again in `runCheck()` while logging.
+
+### BUG-056: Allowlist accepts an empty reason
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+An allowlist line with `# reason:` and nothing after it is accepted. SECURITY.md, "The audit-exempt mechanism", says entries without a reason are loudly rejected. Entries also match the path exactly and with case, with no globs or directories (documented in manual chapter 06). Fix: reject a blank reason with a visible error, test it.
+
+### BUG-057: The audit-exempt marker matches a mention
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+The marker check looks for the string anywhere in the first 4096 characters, so a file that only names the marker (in a string, a regex or a comment about it) is exempt in full. `bin/guardian.js` and `security/03-audit.js` both qualify that way today. The exemption is listed in the summary, so it is visible, but it is not the deliberate comment the docs describe. Fix: require the marker as a standalone comment line.
+
+### BUG-058: Hook `ignorePaths` is a substring match
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+`isIgnoredPath()` in `.claude/hooks/injection-guard-hook.mjs` tests `normalized.includes(entry)`, so `docs` exempts `src/docs-loader/CLAUDE.md` and any other path containing those letters. Adding an entry asks (self-protection), so a person approves it, but the approval covers more than the entry reads. Fix: match whole path segments from the project root. Protected file; session that prompts.
+
+### BUG-059: Audit exemptions do not reach project checks
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Exempt files are skipped by per-file rules but still passed to the project checks, so DEP-001, DEP-002 and WEB-002 read them. Possibly intended for absence checks (an exempt file can still hold the health route); undocumented either way. Decide and document; test the chosen behavior.
+
+### BUG-060: `init` copies Guardian's own repo files into projects
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+`runInit()` copies Guardian's whole `.github/` folder (skipping existing files): `CODEOWNERS` naming Guardian's maintainer, the issue and PR templates and `secret_scanning.yml`, along with the workflow. It also copies `security/.audit-allowlist` with Guardian's own seven entries, so a fresh project audits with files exempt for reasons that belong to Guardian's repo. Fix: copy only the workflow, and seed an empty allowlist with the format comment. SETUP.md's uninstall step 4 now lists the copied files.
+
+### BUG-061: `init`/`update` crash on an invalid settings file
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+With an invalid `.claude/settings.json`, `init` and `update` stop with a raw stack trace (exit 1) after steps 1 to 5 have already written files, leaving a half install with no message saying what was done. Fix: validate the settings file before the first write and stop with a clear error.
+
+### BUG-062: `guardian check` passes with a broken hook
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+`runCheck()` in `bin/guardian.js` counts a failed hook smoke test as a warning, then prints "Guardian is correctly installed in this project." and exits 0; only missing required files exit 1. It also never reads `.claude/settings.json`, so an unregistered hook passes. This repo's CI runs `node bin/guardian.js check` as a gate, which therefore cannot fail on a broken hook. SETUP.md troubleshooting said it verifies registration (corrected 2026-11-10). Fix: a failed smoke test and a missing registration are failures (exit 1), tested in `tests/init.test.js`. Related: `guardian scan` exits 0 when it finds patterns.
 
 <!-- DETAILS END -->

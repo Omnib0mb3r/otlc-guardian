@@ -493,7 +493,7 @@ If you're keeping Guardian's multi-agent posture and just want to rebrand:
 - Replace `onthelevelconcepts.com` in `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, and `STANDARDS.md`
 - Replace `Omnib0mb3r/otlc-guardian` in `README.md` and `SETUP.md` install commands
 - Keep `security/` intact — don't modify the runtime guard unless you're adding patterns
-- Keep the `otlc-guardian:doc` and `otlc-guardian:audit-exempt` marker names intact, or your fork's markers won't match any downstream docs that reference them
+- Keep the `otlc-guardian:audit-exempt` marker name intact, or your fork's markers won't match any downstream docs that reference them (`otlc-guardian:doc` no longer exempts anything)
 
 ### Single-agent fork (e.g. Codex-only, Cursor-only)
 

@@ -1140,9 +1140,10 @@ const AUDIT_RULES = [
     wholeFile: true,
     // This rule is very noisy on documentation files that show the pattern
     // as an example of what NOT to do (e.g. STANDARDS.md, an ORM README).
-    // The global doc-exempt marker `otlc-guardian:doc` plus the per-file
-    // `otlc-guardian:audit-exempt` marker both already short-circuit it
-    // at the scanner layer, so no per-rule exclude list is needed here.
+    // The per-file `otlc-guardian:audit-exempt` marker and the central
+    // allowlist short-circuit it at the scanner layer, so no per-rule
+    // exclude list is needed here. (`otlc-guardian:doc` has no effect on
+    // the audit.)
   },
   {
     id: "INJ-006", category: "Injection Risk", severity: "CRITICAL",
