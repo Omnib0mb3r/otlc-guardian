@@ -712,8 +712,9 @@ function pyAuthedRouters(content) {
   return names;
 }
 
+// `execute` is kept apart: it runs reads as often as writes (BUG-032).
 const PY_SIDE_EFFECT_PATTERNS = [
-  /\b(?:db|session|conn|connection|cursor|cur|tx|engine|database)\w*\.(?:add|add_all|delete|merge|commit|execute|executemany|flush|bulk_\w+)\s*\(/i,
+  /\b(?:db|session|conn|connection|cursor|cur|tx|engine|database)\w*\.(?:add|add_all|delete|merge|commit|flush|bulk_\w+)\s*\(/i,
   /\.objects\.(?:create|update|delete|bulk_create|bulk_update|get_or_create|update_or_create)\s*\(/,
   /\.(?:save|insert_one|insert_many|update_one|update_many|delete_one|delete_many|replace_one)\s*\(/,
   /\b(?:send_mail|send_email|sendmail)\b/i, /\bsmtplib\b/,
@@ -722,6 +723,29 @@ const PY_SIDE_EFFECT_PATTERNS = [
   /\bshutil\.(?:copy|move|rmtree)\w*\s*\(/, /\bos\.(?:remove|unlink|rename|replace)\s*\(/,
   /\bsubprocess\./,
 ];
+
+// A database `execute` is a write unless the handler shows it is a read:
+// a select is built in the body and nothing in it builds a write. An
+// execute of a statement whose shape is not visible (`db.execute(stmt)`
+// with stmt from elsewhere) still counts, as before.
+const PY_EXECUTE = /\b(?:db|session|conn|connection|cursor|cur|tx|engine|database)\w*\.(?:execute|executemany)\s*\(/i;
+const PY_SQL_READ = [
+  /(?<![.\w])select\s*\(/, /\b(?:sa|sqlalchemy|sql)\.select\s*\(/,
+  /["']\s*(?:WITH\b[^"']*?)?SELECT\b/i,
+];
+const PY_SQL_WRITE = [
+  // Core constructors as calls, not methods (`params.update(...)` is a dict).
+  /(?:(?<![.\w])|\b(?:sa|sqlalchemy|sql)\.)(?:insert|update|delete)\s*\(/,
+  /\b(?:INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|MERGE\s+INTO|REPLACE\s+INTO|UPSERT)\b/i,
+  /\b(?:DROP|ALTER|TRUNCATE|CREATE)\s+(?:TABLE|INDEX|VIEW|SCHEMA|DATABASE)\b/i,
+];
+
+/** AUTHZ-011's side-effect test: a write, a send, a file or process action. */
+function pyHasSideEffect(body) {
+  if (matchesAny(PY_SIDE_EFFECT_PATTERNS, body)) return true;
+  if (!PY_EXECUTE.test(body)) return false;
+  return matchesAny(PY_SQL_WRITE, body) || !matchesAny(PY_SQL_READ, body);
+}
 
 // Routes that are public on purpose. Flagging a login endpoint for having
 // no auth check is noise that teaches people to ignore the rule. Judged
@@ -836,7 +860,7 @@ function checkPyMissingAuth(content) {
   for (const handler of findPythonHandlers(content)) {
     if (authedRouters.has(handler.router)) continue;
     if (isPublicPyRoute(handler.signature)) continue;
-    if (!matchesAny(PY_SIDE_EFFECT_PATTERNS, handler.body)) continue;
+    if (!pyHasSideEffect(handler.body)) continue;
     if (matchesAny(PY_AUTH_PATTERNS, `${handler.head}\n${handler.body}`)) continue;
     findings.push({ line: handler.line, content: handler.signature.slice(0, 120) });
   }
@@ -851,7 +875,9 @@ function checkPyMissingObjectAuthz(content) {
     const whole = `${handler.head}\n${handler.body}`;
     if (!routerAuth && !matchesAny(PY_AUTH_PATTERNS, whole)) continue; // AUTHZ-011 reports that case
     if (!matchesAny(PY_OBJECT_ID_PATTERNS, whole)) continue;
-    if (!matchesAny(PY_SIDE_EFFECT_PATTERNS, handler.body)) continue;
+    // Any execute counts here, reads included: a read by a caller-supplied
+    // id with no owner check leaks someone else's row.
+    if (!matchesAny(PY_SIDE_EFFECT_PATTERNS, handler.body) && !PY_EXECUTE.test(handler.body)) continue;
     if (matchesAny(PY_OWNERSHIP_PATTERNS, whole)) continue;
     findings.push({ line: handler.line, content: handler.signature.slice(0, 120) });
   }

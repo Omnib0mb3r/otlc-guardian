@@ -172,6 +172,15 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **AUTHZ-011 no longer reports reads (BUG-032).** Every database
+  `execute` counted as a side effect, so a `GET` running
+  `db.execute(select(...))` was reported HIGH as an unauthenticated write.
+  An execute is now a write unless the handler builds a select and no
+  write (`insert(`, `update(`, `delete(`, or an INSERT, UPDATE, DELETE or
+  DDL string); an execute of a statement built elsewhere still counts.
+  AUTHZ-013 keeps counting reads, since a read by a caller-supplied id
+  leaks the row.
+
 - **AUTHZ-011 blind spots closed (BUG-031).** A router-level
   `Depends(get_db)` (or any `dependencies=[Depends(` in the file, a route
   decorator's included) silenced every Python handler in the file; now

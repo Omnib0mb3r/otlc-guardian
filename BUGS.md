@@ -43,7 +43,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-029 | OPEN | Scanner bypasses: base64 candidate cap can be spent, chained encodings pass, confusables gaps |
 | BUG-030 | SMOKE-TESTING | `AUTHZ-013` misses a textbook IDOR: a 404 and a `user_id` path parameter count as ownership checks |
 | BUG-031 | SMOKE-TESTING | `AUTHZ-011` blind spots: router-level `Depends(get_db)`, substring public-route list, bare `api_key` mention |
-| BUG-032 | OPEN | `AUTHZ-011` flags reads: `GET` plus `db.execute(select(...))` reports HIGH |
+| BUG-032 | SMOKE-TESTING | `AUTHZ-011` flags reads: `GET` plus `db.execute(select(...))` reports HIGH |
 | BUG-033 | OPEN | `WEB-001` misses token constants and JSON-wrapped tokens; flags `refreshCount` |
 | BUG-034 | OPEN | Bash in the PreToolUse matcher makes BUG-028 worse: hook error on every Bash call after a `cd` |
 | BUG-035 | OPEN | "ask" stalls unattended workers in default and acceptEdits modes |
@@ -529,11 +529,13 @@ Review finding 8 (HIGH). Source: `C:/dev/data/skill-connections/brainstorms/16f2
 
 ### BUG-032: `AUTHZ-011` flags reads: `GET` plus `db.execute(select(...))` reports HIGH
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 Review finding 9 (MEDIUM). Source: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-review.md`. Logged when 1.5.0 landed; not fixed in it.
 
 - A read-only `GET` handler that runs `db.execute(select(...))` is reported as an unauthenticated side effect at HIGH.
+
+**Fix (2026-11-10).** In `security/03-audit.js`, `execute`/`executemany` left `PY_SIDE_EFFECT_PATTERNS` for `PY_EXECUTE`. New `pyHasSideEffect()` (AUTHZ-011) counts an execute as a write unless the body has read evidence (`PY_SQL_READ`: `select(`, `sa.select(`, a string starting `SELECT` or `WITH ... SELECT`) and no write evidence (`PY_SQL_WRITE`: `insert(`/`update(`/`delete(` called as functions, not methods, so `dict.update(` is ignored; INSERT INTO, UPDATE ... SET, DELETE FROM, MERGE, REPLACE, UPSERT, DDL). An execute with nothing visible (`db.execute(build_statement())`) still counts. AUTHZ-013 deliberately still counts any execute: a read by a caller-supplied id with no owner check is an IDOR. Tests: `tests/audit.test.js`, "BUG-032" block (4 read shapes silent, all failed before the fix; 4 write or unknown shapes fire; AUTHZ-013 still fires on a select by id). Manual chapter 02 and docs/coverage.md updated. Smoke test: `guardian audit` on a FastAPI project with a public `GET` that only selects gives no AUTHZ-011.
 
 ### BUG-033: `WEB-001` misses token constants and JSON-wrapped tokens; flags `refreshCount`
 

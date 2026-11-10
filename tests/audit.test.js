@@ -2782,6 +2782,46 @@ describe("BUG-031: AUTHZ-011 router dependencies, public routes, api_key", () =>
 });
 
 // ---------------------------------------------------------------------------
+// BUG-032: a read is not an unauthenticated side effect
+// ---------------------------------------------------------------------------
+
+describe("BUG-032: AUTHZ-011 does not report reads", () => {
+  const fires = (...body) => auditFires({ "api/reports.py": [
+    `@router.get("/reports")`,
+    `def list_reports(db = Depends(get_db)):`,
+    ...body.map((l) => "    " + l),
+    ``,
+  ].join("\n") }, "AUTHZ-011");
+
+  for (const [label, body] of [
+    ["db.execute(select(...))", [`rows = db.execute(select(Report).where(Report.public == True)).scalars().all()`, `return rows`]],
+    ["a select statement built first", [`stmt = select(Report).order_by(Report.created)`, `return db.execute(stmt).scalars().all()`]],
+    ["cursor.execute of a SELECT string", [`cur = db.cursor()`, `cur.execute("SELECT id, title FROM reports")`, `return cur.fetchall()`]],
+    ["a dict.update next to a select", [`params = {}`, `params.update(limit=10)`, `return db.execute(select(Report).limit(params["limit"])).all()`]],
+  ]) {
+    test(`silent on ${label}`, () => assert.ok(!fires(...body)));
+  }
+
+  for (const [label, body] of [
+    ["db.execute(update(...))", [`db.execute(update(Report).values(seen=True))`, `db.commit()`]],
+    ["a DELETE in text()", [`db.execute(text("DELETE FROM reports WHERE stale"))`]],
+    ["an INSERT string", [`cur = db.cursor()`, `cur.execute("INSERT INTO hits (path) VALUES ('/reports')")`]],
+    ["an execute of an unknown statement", [`db.execute(build_statement())`]],
+  ]) {
+    test(`still fires on ${label}`, () => assert.ok(fires(...body)));
+  }
+
+  test("AUTHZ-013 still reports a read by a caller-supplied id with no owner check", () => {
+    assert.ok(auditFires({ "api/reports.py": [
+      `@router.get("/reports/{report_id}")`,
+      `def get_report(report_id: int, db = Depends(get_db), user = Depends(get_current_user)):`,
+      `    return db.execute(select(Report).where(Report.id == report_id)).scalar_one()`,
+      ``,
+    ].join("\n") }, "AUTHZ-013"));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 
