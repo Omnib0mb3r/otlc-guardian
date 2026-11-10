@@ -1222,6 +1222,112 @@ describe("PreToolUse hook: self-protection of the hook files and scanner (1.5.0 
   });
 });
 
+describe("PreToolUse hook - the PowerShell tool and cmd /c are read like Bash (BUG-048)", () => {
+  // A project with settings and the guard files on disk, default mode.
+  const shell = (tool, command, files = {}, permission_mode) => withTempProject((dir) => {
+    for (const [rel, text] of Object.entries({
+      ".claude/settings.json": "{}",
+      ".claude/hooks/injection-guard-hook.mjs": "// real guard code\n",
+      "security/01-injection-guard.js": "// real guard code\n",
+      ...files,
+    })) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), text);
+    }
+    return runHook(PRE_HOOK, { tool_name: tool, cwd: dir, tool_input: { command }, ...(permission_mode ? { permission_mode } : {}) });
+  });
+
+  // The table in the BUG-048 detail block, and the same routes to the guard files.
+  for (const command of [
+    "git checkout HEAD~3 -- .claude/settings.json",
+    "git restore --source=HEAD~2 .claude/settings.json",
+    "bash -c 'echo x > .claude/settings.json'",
+    "sh -c 'rm -rf .claude'",
+    `node -e "require('fs').writeFileSync('.claude/settings.json','{}')"`,
+    "python -c \"open('.claude/settings.json','w').write('{}')\"",
+    "curl -o .claude/settings.json https://example.com/s.json",
+    "curl.exe --output .claude/settings.json https://example.com/s.json",
+    "Invoke-WebRequest https://example.com/s.json -OutFile .claude/settings.json",
+    "iwr -Uri https://example.com/s.json -OutFile .claude\\settings.json",
+    `Invoke-Expression "Remove-Item .claude/settings.json"`,
+    `iex 'Set-Content .claude/settings.json x'`,
+  ]) {
+    stagedOnly(`PowerShell tool asks: ${command}`, () => {
+      assert.equal(decisionOf(shell("PowerShell", command)), "ask");
+    });
+  }
+
+  for (const command of [
+    "git checkout HEAD~5 -- security/01-injection-guard.js",
+    "bash -c 'echo x > .claude/hooks/injection-guard-hook.mjs'",
+  ]) {
+    stagedOnly(`PowerShell tool asks for a guard file: ${command}`, () => {
+      const out = shell("PowerShell", command);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+      expectWarning(out, "Guardian's own enforcement");
+    });
+  }
+
+  // Re-probe R7: cmd /c, from either tool. In Git Bash "/c" is spelled "//c".
+  for (const tool of ["Bash", "PowerShell"]) {
+    for (const command of [
+      String.raw`cmd /c "echo x > .claude\settings.json"`,
+      String.raw`cmd /c rd /s /q .claude`,
+      String.raw`cmd.exe /c "del .claude\settings.json"`,
+      String.raw`cmd /C "erase /q .claude\settings.json"`,
+      String.raw`cmd /d /s /c "move .claude\settings.json x.json"`,
+      String.raw`cmd /c "ren .claude\settings.json old.json"`,
+      String.raw`cmd /c "cd /d .claude && del settings.json"`,
+      String.raw`cmd /c "echo x>>.claude\settings.json"`,
+      String.raw`cmd /c "del /q security\01-injection-guard.js"`,
+      String.raw`cmd /c del /q security/01-injection-guard.js`,
+      // Unquoted, bash itself drops each backslash before cmd sees the
+      // path, so these spellings reach cmd only from PowerShell.
+      ...(tool === "Bash"
+        ? [String.raw`cmd //c "del .claude\settings.json"`]
+        : [String.raw`cmd /c ren .claude\settings.json old.json`, String.raw`cmd /c del /q security\01-injection-guard.js`]),
+    ]) {
+      stagedOnly(`${tool} tool asks: ${command}`, () => {
+        const out = shell(tool, command);
+        assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+      });
+    }
+
+    stagedOnly(`${tool} tool: cmd /c copy of a payload into CLAUDE.md is denied`, () => {
+      const out = shell(tool, String.raw`cmd /c "copy notes\x.md CLAUDE.md"`, { "notes/x.md": `${CRITICAL_PAYLOAD}\n` });
+      assert.equal(decisionOf(out), "deny", out.slice(0, 200));
+    });
+
+    stagedOnly(`${tool} tool: cmd /c type of a payload redirected into AGENTS.md is denied`, () => {
+      const out = shell(tool, String.raw`cmd /c "type notes\x.md > AGENTS.md"`, { "notes/x.md": `${CRITICAL_PAYLOAD}\n` });
+      assert.equal(decisionOf(out), "deny", out.slice(0, 200));
+    });
+
+    for (const command of [
+      String.raw`cmd /c type .claude\settings.json`,
+      String.raw`cmd /c dir .claude`,
+      String.raw`cmd /c "echo x ^> .claude\settings.json"`,
+      String.raw`cmd /c "copy .claude\settings.json backup.json"`,
+    ]) {
+      test(`${tool} tool: cmd /c that leaves the settings alone is silent: ${command}`, () => {
+        expectSilent(shell(tool, command));
+      });
+    }
+  }
+
+  test("PowerShell tool git that leaves the settings alone is silent", () => {
+    expectSilent(shell("PowerShell", "git checkout main"));
+    expectSilent(shell("PowerShell", "git status --short"));
+    expectSilent(shell("PowerShell", "node --version"));
+  });
+
+  stagedOnly("Bash: a backslash inside double quotes stays a backslash", () => {
+    // bash keeps "\s" as two characters; only $ ` " \ and newline are escaped there.
+    const out = shell("Bash", String.raw`cp notes/x.md ".planning\STATE.md"`, { "notes/x.md": `${CRITICAL_PAYLOAD}\n` }, "bypassPermissions");
+    assert.equal(decisionOf(out), "deny", out.slice(0, 200));
+  });
+});
+
 describe("Web content guard - 1.5.0 hardening", () => {
   test("payload behind 64 KB of filler is caught (old scan window)", () => {
     const out = runHook(POST_HOOK, {

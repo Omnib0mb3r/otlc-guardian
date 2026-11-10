@@ -59,7 +59,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-045 | OPEN | Settings protection: a matcher with a space (`"Write \|Edit"`) is accepted as unchanged; the `$CLAUDE_PROJECT_DIR` command form is denied as a weakening |
 | BUG-046 | OPEN | `scanChange()` context window: whitespace padding can cross the 2 KB window |
 | BUG-047 | OPEN | Encoded Bash content passes the hook: `printf` octal, `rev`, `tr` rot13, variable concatenation, quote-split words |
-| BUG-048 | OPEN | PowerShell tool commands are not read for `git`, `bash -c`, `node -e` or `curl -o` writes, and `cmd /c` is read by neither shell reader |
+| BUG-048 | IN-PROGRESS | PowerShell tool commands are not read for `git`, `bash -c`, `node -e` or `curl -o` writes, and `cmd /c` is read by neither shell reader |
 | BUG-049 | OPEN | Runtime `scan()` with an unknown `mode` runs no rules and returns clean (fails open on a typo) |
 | BUG-050 | OPEN | `guardInput` with `blockOnSecrets: false` still throws on a secret, with a "prompt injection" message (Node only; Python differs) |
 | BUG-051 | SMOKE-TESTING | Audit of a path that does not exist scans 0 files and exits 0, even with `--fail-on-error` |
@@ -715,7 +715,7 @@ Verifier item P12 (`C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f
 
 ### BUG-048: PowerShell tool commands skip the git, nested-shell and inline-code readers; `cmd /c` is read by neither dialect
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** IN-PROGRESS · **Found:** 2026-11-10
 
 Found by the manual writer reading `commandWrites()` in `.claude/hooks/injection-guard-hook.mjs` at `0fa32ce`, then reproduced against the live hook with a scratch project (`.claude/settings.json` present), default permission mode:
 
@@ -730,6 +730,8 @@ Found by the manual writer reading `commandWrites()` in `.claude/hooks/injection
 - Impact: HIGH on this machine, where PowerShell is the primary shell. Verifier P2 (git checkout of the settings) and P1-class copies are closed for Bash only. The P3 guard-file protection has the same hole through the PowerShell tool.
 - The fix is in the hook, which is now protected (cc9182f), so it must be made in a session that prompts, not in bypass mode. Tests first in `tests/hook.test.js`: the table above for both tools, plus the guard files.
 - Re-probe R7 confirms `cmd /c` is read by neither dialect (`cmd /c rd /s /q .claude`, `cmd.exe /c "del .claude\settings.json"`, `cmd /c copy notes\x.md CLAUDE.md`, the last two also under BUG-065 and BUG-066). Either parse `cmd /c` and `cmd.exe /c` (built-ins `del`, `erase`, `rd`, `rmdir`, `copy`, `move`, `ren`, `>` and `>>`) or list it as unread in SECURITY.md; the docs now list it (2026-11-10).
+
+**Fix in staging (2026-11-10), not yet live.** Staging commit: recorded in `staging/APPLY.md`. In `staging/hooks/injection-guard-hook.mjs`: `powershellWrites()` returns whether it owns the command, and `commandWrites()` sends anything it does not own to the shared readers (git, nested shells, inline interpreter code, `curl`/`wget`, copy and delete programs), as for Bash. New PowerShell readers: `PS_DOWNLOADERS` (`Invoke-WebRequest`, `iwr`, `Invoke-RestMethod`, `irm`, and the `curl`/`wget` aliases, `-OutFile`) and `PS_EVALUATORS` (`Invoke-Expression`, `iex`, re-read as PowerShell). A third lexer dialect `cmd` (`DIALECTS`: caret escape, no single quotes, no substitution, no comments); `cmdScript()` finds the command line after `/c` or `/k` (and Git Bash's `//c`) for `cmd` and `cmd.exe` from any dialect, and `cmdWrites()` reads `del`, `erase`, `rd`, `rmdir`, `copy` (sources judged by content, `a+b` joined), `move`, `ren`, `rename` and `mklink`, with `/x` switches dropped from operands (`CMD_SWITCH`, also used by `cd /d`). Two defects found in the blast radius and fixed with it: `sh -c`/`bash -c` inside a PowerShell command was re-read as PowerShell (now always bash), and the bash lexer dropped every backslash inside double quotes, so `".claude\settings.json"` became `.claudesettings.json` (bash keeps it unless it escapes `$`, a backtick, `"`, `\` or a newline). Tests: `tests/hook.test.js`, group "the PowerShell tool and cmd /c are read like Bash (BUG-048)", 47 tests at first, 38 failing against the staged hook before the fix; three Bash cases then turned out to be wrong tests (bash itself drops an unquoted backslash before cmd sees the path) and were respelled quoted, with the unquoted spellings kept for PowerShell. Silent cases (`cmd /c type`, `dir`, `^>` inside quotes, a copy out of the settings, `git status` from PowerShell) pass on both. The bug stays IN-PROGRESS until Michael applies the staged hook. Smoke test after applying, on Windows with prompts on: through the PowerShell tool run `git checkout HEAD -- .claude/settings.json` and `cmd /c "del .claude\settings.json"` and see a Guardian prompt for each.
 
 ### BUG-049: Runtime `scan()` with an unknown `mode` fails open
 

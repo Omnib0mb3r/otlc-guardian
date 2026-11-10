@@ -201,6 +201,19 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **The PowerShell tool and `cmd /c` are read like Bash (BUG-048).** A
+  PowerShell tool command that is not one of the cmdlets the hook reads
+  now goes to the same readers as a Bash command, so `git checkout -- `,
+  `bash -c`, `node -e`, `python -c` and `curl -o` writes to the settings
+  or the guard files ask there too. `Invoke-WebRequest -OutFile` (and
+  `iwr`, `Invoke-RestMethod`, `irm`) and `Invoke-Expression`/`iex` are
+  read. `cmd /c`, `cmd.exe /c` and Git Bash's `cmd //c` are read from
+  either tool, with cmd's own quoting, and its `del`, `erase`, `rd`,
+  `rmdir`, `copy` (content judged), `move`, `ren` and `mklink`. Found
+  while fixing it: `sh -c` inside PowerShell was read as PowerShell, and
+  the Bash reader dropped a backslash inside double quotes, so
+  `".claude\settings.json"` was read as `.claudesettings.json`.
+
 - **The hook protects `security/package.json` (BUG-063, second half).**
   The file that pins the scanner to ES modules joins the hook's protected
   set, both the project copy and the one beside the scanner the hook runs

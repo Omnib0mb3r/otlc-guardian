@@ -316,16 +316,28 @@ function closingParen(text, from) {
   return text.length;
 }
 
+// How each dialect quotes and escapes.
+//   bash        a backslash escapes any character outside quotes, and only
+//               $ ` " \ and newline inside double quotes.
+//   powershell  a backtick escapes everywhere; a backslash is the path
+//               separator. No backtick substitution.
+//   cmd         a caret escapes outside double quotes and nothing escapes
+//               inside them. A single quote is an ordinary character, and
+//               there is no command substitution and no comment character.
+const DIALECTS = {
+  bash:       { esc: "\\", quotedEsc: /[$`"\\\n]/, single: true,  subs: true,  backticks: true,  comments: true },
+  powershell: { esc: "`",  quotedEsc: /[\s\S]/,   single: true,  subs: true,  backticks: false, comments: true },
+  cmd:        { esc: "^",  quotedEsc: null,       single: false, subs: false, backticks: false, comments: false },
+};
+
 /**
- * @param {"bash"|"powershell"} dialect - PowerShell escapes with a
- *   backtick and keeps a backslash literal (it is the path separator);
- *   it has no backtick substitution.
+ * @param {"bash"|"powershell"|"cmd"} dialect - see DIALECTS
  * @returns {{ tokens: Array<{word: string}|{op: string}>, subs: string[] }}
  *   subs: the text of each $( ) and backtick substitution, for recursion
  */
 function lexShell(text, dialect = "bash") {
-  const ESC = dialect === "powershell" ? "`" : "\\";
-  const backtickSubs = dialect === "bash";
+  const d = DIALECTS[dialect] ?? DIALECTS.bash;
+  const ESC = d.esc;
   const tokens = [];
   const subs = [];
   const heredocs = [];
@@ -354,7 +366,7 @@ function lexShell(text, dialect = "bash") {
     if (ch === ESC) {
       if (text[i + 1] !== "\n") word = `${word ?? ""}${text[i + 1] ?? ""}`;
       i += 2;
-    } else if (ch === "'") {
+    } else if (d.single && ch === "'") {
       const end = text.indexOf("'", i + 1);
       const stop = end < 0 ? text.length : end;
       word = `${word ?? ""}${text.slice(i + 1, stop)}`;
@@ -363,17 +375,17 @@ function lexShell(text, dialect = "bash") {
       word = word ?? "";
       i++;
       while (i < text.length && text[i] !== '"') {
-        if (text[i] === ESC && i + 1 < text.length) { word += text[i + 1]; i += 2; }
-        else if (text.startsWith("$(", i)) i = substitution(i + 2, false);
-        else if (backtickSubs && text[i] === "`") i = substitution(i + 1, true);
+        if (d.quotedEsc && text[i] === ESC && i + 1 < text.length && d.quotedEsc.test(text[i + 1])) { if (text[i + 1] !== "\n") word += text[i + 1]; i += 2; }
+        else if (d.subs && text.startsWith("$(", i)) i = substitution(i + 2, false);
+        else if (d.backticks && text[i] === "`") i = substitution(i + 1, true);
         else word += text[i++];
       }
       i++;
-    } else if (text.startsWith("$(", i)) {
+    } else if (d.subs && text.startsWith("$(", i)) {
       i = substitution(i + 2, false);
-    } else if (backtickSubs && ch === "`") {
+    } else if (d.backticks && ch === "`") {
       i = substitution(i + 1, true);
-    } else if (ch === "#" && word === null) {
+    } else if (d.comments && ch === "#" && word === null) {
       while (i < text.length && text[i] !== "\n") i++;
     } else if (ch === " " || ch === "\t" || ch === "\r") {
       flush();
@@ -505,7 +517,7 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
 
   const name = commandName(words[0]);
   const args = words.slice(1);
-  const operands = args.filter((a) => !a.startsWith("-"));
+  const operands = args.filter((a) => !a.startsWith("-") && !(ctx.dialect === "cmd" && CMD_SWITCH.test(a)));
   // A command that copies what it reads to stdout (cat, sort, head...)
   // carries its file operands' content; any other carries its stdin's.
   const out = CONTENT_PASSERS.has(name) ? [...stdin, ...operands.map((p) => abs(dir, p))] : stdin;
@@ -513,16 +525,22 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   if (["cd", "pushd", "chdir", "set-location", "sl", "push-location"].includes(name)) {
     return { dir: operands[0] && operands[0] !== "-" ? abs(dir, operands[0]) : dir, out };
   }
-  if (ctx.dialect === "powershell") {
-    powershellWrites(name, args, dir, ctx, stdin);
+  // A cmdlet or a cmd built-in is read by its dialect's reader. Anything
+  // else is an external program (git, bash, node, curl) and is read the
+  // same way whichever shell runs it (BUG-048).
+  if (ctx.dialect === "powershell" && (powershellWrites(name, args, dir, ctx, stdin) || PS_CONTENT_PASSERS.has(name))) {
     return { dir, out: PS_CONTENT_PASSERS.has(name) ? [...out, ...psPaths(args, ["path", "literalpath"], 0).map((p) => abs(dir, p))] : out };
   }
-  if (POWERSHELLS.has(name)) {
+  if (ctx.dialect === "cmd" && cmdWrites(name, operands, dir, ctx)) return { dir, out };
+  if (CMD_SHELLS.has(name)) {
+    const script = cmdScript(args);
+    if (script !== null) recurse(script, dir, "cmd");
+  } else if (POWERSHELLS.has(name)) {
     const script = powershellScript(args);
     if (script !== null) recurse(script, dir, "powershell");
   } else if (SHELLS.has(name)) {
     const flag = args.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a));
-    if (flag >= 0 && args[flag + 1] !== undefined) recurse(args[flag + 1], dir);
+    if (flag >= 0 && args[flag + 1] !== undefined) recurse(args[flag + 1], dir, "bash");
   } else if (name === "eval") {
     recurse(args.join(" "), dir);
   } else if (name === "find") {
@@ -632,6 +650,8 @@ const PS_REMOVERS = new Set(["remove-item", "rm", "del", "erase", "ri", "rd", "r
 const PS_RENAMERS = new Set(["rename-item", "ren", "rni"]);
 const PS_CONTENT_PASSERS = new Set(["get-content", "gc", "cat", "type", "select-string", "sls"]);
 const PS_SWITCHES = new Set(["force", "recurse", "append", "nonewline", "noclobber", "passthru", "confirm", "whatif", "verbose", "debug", "raw", "asbytestream", "container"]);
+const PS_DOWNLOADERS = new Set(["invoke-webrequest", "iwr", "invoke-restmethod", "irm", "curl", "wget"]);
+const PS_EVALUATORS  = new Set(["invoke-expression", "iex"]);
 const DOTNET_FILE_WRITE = /\[(?:system\.)?io\.file\]::(?:write|append|create|delete|copy|move|replace)\w*\s*\(([^)]*)\)/gi;
 
 /** Named parameters (lowercased, comma lists split) and positional arguments. */
@@ -656,9 +676,25 @@ function psPaths(args, names, position) {
   return position !== null && positional[position] !== undefined ? [positional[position]] : [];
 }
 
+/**
+ * Records what one cmdlet writes.
+ * @returns {boolean} true when `name` is a cmdlet this reader owns; false
+ *   for anything else, which the shared readers then read as an external
+ *   program (git, bash -c, node -e, curl -o) the way Bash would (BUG-048)
+ */
 function powershellWrites(name, args, dir, ctx, stdin) {
   const { add, abs } = ctx;
   const { named, positional } = psParse(args);
+  if (PS_DOWNLOADERS.has(name)) {
+    for (const p of named.get("outfile") ?? []) add(dir, p);
+    // In PowerShell 7 curl and wget are the real programs, not aliases,
+    // so their -o and -O forms are read by the shared reader as well.
+    return name !== "curl" && name !== "wget";
+  }
+  if (PS_EVALUATORS.has(name)) {
+    ctx.recurse([...(named.get("command") ?? []), ...positional].join(" "), dir, "powershell");
+    return true;
+  }
   if (PS_WRITERS.has(name)) {
     const append = name === "add-content" || name === "ac" || named.has("append");
     for (const p of psPaths(args, ["path", "literalpath", "filepath"], 0)) add(dir, p, stdin, append);
@@ -678,7 +714,10 @@ function powershellWrites(name, args, dir, ctx, stdin) {
     const [newName] = psPaths(args, ["newname"], 1);
     if (target) add(dir, target);
     if (target && newName) add(dir, path.join(path.dirname(target), newName));
+  } else {
+    return false;
   }
+  return true;
 }
 
 /**
@@ -700,6 +739,66 @@ function powershellScript(args) {
     else if (!a.startsWith("-")) return args.slice(k).join(" ");
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// CMD: which paths a cmd /c command writes
+// ---------------------------------------------------------------------------
+//
+// cmd.exe built-ins that write, move or remove files. Switches start with
+// "/" (/s, /q, /-y, /a:h). Redirections, && and & are read by the lexer;
+// an external program inside cmd (git, powershell, node) goes to the
+// shared readers. Like the other readers it does not expand %VARIABLES%
+// or wildcards.
+
+const CMD_SHELLS   = new Set(["cmd"]);
+const CMD_SWITCH   = /^\/-?[A-Za-z?](?::.*)?$/;
+const CMD_DELETERS = new Set(["del", "erase", "rd", "rmdir"]);
+const CMD_COPIERS  = new Set(["copy", "move"]);
+const CMD_RENAMERS = new Set(["ren", "rename"]);
+
+/**
+ * The command line `cmd /c` or `cmd /k` runs, or null when there is none
+ * (a bare `cmd` opens an interactive shell). Git Bash rewrites "/c" to a
+ * drive path, so there it is written "//c".
+ */
+function cmdScript(args) {
+  for (let k = 0; k < args.length; k++) {
+    if (/^\/\/?[ck]$/i.test(args[k])) return args.slice(k + 1).join(" ");
+    if (!args[k].startsWith("/")) return null;
+  }
+  return null;
+}
+
+/**
+ * Records what one cmd built-in writes.
+ * @param {string[]} operands - the arguments that are not switches
+ * @returns {boolean} true when `name` is a built-in this reader owns
+ */
+function cmdWrites(name, operands, dir, ctx) {
+  const { add, abs } = ctx;
+  const slashed = (p) => p.replace(/\\/g, "/");
+  if (CMD_DELETERS.has(name)) {
+    for (const p of operands) add(dir, p);
+  } else if (CMD_COPIERS.has(name)) {
+    // "copy a+b dest" joins its sources; with no destination the copy
+    // lands in the current directory.
+    const dest = operands.length > 1 ? operands[operands.length - 1] : ".";
+    const sources = (operands.length > 1 ? operands.slice(0, -1) : operands).flatMap((s) => s.split("+")).filter(Boolean);
+    const intoDir = dest === "." || /[\\/]$/.test(dest) || Boolean(statSync(abs(dir, dest), { throwIfNoEntry: false })?.isDirectory());
+    if (intoDir) for (const src of sources) add(dir, `${dest}/${path.posix.basename(slashed(src))}`, [abs(dir, src)]);
+    else add(dir, dest, sources.map((s) => abs(dir, s)));
+    if (name === "move") for (const src of sources) add(dir, src);
+  } else if (CMD_RENAMERS.has(name)) {
+    const [target, newName] = operands;
+    if (target) add(dir, target);
+    if (target && newName) add(dir, path.posix.join(path.posix.dirname(slashed(target)), newName));
+  } else if (name === "mklink") {
+    if (operands[0]) add(dir, operands[0]);
+  } else {
+    return false;
+  }
+  return true;
 }
 
 function commandName(word) {
