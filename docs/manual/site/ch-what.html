@@ -85,7 +85,7 @@
 <tr><td>Version in <code>package.json</code></td><td>1.5.0, unreleased. No tag.</td></tr>
 <tr><td>Last pushed</td><td><code>origin/main</code> at <code>80bfaff</code>. Local <code>main</code> is 22 commits ahead and held on purpose: push and tag wait on an independent re-probe of the 1.5.0 hook fixes.</td></tr>
 <tr><td>Installed in other projects</td><td>No other project under <code>C:\dev\Projects</code> has the hook files installed. Projects use Guardian through the skill and by running the audit from this repo.</td></tr>
-<tr><td>Tests</td><td><code>npm test</code> runs six suites: injection-guard 106, init 30, hook 165, agents-md 14, audit 140, sql-guard 40. Two audit tests are known-bug tests (BUG-039, BUG-040) that fail the suite once the bug is fixed.</td></tr>
+<tr><td>Tests</td><td><code>npm test</code> runs six suites: injection-guard 106, init 30, hook 165, agents-md 14, audit 140, sql-guard 40. Known-bug tests (BUG-040 as of 2026-11-10; BUG-039 was one until its fix) fail the suite once the bug is fixed.</td></tr>
 <tr><td>CI</td><td><code>.github/workflows/security-audit.yml</code> runs on pushes to <code>main</code>, <code>master</code> and <code>develop</code> on Node 22: <code>npm test</code>, then <code>node bin/guardian.js check</code>, then <code>node security/03-audit.js . --fail-on-error</code>, then an exemption visibility step. <code>.github/</code> also holds <code>CODEOWNERS</code>, issue and PR templates and <code>secret_scanning.yml</code>.</td></tr>
 <tr><td>Bug log</td><td><code>BUGS.md</code>, index at the top. Each chapter lists the open bugs for its part.</td></tr>
 </tbody></table></div>

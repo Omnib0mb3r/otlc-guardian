@@ -33,7 +33,7 @@ project.
 | TypeScript only | `.ts .tsx .mts .cts` | TS-001 |
 | Python | `.py` | SEC, CFG, INJ-004, INJ-006, AUTHZ-011, AUTHZ-013 |
 | HTML and components | `.html .htm .vue .svelte` | WEB-001 (`.html .vue .svelte`); REP-001, REP-003, REP-004 (`.html .htm`) |
-| Data and config | `.env .json .yaml .yml` | SEC (all secret rules). Note BUG-039: a bare `.env` has no extension and is never collected, so DEP-002 cannot fire |
+| Data and config | `.env .json .yaml .yml` | SEC (all secret rules, not on a bare `.env`). A bare `.env` is collected by name for DEP-002 only (BUG-039) |
 | nginx config | read by the project check | WEB-002 (no Content-Security-Policy anywhere in the project) |
 | Any project | project checks | DEP-001 (no health route, only when the project looks like an HTTP server), DEP-002, WEB-002 |
 | Any text, at runtime | not file based | Runtime guard `GUARD-INJ-*` and `GUARD-SEC-*` on AI model input and output; the PreToolUse hook on agent writes to watched paths |
@@ -57,7 +57,7 @@ shell scripts, SQL files, Dockerfiles, CI workflow files, Terraform.
 | V10 OAuth and OIDC | not covered | none | |
 | V11 Cryptography | partial | AUTHZ-004 (non constant-time comparison of a secret) | Weak algorithms, key sizes, random sources. Which V11 section AUTHZ-004 maps to needs check |
 | V12 Secure Communication | not covered | none | TLS configuration, plain `http://` endpoints |
-| V13 Configuration | partial | SEC-001 to SEC-014 (hardcoded secrets), CFG-001 to CFG-003 (hardcoded hosts), DEP-002 (`.env` committed, broken by BUG-039) | Whether ASVS 5.0 places secret management in V13 or elsewhere needs check |
+| V13 Configuration | partial | SEC-001 to SEC-014 (hardcoded secrets), CFG-001 to CFG-003 (hardcoded hosts), DEP-002 (`.env` that git does not keep out) | Whether ASVS 5.0 places secret management in V13 or elsewhere needs check |
 | V14 Data Protection | needs check | Runtime `guardOutput` scans model output for secrets (`GUARD-SEC-*`) | Mapping to a V14 requirement needs check; no rules for PII in logs or caching headers |
 | V15 Secure Coding and Architecture | needs check | TS-001 (`any` type), INJ-001 (`eval`, BUG-040) | Dependency auditing is planned (Self-Growing Gate, Lane 4), not built; no deserialization rule. Mapping needs check |
 | V16 Security Logging and Error Handling | partial | ERR-001 (silent catch), ERR-002 (catch that only logs to console), ERR-003 (`console.log` in non-test code) | JS/TS only; no check that security events are logged, or that logs hold no secrets |

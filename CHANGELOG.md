@@ -172,6 +172,14 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Fixed
 
+- **DEP-002 can fire (BUG-039).** A bare `.env` has no extension, so the
+  walker never collected it and the committed-`.env` check never ran.
+  `collectFiles()` now keeps a `.env` by name, for DEP-002 only (the
+  secret rules still do not read it). DEP-002 asks git: a tracked `.env`
+  is reported even if `.gitignore` lists it, an ignored untracked one is
+  not, and with no git or no repository the file is reported. DEP-001 no
+  longer counts a `HEALTH...` variable in `.env` as a health route.
+
 - **`guardian scan` exits non-zero on a finding (BUG-068).** It printed
   the findings and exited 0, so `cat untrusted.txt | guardian scan &&
   send-to-model` sent poisoned text on. Exit codes are now 0 clean, 1 at

@@ -26,6 +26,7 @@
 
 import fs   from "fs";
 import path from "path";
+import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 
 // ---------------------------------------------------------------------------
@@ -1248,7 +1249,11 @@ const AUDIT_RULES = [
     evidence: "project",
     checkFn: (files, projectRoot) => {
       if (!looksLikeHttpServer(projectRoot, files)) return false;
-      return !files.some((f) => /health/.test(readForCheck(f, "DEP-001", projectRoot).toLowerCase()));
+      // A .env holds settings, not routes: HEALTHCHECK_URL=... is no
+      // evidence that the app serves a health endpoint.
+      return !files.some((f) =>
+        !DOTENV_FILE.test(path.basename(f)) &&
+        /health/.test(readForCheck(f, "DEP-001", projectRoot).toLowerCase()));
     },
   },
   {
@@ -1256,7 +1261,10 @@ const AUDIT_RULES = [
     description: ".env file present - should not be committed",
     pattern: null,
     fileTypes: [],
-    checkFn: (files) => files.some((f) => path.basename(f) === ".env"),
+    // BUG-039: collectFiles() keeps a bare .env (DOTENV_FILE) even though
+    // it has no extension. A .env that git ignores and does not track is
+    // the correct setup, so only one git cannot vouch for is reported.
+    checkFn: (files) => files.some((f) => DOTENV_FILE.test(path.basename(f)) && !keptOutOfGit(f)),
   },
 
   // --- AUTHORIZATION (1.4.0) ---
@@ -1525,9 +1533,34 @@ const SKIP_DIRS = new Set([
 // (TEST_FILE_EXCLUDES is defined at the top of this file, before
 // AUDIT_RULES, because the rules reference it. See the block there.)
 
+// A bare `.env`. path.extname(".env") is "", so no extension list can
+// select it; collectFiles() keeps it by name for DEP-002 (BUG-039). No
+// pattern or analyzer rule reads it: their fileTypes never contain "".
+const DOTENV_FILE = /^\.env$/i;
+
+const GIT_TIMEOUT_MS = 10_000;
+
+/**
+ * True only when git positively keeps the file out of the repository:
+ * the file is not tracked AND an ignore rule covers it. A tracked file
+ * is committed whatever .gitignore says. No git on PATH, no repository,
+ * or any other git failure proves nothing, so the answer is false and
+ * the caller reports the file.
+ */
+function keptOutOfGit(file) {
+  const run = (...args) => spawnSync("git", ["-C", path.dirname(file), ...args, "--", path.basename(file)], {
+    encoding: "utf8", shell: false, windowsHide: true, timeout: GIT_TIMEOUT_MS,
+  });
+  if (run("ls-files", "--error-unmatch").status === 0) return false; // tracked
+  return run("check-ignore", "-q").status === 0;                     // 0 = ignored
+}
+
 function collectFiles(rootDir, extensions) {
   const results = [];
-  const wanted = (name) => extensions.length === 0 || extensions.includes(path.extname(name).toLowerCase());
+  const wanted = (name) =>
+    extensions.length === 0 ||
+    extensions.includes(path.extname(name).toLowerCase()) ||
+    DOTENV_FILE.test(path.basename(name));
 
   // A single file as the target (a commit hook auditing changed files).
   // readdirSync on a file throws, which used to leave the list empty.

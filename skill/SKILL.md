@@ -52,7 +52,7 @@ The audit runs three kinds of rule:
 - **analyzer** - per-file route-handler analysis. Missing auth, IDOR, unvalidated
   request bodies. These are *absence* conditions inside a block, which no regex can
   express, so the analyzer walks handler bodies directly.
-- **project** - whole-project shape. Missing `/health` endpoint, committed `.env`.
+- **project** - whole-project shape. Missing `/health` endpoint, a `.env` that git does not ignore or that git tracks, nginx with no Content-Security-Policy.
 
 ## Step 2 - Read the guide for whatever fired
 

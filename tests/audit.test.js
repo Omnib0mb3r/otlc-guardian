@@ -2122,14 +2122,8 @@ describe("Rules with no prior test: bad sample fires, good sample is silent", ()
                      good: { "src/logo.js": `export const logo = "data:image/png;base64,${"QUFB".repeat(20)}";\n` } },
   ];
 
-  // BUG-039: a bare .env has no extension, so the walker never collects it.
-  const openBugs = { "DEP-002 bad": "BUG-039" };
-
   for (const { id, bad, good } of cases) {
-    const badName = `${id} flags its bad sample`;
-    const badFn = () => assert.ok(auditFires(bad, id), `${id} did not fire on ${Object.keys(bad).join(", ")}`);
-    if (openBugs[`${id} bad`]) knownBug(openBugs[`${id} bad`], badName, badFn);
-    else test(badName, badFn);
+    test(`${id} flags its bad sample`, () => assert.ok(auditFires(bad, id), `${id} did not fire on ${Object.keys(bad).join(", ")}`));
     test(`${id} is silent on its good sample`, () => assert.ok(!auditFires(good, id), `${id} fired on its good sample`));
   }
 
@@ -2559,6 +2553,75 @@ describe("BUG-052: a project under a test-named folder keeps its rules", () => {
       const files = runAuditOn(root).findings.filter((f) => f.rule.id === "CFG-001").map((f) => path.basename(f.file));
       assert.deepEqual(files, ["app.py"]);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-039: DEP-002 sees a .env, and asks git whether it is kept out
+// ---------------------------------------------------------------------------
+//
+// A bare .env has no extension, so the walker never collected it and
+// DEP-002 could not fire. Once it is collected, a .env that git ignores
+// and does not track is the correct setup, not a finding.
+
+function git(dir, ...args) {
+  return spawnSync("git", ["-C", dir, ...args], { encoding: "utf8", shell: false });
+}
+const HAS_GIT = git(".", "--version").status === 0;
+
+describe("BUG-039: DEP-002 reports a .env that git does not keep out", () => {
+  const env = { ".env": "API_URL=https://api.example.com\n", "src/index.js": "export {};\n" };
+
+  test("a .env outside any git repository is reported", () => {
+    assert.ok(auditFires(env, "DEP-002"));
+  });
+
+  test("a .env given as the single-file target is reported", () => {
+    withTempProject(env, (dir) => {
+      assert.ok(hasFinding(runAuditOn(path.join(dir, ".env")), "DEP-002"));
+    });
+  });
+
+  test("a .env.example alone is not reported", () => {
+    assert.ok(!auditFires({ ".env.example": "API_URL=\n" }, "DEP-002"));
+  });
+
+  if (!HAS_GIT) {
+    console.log("  (git not on PATH: the git cases below are skipped)");
+    return;
+  }
+
+  const inRepo = (files, setup) => withTempProject(files, (dir) => {
+    assert.equal(git(dir, "init", "-q").status, 0);
+    setup?.(dir);
+    return hasFinding(runAuditOn(dir), "DEP-002");
+  });
+
+  test("a .env that .gitignore covers and git does not track is not reported", () => {
+    assert.ok(!inRepo({ ...env, ".gitignore": ".env\n" }));
+  });
+
+  test("a .env that git tracks is reported even when .gitignore lists it", () => {
+    assert.ok(inRepo({ ...env, ".gitignore": ".env\n" }, (dir) => {
+      assert.equal(git(dir, "add", "-f", ".env").status, 0);
+    }));
+  });
+
+  test("a .env in a repository that does not ignore it is reported", () => {
+    assert.ok(inRepo(env));
+  });
+
+  test("the secret rules still do not read a bare .env", () => {
+    const report = withTempProject({ ".env": `KEY=${"AKIA" + "ABCDEFGHIJKLMNOP"}\n` }, (dir) => runAuditOn(dir));
+    assert.ok(!hasFinding(report, "SEC-002"));
+  });
+
+  test("a health variable in .env does not satisfy DEP-001", () => {
+    assert.ok(auditFires({
+      "package.json": JSON.stringify({ dependencies: { express: "4.21.2" } }),
+      "src/server.js": "app.listen(3000);\n",
+      ".env": "HEALTHCHECK_URL=/healthz\n",
+    }, "DEP-001"));
   });
 });
 

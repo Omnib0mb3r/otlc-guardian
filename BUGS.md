@@ -50,7 +50,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-036 | OPEN | Web guard MCP tool names (`mcp__firecrawl__crawl`, `mcp__exa__search`) are probably wrong |
 | BUG-037 | OPEN | `guardian update` hook migration overrides a custom wider matcher and duplicates the `$CLAUDE_PROJECT_DIR` form |
 | BUG-038 | OPEN | Small hook and audit defects: deny message loses the file name, NGINX check cost, CSP comment suppresses WEB-002 |
-| BUG-039 | OPEN | `DEP-002` can never fire: the walker never collects a bare `.env` file |
+| BUG-039 | SMOKE-TESTING | `DEP-002` can never fire: the walker never collects a bare `.env` file |
 | BUG-040 | OPEN | Audit `INJ-001` (eval) fires on any call whose name ends in `eval`, e.g. `retrieval(` |
 | BUG-041 | RESOLVED | Partial scans: project checks judge the scanned subtree as the whole project (false `DEP-001`), and a single-file target scans nothing |
 | BUG-042 | OPEN | Hook: count-based judgement lets an existing quoted pattern be moved into a live directive |
@@ -583,13 +583,15 @@ Review finding 16 (LOW). Source: `C:/dev/data/skill-connections/brainstorms/16f2
 
 ### BUG-039: `DEP-002` can never fire: the walker never collects a bare `.env` file
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 Found by the first fixture for DEP-002 (gate plan step 0, `tests/audit.test.js`, "Rules with no prior test").
 
 - `collectFiles()` in `security/03-audit.js` keeps a file only when `path.extname()` is in the rule extension list. `path.extname(".env")` is `""`, so a bare `.env` is never collected, and DEP-002's `checkFn` (`path.basename(f) === ".env"`) never sees one.
 - Same root cause: the `.env` entry in `SECRET_FILE_EXTS` matches only names like `prod.env`, so the secret rules never read `.env`, `.env.local` or `.env.production` either. Whether they should (a `.env` is where secrets belong) is a separate decision; DEP-002's presence check clearly should see the file.
 - The fixture is kept as a known-bug test (`knownBug("BUG-039", ...)`); it fails the suite once DEP-002 starts firing, so the fix must move it to `test()`.
+
+**Fix (2026-11-10).** In `security/03-audit.js`: `DOTENV_FILE` (`/^\.env$/i`) lets `collectFiles()` keep a bare `.env` by name, also as a single-file target. No pattern or analyzer rule reads it (no `fileTypes` holds `""`), so the secret rules still skip `.env` (decision: a gitignored `.env` is where secrets belong; a committed one is DEP-002's finding). Turning DEP-002 on everywhere would have flagged every correctly gitignored local `.env`, so new `keptOutOfGit()` asks git (`ls-files --error-unmatch`, then `check-ignore -q`, 10 s timeout, `shell: false`): tracked is reported, ignored and untracked is not, and no git or no repository is reported. DEP-001 skips `.env` when looking for `health`. `.env.local` and `.env.production` stay out of scope. Tests: the DEP-002 fixture moved from `knownBug()` to `test()`; new "BUG-039" block in `tests/audit.test.js` (no repo, single-file target, `.env.example`, ignored, tracked-and-ignored, not ignored, secret rules off `.env`, DEP-001 and `HEALTHCHECK_URL`); the BUG-059 allowlisted-`.env` test now runs for real. Docs: manual chapters 01, 02, 03, docs/coverage.md, skill/SKILL.md. Smoke test: `guardian audit` in a real repo with a gitignored `.env` gives no DEP-002; `git add -f .env` and it appears.
 
 ### BUG-040: Audit `INJ-001` (eval) fires on any call whose name ends in `eval`, e.g. `retrieval(`
 
