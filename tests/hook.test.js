@@ -1618,6 +1618,31 @@ describe("PreToolUse hook - explicit deletes and replaces of the settings and gu
     });
   }
 
+  // Re-probe 3, D6 (T11): find evaluates left to right, so a test after
+  // the action does not narrow it; -fprint and the like write their file;
+  // a starting point above the project reaches all of it.
+  for (const command of [
+    "find . -delete -name '*.log'",
+    "find . -exec rm -rf {} + -name '*.log'",
+    "find .claude -delete -name '*.log'",
+    "find .. -maxdepth 1 -name 'p[0-9]*' -exec rm -rf {} +",
+    "find .. -maxdepth 1 -name 'guardian-*' -delete",
+    `find . -maxdepth 0 -fprintf CLAUDE.md '${CRITICAL_PAYLOAD}\\n'`,
+    "find . -maxdepth 0 -fls .claude/settings.local.json",
+  ]) {
+    stagedOnly(`asks: ${command} (D6)`, () => {
+      const out = bash(command);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    });
+  }
+  for (const command of [
+    "find .. -maxdepth 1 -name '*.md' -exec cat {} \\;",
+    "find ../other-project -name '*.log' -delete",
+    "find . -maxdepth 1 -name '*.log' -fprint build/logs.txt",
+  ]) {
+    test(`silent: ${command} (D6)`, () => expectSilent(bash(command)));
+  }
+
   for (const command of [
     "find src -name '*.tmp' -delete",
     "find .claude -name '*.json'",

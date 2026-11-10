@@ -201,6 +201,13 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **`find` reads as find does (BUG-065, re-probe 3 D6).** A filter after
+  the action (`find . -delete -name '*.log'`) no longer counts as
+  narrowing it, since find evaluates left to right and that command
+  deletes everything. A starting point above the project
+  (`find .. -name 'p*' -exec rm -rf {} +`) is never narrowed by a name
+  test, and `-fprint`, `-fprintf` and `-fls` count as writing their file.
+
 - **Three more copy forms into instruction files are read (BUG-075,
   re-probe 3 D1).** `grep '' notes.md > CLAUDE.md`, `(Get-Content
   notes.md) | Set-Content CLAUDE.md` and `[IO.File]::Copy('notes.md',

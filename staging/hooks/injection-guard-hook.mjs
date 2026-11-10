@@ -469,13 +469,19 @@ function findPathSamples(root) {
  * points when its branch (between -o operators) holds a -name, -iname,
  * -path or -wholename test, not negated, that matches none of the guarded
  * files and folders or the watched instruction files: then nothing it
- * reaches is one (re-probe 2, S10). An expression with parentheses is not
- * narrowed.
+ * reaches is one (re-probe 2, S10). find evaluates left to right, so only
+ * a test before the action narrows it. An expression with parentheses is
+ * not narrowed, nor is a starting point above the project root: a name
+ * test there is tried against the folders that hold the project, which
+ * Guardian cannot list (re-probe 3, D6). -fprint, -fprint0, -fprintf and
+ * -fls write their file whatever matches.
  */
 function findWrites(args, dir, ctx) {
   const first = args.findIndex((a) => /^[-(!]/.test(a));
   const starts = args.slice(0, first < 0 ? args.length : first);
   const roots = starts.length > 0 ? starts : ["."];
+  const project = ctx.root ? watchKey(ctx.abs(ctx.root, ".")) : null;
+  const aboveProject = project !== null && roots.some((r) => project.startsWith(`${watchKey(ctx.abs(dir, r)).replace(/\/+$/, "")}/`));
   // The expression, with each -exec clause folded into its action.
   const expr = [];
   for (let k = first < 0 ? args.length : first; k < args.length; k++) {
@@ -489,12 +495,10 @@ function findWrites(args, dir, ctx) {
   const grouped = expr.some((e) => e.word === "(" || e.word === ")");
   const isOr = (e) => e.word === "-o" || e.word === "-or";
   const reaches = (i) => {
-    if (grouped) return true;
+    if (grouped || aboveProject) return true;
     let s = i;
     while (s > 0 && !isOr(expr[s - 1])) s--;
-    let e = i;
-    while (e < expr.length && !isOr(expr[e])) e++;
-    for (let k = s; k < e - 1; k++) {
+    for (let k = s; k < i - 1; k++) {
       const test = expr[k].word;
       const negated = k > 0 && (expr[k - 1].word === "!" || expr[k - 1].word === "-not");
       if (negated || (!FIND_NAME_TESTS.has(test) && !FIND_PATH_TESTS.has(test))) continue;
@@ -505,6 +509,7 @@ function findWrites(args, dir, ctx) {
     return true;
   };
   expr.forEach((e, i) => {
+    if (/^-(?:fprint0?|fprintf|fls)$/.test(e.word) && expr[i + 1]) ctx.add(dir, expr[i + 1].word);
     if (e.word === "-delete" && reaches(i)) for (const p of roots) ctx.add(dir, p);
     if (!e.clause) return;
     // A clause that cannot reach a guarded file still writes the paths it spells out.
@@ -1245,13 +1250,14 @@ function pathLikeWords(text) {
  *
  * @param {string} command
  * @param {string} cwd - the session's working directory
- * @param {{ decoded: string[], filters: Array, quiet: string[] }} found -
+ * @param {{ decoded: string[], filters: Array, quiet: string[], root?: string }} found -
  *   collects, across nested shells: `decoded`, the text of each script the
  *   command carries encoded (powershell -EncodedCommand), scanned with the
  *   command text (BUG-067); `filters`, the line filters that "filter:N"
  *   sources name; `quiet`, the [start, end) places in the top-level
  *   command text of filter patterns, which never land and are left out of
- *   the command-text scan (BUG-044)
+ *   the command-text scan (BUG-044). `root`, the project root, is read by
+ *   findWrites() (re-probe 3, D6)
  * @returns {Map<string, { sources: Set<string>, append: boolean }>}
  *   absolute target -> absolute source files. A source prefixed "patch:"
  *   is a patch file, of which only the added lines land; "filter:N" is
@@ -1285,7 +1291,7 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
     }
   };
   const filter = (inputs, apply) => `filter:${found.filters.push({ inputs, apply }) - 1}`;
-  const ctx = { add, abs, recurse, dialect, decoded: found.decoded, quiet: [], filter };
+  const ctx = { add, abs, recurse, dialect, decoded: found.decoded, quiet: [], filter, root: found.root };
 
   const { tokens, subs } = lexShell(command, dialect);
   for (const sub of subs) recurse(sub, cwd);
@@ -2396,7 +2402,7 @@ process.stdin.on("end", () => {
     // Paths a Bash command writes, resolved against the session cwd, and
     // the scripts it carries encoded, which are scanned with its text.
     const sessionCwd = (typeof data.cwd === "string" && data.cwd) || projectRoot;
-    const shellRead = { decoded: [], filters: [], quiet: [] };
+    const shellRead = { decoded: [], filters: [], quiet: [], root: projectRoot };
     const bashTargets = write.kind === "bash" ? shellWriteTargets(write.content, sessionCwd, 0, write.dialect, shellRead) : new Map();
     const bashWrites = [...bashTargets.keys()];
 
