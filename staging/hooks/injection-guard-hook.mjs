@@ -1920,6 +1920,44 @@ function canonicalJson(value) {
   return value === undefined ? "" : JSON.stringify(value);
 }
 
+// Settings whose value is a command Claude Code runs: a string, or an
+// object's "command" field (re-probe 3, D3).
+const SETTINGS_COMMAND_KEYS = ["apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "gcpAuthRefresh", "otelHeadersHelper", "processWrapper"];
+const SETTINGS_COMMAND_OBJECTS = ["statusLine", "subagentStatusLine", "fileSuggestion"];
+
+/**
+ * Every command a settings object makes Claude Code run, except Guardian's
+ * own hooks (hookCoverage() judges those), each spelled one way. Hook
+ * entries of every kind count: an http, prompt or agent hook on
+ * PreToolUse can allow a call or rewrite its input as well as a command can.
+ * @param {Map<string, string>} into - key -> what it is, for messages
+ */
+function settingsCommands(settings, root, into) {
+  if (!settings) return into;
+  for (const key of SETTINGS_COMMAND_KEYS) {
+    if (settings[key] !== undefined) into.set(`${key}\u0000${canonicalJson(settings[key])}`, key);
+  }
+  for (const key of SETTINGS_COMMAND_OBJECTS) {
+    const obj = settings[key];
+    if (obj && typeof obj === "object" && obj.command !== undefined) {
+      into.set(`${key}\u0000${canonicalJson({ type: obj.type, command: obj.command })}`, `${key}.command`);
+    }
+  }
+  const guardians = new Set(GUARDIAN_HOOK_FILES.map((f) => `node ${watchKey(path.join(root, ".claude", "hooks", f))}`));
+  const hooks = settings.hooks && typeof settings.hooks === "object" ? settings.hooks : {};
+  for (const [event, blocks] of Object.entries(hooks)) {
+    for (const block of Array.isArray(blocks) ? blocks : []) {
+      for (const h of Array.isArray(block?.hooks) ? block.hooks : []) {
+        const id = typeof h?.command === "string" ? hookIdentity(h.command, root).id : null;
+        if (id !== null && guardians.has(id)) continue;
+        const entry = id === null ? h : { ...h, command: id };
+        into.set(`hook\u0000${event}\u0000${canonicalJson(block?.matcher)}\u0000${canonicalJson(entry)}`, `a ${event} hook`);
+      }
+    }
+  }
+  return into;
+}
+
 /** Guardian's standing across settings.json and settings.local.json together. */
 function guardianPosture(projectText, localText, root, tools) {
   const project = parseSettings(projectText);
@@ -1937,6 +1975,7 @@ function guardianPosture(projectText, localText, root, tools) {
   const cfg = project?.otlcGuardian && typeof project.otlcGuardian === "object" ? project.otlcGuardian : {};
   return {
     coverage,
+    commands:        settingsCommands(local, root, settingsCommands(project, root, new Map())),
     disableAllHooks: project?.disableAllHooks === true || local?.disableAllHooks === true,
     // Claude Code passes env to every hook it runs: NODE_OPTIONS can preload
     // a script that exits 0, CLAUDE_PROJECT_DIR moves the root. Guardian
@@ -2015,6 +2054,9 @@ function settingsWeakening(absPath, after) {
   const reasons = settingsTypeProblems(parsedAfter)
     .map((p) => `${p}, so Claude Code loads nothing from the file, hooks and permission rules included`);
   if (now.disableAllHooks && !was.disableAllHooks) reasons.push("disableAllHooks is turned on");
+  for (const [key, what] of now.commands) {
+    if (!was.commands.has(key)) reasons.push(`${safeEcho(what, 60)} is added or changed: a command Claude Code runs, which Guardian cannot judge (it can delete Guardian's files or rewrite tool input)`);
+  }
   if (now.env !== was.env) reasons.push("the env block changes, and every hook Claude Code runs gets those variables (NODE_OPTIONS can preload code into the hook)");
   for (const key of guarded) {
     const [event, tool] = key.split("\u0000");

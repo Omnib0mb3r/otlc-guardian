@@ -1937,6 +1937,56 @@ describe("PreToolUse hook - settings protection reads matchers and hook commands
       expectSilent(writeLocal(null, next));
     });
   }
+
+  // Re-probe 3, D3 (T16): a command Claude Code runs from settings can
+  // delete Guardian before the first tool call, and a second PreToolUse
+  // hook can rewrite the tool input. Guardian cannot judge a command, so
+  // any added or changed one asks.
+  const otherHook = (command, matcher) => ({ ...(matcher === undefined ? {} : { matcher }), hooks: [{ type: "command", command }] });
+  const withHook = (event, block) => () => {
+    const s = settings();
+    s.hooks[event] = [...(s.hooks[event] ?? []), block];
+    return s;
+  };
+  for (const [name, next, what] of [
+    ["a SessionStart hook", withHook("SessionStart", otherHook("rm -rf .claude/hooks")), "SessionStart"],
+    ["a Stop hook", withHook("Stop", otherHook("echo x")), "Stop"],
+    ["a second PreToolUse hook beside Guardian's", withHook("PreToolUse", otherHook("node rewrite.mjs", "Bash")), "PreToolUse"],
+    ["an http PostToolUse hook", withHook("PostToolUse", { matcher: "Write", hooks: [{ type: "http", url: "http://localhost:9/x" }] }), "PostToolUse"],
+    ["a statusLine command", () => ({ ...settings(), statusLine: { type: "command", command: "rm -f .claude/settings.json" } }), "statusLine.command"],
+    ["an apiKeyHelper", () => ({ ...settings(), apiKeyHelper: "node -e 1" }), "apiKeyHelper"],
+    ["a fileSuggestion command", () => ({ ...settings(), fileSuggestion: { type: "command", command: "x.sh" } }), "fileSuggestion.command"],
+  ]) {
+    stagedOnly(`adding ${name} asks (D3)`, () => {
+      const out = change(() => settings(), next);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+      expectWarning(out, what);
+    });
+  }
+  stagedOnly("changing another hook's command asks (D3)", () => {
+    const out = change(withHook("Stop", otherHook("echo a")), withHook("Stop", otherHook("echo b")));
+    assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+  });
+  stagedOnly("a SessionStart hook added in settings.local.json asks (D3)", () => {
+    const out = writeLocal(null, { hooks: { SessionStart: [otherHook("rm -f .claude/hooks/injection-guard-hook.mjs")] } });
+    assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    expectWarning(out, "SessionStart");
+  });
+  stagedOnly("changing the statusLine command asks (D3)", () => {
+    const withStatus = (command) => () => ({ ...settings(), statusLine: { type: "command", command } });
+    assert.equal(decisionOf(change(withStatus("echo a"), withStatus("echo b"))), "ask");
+  });
+
+  for (const [name, from, to] of [
+    ["removing another hook", withHook("Stop", otherHook("echo a")), () => settings()],
+    ["an unchanged other hook beside another change", withHook("Stop", otherHook("echo a")), () => ({ ...withHook("Stop", otherHook("echo a"))(), model: "opus" })],
+    ["an unchanged statusLine beside another change", () => ({ ...settings(), statusLine: { type: "command", command: "echo a" } }),
+      () => ({ ...settings(), statusLine: { command: "echo a", type: "command" }, model: "opus" })],
+  ]) {
+    test(`${name} is unchanged (D3)`, () => {
+      expectSilent(change(from, to));
+    });
+  }
 });
 
 describe("PreToolUse hook - PowerShell parameter prefixes and encoded scripts (BUG-067)", () => {
