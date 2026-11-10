@@ -1532,6 +1532,76 @@ describe("PreToolUse hook - copies of folders and sort/uniq outputs are judged b
   }
 });
 
+describe("PreToolUse hook - settings protection reads matchers and hook commands as Claude Code does (BUG-045)", () => {
+  const PRE_TOOLS = "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell";
+  const PRE_CMD = "node .claude/hooks/injection-guard-hook.mjs";
+  const settings = (matcher = PRE_TOOLS, command = PRE_CMD) => ({
+    hooks: {
+      PreToolUse:  [{ matcher, hooks: [{ type: "command", command }] }],
+      PostToolUse: [{ matcher: "WebFetch|WebSearch", hooks: [{ type: "command", command: "node .claude/hooks/web-content-guard.mjs" }] }],
+    },
+  });
+  const change = (from, to) => withTempProject((dir) => {
+    const file = path.join(dir, ".claude", "settings.json");
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify(from(dir), null, 2));
+    return runHook(PRE_HOOK, { tool_name: "Write", cwd: dir, tool_input: { file_path: file, content: JSON.stringify(to(dir), null, 2) } });
+  });
+
+  // Claude Code: letters, digits, _ - , | and spaces make an exact list
+  // (split on | or ,, spaces allowed); anything else is an unanchored regex.
+  for (const matcher of ["Write | Edit | MultiEdit | NotebookEdit | Bash | PowerShell", "Write,Edit,MultiEdit,NotebookEdit,Bash,PowerShell", "Write|.*Edit|Bash|PowerShell", "*", ".*"]) {
+    stagedOnly(`a matcher that still covers every tool is unchanged: "${matcher}"`, () => {
+      expectSilent(change(() => settings(), () => settings(matcher)));
+    });
+  }
+
+  for (const [matcher, lost] of [
+    [`${PRE_TOOLS}|(`, "Write"],          // an invalid regex matches nothing
+    ["^Write$|^Bash$", "Edit"],
+    ["Write|Edit|Bash", "PowerShell"],
+    ["Writes|Edit|MultiEdit|NotebookEdit|Bash|PowerShell", "Write"],
+  ]) {
+    stagedOnly(`a matcher that drops a tool asks: "${matcher}"`, () => {
+      const out = change(() => settings(), () => settings(matcher));
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+      expectWarning(out, `no longer runs on PreToolUse ${lost}`);
+    });
+  }
+
+  // The documented placeholder form is the BUG-028 fix; it must not read as a weakening.
+  for (const command of [
+    'node "${CLAUDE_PROJECT_DIR}/.claude/hooks/injection-guard-hook.mjs"',
+    'node "$CLAUDE_PROJECT_DIR/.claude/hooks/injection-guard-hook.mjs"',
+    "node \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/injection-guard-hook.mjs",
+  ]) {
+    stagedOnly(`moving the hook command to the project-root form is unchanged: ${command}`, () => {
+      expectSilent(change(() => settings(), () => settings(PRE_TOOLS, command)));
+    });
+  }
+
+  stagedOnly("the hook command spelled as an absolute path to the same file is unchanged", () => {
+    expectSilent(change(() => settings(), (dir) => settings(PRE_TOOLS, `node "${path.join(dir, ".claude", "hooks", "injection-guard-hook.mjs")}"`)));
+  });
+
+  stagedOnly("moving the hook command back to a relative path asks: it then depends on the session's directory", () => {
+    const out = change(() => settings(PRE_TOOLS, 'node "${CLAUDE_PROJECT_DIR}/.claude/hooks/injection-guard-hook.mjs"'), () => settings());
+    assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    expectWarning(out, "directory");
+  });
+
+  for (const command of [
+    'node "${CLAUDE_PROJECT_DIR}/.claude/hooks/injection-guard-hook.mjs" > /dev/null',
+    'node "${CLAUDE_PROJECT_DIR}/.claude/hooks/injection-guard-hook.mjs" || true',
+    'node "${CLAUDE_PROJECT_DIR}/.claude/hooks/other-hook.mjs"',
+    'echo "${CLAUDE_PROJECT_DIR}/.claude/hooks/injection-guard-hook.mjs"',
+  ]) {
+    test(`a hook command that is not the same hook asks: ${command}`, () => {
+      assert.equal(decisionOf(change(() => settings(), () => settings(PRE_TOOLS, command))), "ask");
+    });
+  }
+});
+
 describe("PreToolUse hook - PowerShell parameter prefixes and encoded scripts (BUG-067)", () => {
   const run = (tool, command, mode, files = {}) => withTempProject((dir) => {
     for (const [rel, text] of Object.entries({ ".claude/settings.json": "{}", ...files })) {

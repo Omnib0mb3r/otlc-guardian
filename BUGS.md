@@ -56,7 +56,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-042 | OPEN | Hook: count-based judgement lets an existing quoted pattern be moved into a live directive |
 | BUG-043 | IN-PROGRESS | Hook false denies: `### System: Billing`, `### Prompt:`, a `--- System ---` line, "wrap in <user> tags", a CLAUDE.md line that quotes a pattern as data |
 | BUG-044 | OPEN | Hook false denies in bypass mode on Bash cleanup (`sed -i '/payload/d'`, `grep -v` then `mv` back) and read-only `node -e`/`python -c` |
-| BUG-045 | OPEN | Settings protection: a matcher with a space (`"Write \|Edit"`) is accepted as unchanged; the `$CLAUDE_PROJECT_DIR` command form is denied as a weakening |
+| BUG-045 | IN-PROGRESS | Settings protection: a matcher with a space (`"Write \|Edit"`) is accepted as unchanged; the `$CLAUDE_PROJECT_DIR` command form is denied as a weakening |
 | BUG-046 | OPEN | `scanChange()` context window: whitespace padding can cross the 2 KB window |
 | BUG-047 | OPEN | Encoded Bash content passes the hook: `printf` octal, `rev`, `tr` rot13, variable concatenation, quote-split words |
 | BUG-048 | IN-PROGRESS | PowerShell tool commands are not read for `git`, `bash -c`, `node -e` or `curl -o` writes, and `cmd /c` is read by neither shell reader |
@@ -691,12 +691,16 @@ Verifier item P9 (`C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-
 
 ### BUG-045: Settings protection misreads matcher spacing and denies the `$CLAUDE_PROJECT_DIR` command form
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** IN-PROGRESS · **Found:** 2026-11-10
 
 Verifier item P10 (`C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-10-guardian-1.5.0-verify.md`, line refs against 811381e).
 
 - `matcherTokens()` trims each token (about hook lines 520 to 524 at 811381e), so a matcher changed to `"Write |Edit"` is judged unchanged. Claude Code treats the matcher as a regex, so `Write ` with a trailing space no longer matches the Write tool and the hook stops running on it without a prompt.
 - Changing the hook command to the `"$CLAUDE_PROJECT_DIR/.claude/hooks/..."` form is denied as a weakening, because any command change counts as lost coverage. That form is the BUG-028 fix, so the protection blocks the fix. Related: BUG-028, BUG-037.
+
+**Correction to the first bullet (2026-11-10).** The Claude Code hooks reference (https://code.claude.com/docs/en/hooks, read through the docs agent) says a matcher of only letters, digits, `_`, `-`, `,`, `|` and spaces is a list of exact names split on `|` or `,`, with whitespace around items allowed, and that anything else is an unanchored JavaScript regex. So `"Write |Edit"` still matches Write, and trimming was right. The real defects were next to it: the hook split only on `|` (so `Write,Edit` read as one unknown name), read a regex matcher as tokens (so `.*Edit` read as dropping Edit, and a matcher broken into an invalid regex, which covers nothing, could still read as covering every tool it names).
+
+**Fix in staging (2026-11-10), not yet live.** Staging commit: recorded in `staging/APPLY.md`. In `staging/hooks/injection-guard-hook.mjs`: `matcherTokens()` is replaced by `matcherCovers()` (Claude Code's two matcher forms, `EXACT_MATCHER`; an invalid regex covers nothing) and `listedTools()`; coverage keys are (event, tool, hook) over `GUARDIAN_TOOLS` plus every name any version of either file lists; the new `hookIdentity()` reads a command that only runs `node` on one script as that script, resolved against the project root with `${CLAUDE_PROJECT_DIR}` and `$CLAUDE_PROJECT_DIR` substituted (`PROJECT_DIR_VAR`) and spelled through `watchKey()`, so respellings of the same file are one hook; each registration records whether its path is anchored, and moving from anchored to relative is reported ("now depends on the session's directory"). Reasons are de-duplicated. Tests: `tests/hook.test.js`, group "settings protection reads matchers and hook commands as Claude Code does (BUG-045)": 13 staged tests, 9 failing against the staged hook before the fix (the spaced list and three narrowing matchers already asked or stayed silent correctly), plus 4 tests that a different hook command still asks, which pass on both. The bug stays IN-PROGRESS until Michael applies the staged hook. Smoke test after applying, with prompts on: ask Claude to change this repo's hook commands to `node "${CLAUDE_PROJECT_DIR}/.claude/hooks/..."` and see no weakening prompt (that change is BUG-028's own).
 
 ### BUG-046: `scanChange()` context window can be crossed with whitespace
 

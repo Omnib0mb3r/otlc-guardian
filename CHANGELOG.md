@@ -201,6 +201,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Settings protection reads matchers and hook commands as Claude Code
+  does (BUG-045).** A matcher is read as Claude Code documents it: a list
+  of exact names split on `|` or `,` (spaces allowed), or else an
+  unanchored regex, where an invalid one covers nothing. So `Write,Edit`
+  and `.*Edit` are no longer reported as dropping tools, and a matcher
+  broken into an invalid regex is. A command that runs `node` on the same
+  script is the same hook however it is spelled, so moving to
+  `node "${CLAUDE_PROJECT_DIR}/.claude/hooks/..."` (the BUG-028 fix) is
+  not denied as a weakening; moving back to a relative path is.
+
 - **Fewer false denies on headings, separators and prose (BUG-043).**
   `GUARD-INJ-019` matches only a prompt-template delimiter (the colon ends
   the line, or the keyword sits against the hashes), so `### System:

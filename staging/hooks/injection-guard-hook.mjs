@@ -1150,12 +1150,25 @@ function extractWrite(toolName, toolInput) {
 //
 // Claude Code merges .claude/settings.json and .claude/settings.local.json,
 // so a change to either is judged on the pair. Guardian's coverage is the
-// set of (event, matcher token, exact command) its hooks are registered
-// under. A change weakens Guardian when any of that coverage is lost: a
-// hook removed, a matcher token dropped, the command altered in any way,
-// or the timeout lowered. A "*" or empty matcher covers every token.
+// set of (event, tool, hook) its hooks run on. A tool is covered when a
+// block's matcher matches it the way Claude Code matches (matcherCovers());
+// a hook is the script its command runs, so spellings of one command that
+// run the same file are one hook (hookIdentity()). A change weakens
+// Guardian when any of that coverage is lost (a hook removed, a tool no
+// longer matched, the command changed beyond a respelling of the same
+// file, the timeout lowered), or when the command comes to depend on the
+// directory the hook starts in (BUG-045).
 
 const DEFAULT_HOOK_TIMEOUT_S = 60; // Claude Code's default for command hooks
+
+// Tools a matcher is tested against, besides every name a matcher lists:
+// the ones Guardian's two hooks are registered for.
+const GUARDIAN_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "PowerShell", "WebFetch", "WebSearch", "mcp__firecrawl__crawl", "mcp__exa__search"];
+// Claude Code reads a matcher of only these characters as a list of exact
+// names separated by | or , (spaces allowed); anything else is an
+// unanchored JavaScript regex. "*" and "" match every tool.
+const EXACT_MATCHER = /^[A-Za-z0-9_\-\s,|]*$/;
+const PROJECT_DIR_VAR = /^(?:\$\{CLAUDE_PROJECT_DIR\}|\$CLAUDE_PROJECT_DIR)/;
 
 /** @returns {object | null} the settings object, or null when the text is not one */
 function parseSettings(text) {
@@ -1167,14 +1180,49 @@ function parseSettings(text) {
   }
 }
 
-function matcherTokens(matcher) {
+/** Whether Claude Code runs a block with this matcher for `tool`. */
+function matcherCovers(matcher, tool) {
   const m = typeof matcher === "string" ? matcher.trim() : "";
-  if (m === "" || m === "*") return ["*"];
-  return m.split("|").map((t) => t.trim()).filter(Boolean);
+  if (m === "" || m === "*") return true;
+  if (EXACT_MATCHER.test(m)) return m.split(/[|,]/).some((name) => name.trim() === tool);
+  try {
+    return new RegExp(m).test(tool);
+  } catch (err) {
+    return false; // an invalid pattern matches no tool
+  }
 }
 
-/** @returns {Map<string, number>} "event \0 token \0 command" -> timeout in seconds */
-function hookCoverage(settings) {
+/** The exact tool names a settings object's matchers list. */
+function listedTools(settings) {
+  const names = [];
+  for (const blocks of Object.values(settings?.hooks && typeof settings.hooks === "object" ? settings.hooks : {})) {
+    for (const block of Array.isArray(blocks) ? blocks : []) {
+      const m = typeof block?.matcher === "string" ? block.matcher : "";
+      if (EXACT_MATCHER.test(m)) names.push(...m.split(/[|,]/).map((n) => n.trim()).filter(Boolean));
+    }
+  }
+  return names;
+}
+
+/**
+ * The hook a command runs. A command that only runs `node` on one script
+ * is that script, resolved against the project root ($CLAUDE_PROJECT_DIR
+ * and ${CLAUDE_PROJECT_DIR} included) and spelled one way; any other
+ * command is itself.
+ * @returns {{ id: string, anchored: boolean }} anchored: the script path
+ *   does not depend on the directory the hook is started in
+ */
+function hookIdentity(command, root) {
+  const m = /^\s*node(?:\.exe)?\s+((?:"[^"]*"|'[^']*'|[^\s"'])+)\s*$/i.exec(command);
+  if (!m) return { id: command, anchored: true };
+  const word = m[1].replace(/"([^"]*)"|'([^']*)'/g, (whole, dq, sq) => dq ?? sq);
+  const fromRoot = PROJECT_DIR_VAR.test(word);
+  const file = fromRoot ? path.join(root, word.replace(PROJECT_DIR_VAR, "")) : path.resolve(root, word);
+  return { id: `node ${watchKey(file)}`, anchored: fromRoot || path.isAbsolute(word) };
+}
+
+/** @returns {Map<string, { timeout: number, anchored: boolean }>} "event \0 tool \0 hook" -> its strongest registration */
+function hookCoverage(settings, root, tools) {
   const coverage = new Map();
   const hooks = settings?.hooks && typeof settings.hooks === "object" ? settings.hooks : {};
   for (const [event, blocks] of Object.entries(hooks)) {
@@ -1183,9 +1231,12 @@ function hookCoverage(settings) {
       for (const h of Array.isArray(block?.hooks) ? block.hooks : []) {
         if (typeof h?.command !== "string" || (h.type !== undefined && h.type !== "command")) continue;
         const timeout = typeof h.timeout === "number" ? h.timeout : DEFAULT_HOOK_TIMEOUT_S;
-        for (const token of matcherTokens(block.matcher)) {
-          const key = `${event}\u0000${token}\u0000${h.command}`;
-          coverage.set(key, Math.max(coverage.get(key) ?? 0, timeout));
+        const { id, anchored } = hookIdentity(h.command, root);
+        for (const tool of tools) {
+          if (!matcherCovers(block.matcher, tool)) continue;
+          const key = `${event}\u0000${tool}\u0000${id}`;
+          const seen = coverage.get(key);
+          coverage.set(key, { timeout: Math.max(seen?.timeout ?? 0, timeout), anchored: Boolean(seen?.anchored) || anchored });
         }
       }
     }
@@ -1194,11 +1245,14 @@ function hookCoverage(settings) {
 }
 
 /** Guardian's standing across settings.json and settings.local.json together. */
-function guardianPosture(projectText, localText) {
+function guardianPosture(projectText, localText, root, tools) {
   const project = parseSettings(projectText);
   const local = parseSettings(localText);
-  const coverage = hookCoverage(project);
-  for (const [key, timeout] of hookCoverage(local)) coverage.set(key, Math.max(coverage.get(key) ?? 0, timeout));
+  const coverage = hookCoverage(project, root, tools);
+  for (const [key, entry] of hookCoverage(local, root, tools)) {
+    const seen = coverage.get(key);
+    coverage.set(key, { timeout: Math.max(seen?.timeout ?? 0, entry.timeout), anchored: Boolean(seen?.anchored) || entry.anchored });
+  }
   // The hook reads its own config from settings.json only (loadSettings).
   const cfg = project?.otlcGuardian && typeof project.otlcGuardian === "object" ? project.otlcGuardian : {};
   return {
@@ -1248,7 +1302,11 @@ function settingsWeakening(absPath, after) {
   } catch (err) {
     return [`current settings could not be read (${err?.message ?? "unknown"})`];
   }
-  const pair = (text) => (isLocal ? guardianPosture(other, text) : guardianPosture(text, other));
+  // The settings live in <root>/.claude/; every matcher in either version
+  // of either file is tested against the same tools.
+  const root = path.dirname(path.dirname(absPath));
+  const tools = [...new Set([...GUARDIAN_TOOLS, ...[current, other, after ?? ""].flatMap((t) => listedTools(parseSettings(t)))])];
+  const pair = (text) => (isLocal ? guardianPosture(other, text, root, tools) : guardianPosture(text, other, root, tools));
   const was = pair(current);
   const guarded = [...was.coverage.keys()].filter((k) => GUARDIAN_HOOK_FILES.some((f) => k.split("\u0000")[2].includes(f)));
   const hasConfig = was.ignorePaths.length > 0 || was.watchPaths.length > 0 || !was.extendDefaults;
@@ -1269,18 +1327,21 @@ function settingsWeakening(absPath, after) {
   const reasons = [];
   if (now.disableAllHooks && !was.disableAllHooks) reasons.push("disableAllHooks is turned on");
   for (const key of guarded) {
-    const [event, token, command] = key.split("\u0000");
+    const [event, tool] = key.split("\u0000");
     const need = was.coverage.get(key);
-    const kept = Math.max(now.coverage.get(key) ?? -1, now.coverage.get(`${event}\u0000*\u0000${command}`) ?? -1);
-    if (kept < 0) reasons.push(`Guardian hook no longer runs on ${event} ${token} (removed, or its matcher or command changed)`);
-    else if (kept < need) reasons.push(`Guardian hook timeout on ${event} ${token} lowered from ${need} s to ${kept} s`);
+    const kept = now.coverage.get(key);
+    if (!kept) reasons.push(`Guardian hook no longer runs on ${event} ${tool} (removed, or its matcher or command changed)`);
+    else if (kept.timeout < need.timeout) reasons.push(`Guardian hook timeout on ${event} ${tool} lowered from ${need.timeout} s to ${kept.timeout} s`);
+    else if (need.anchored && !kept.anchored) {
+      reasons.push(`Guardian hook command on ${event} now depends on the session's directory (a relative path stops working after a cd)`);
+    }
   }
   if (was.extendDefaults && !now.extendDefaults) reasons.push("otlcGuardian.extendDefaults is turned off (default watch list dropped)");
   const addedIgnores = now.ignorePaths.filter((p) => !was.ignorePaths.includes(p));
   if (addedIgnores.length > 0) reasons.push(`otlcGuardian.ignorePaths gains ${addedIgnores.length} entr${addedIgnores.length === 1 ? "y" : "ies"}`);
   const removedWatches = was.watchPaths.filter((p) => !now.watchPaths.includes(p));
   if (removedWatches.length > 0) reasons.push(`otlcGuardian.watchPaths loses ${removedWatches.length} entr${removedWatches.length === 1 ? "y" : "ies"}`);
-  return reasons;
+  return [...new Set(reasons)];
 }
 
 /** The text a Write/Edit/MultiEdit leaves in a settings file, or null when it cannot be computed. */
