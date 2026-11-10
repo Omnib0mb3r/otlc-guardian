@@ -154,10 +154,28 @@ project (each project picks it up when `guardian update` is run there).
 ### Changed (behavior you will notice)
 
 - A write that used to produce a warning can now be refused.
-- A new documentation file full of injection examples must be created
-  with the marker first, or listed in `ignorePaths`.
+- A documentation file that gains new injection examples must be listed in
+  `ignorePaths`; the `otlc-guardian:doc` marker no longer exempts anything
+  from the hook.
 - Hook matchers changed. Existing projects are migrated by `guardian update`.
 - `guardian update` overwrites local edits to Guardian-owned files.
+- **Runtime scanner rule ids gained the engine prefix `GUARD-`.** The
+  scanner (`01-injection-guard.js`, `injection_guard.py`, both hooks) and
+  the audit (`03-audit.js`) numbered their `INJ-*` and `SEC-*` rules
+  separately, so one id meant two rules: `INJ-001` was "ignore previous
+  instructions" in the scanner and `eval()` in the audit, and `SEC-002`
+  was a Google key in one and an AWS key in the other. Audit ids are
+  unchanged, since they are what projects cite in bug logs, CI output
+  and the guides, and the allowlist names paths, not ids. Each scanner
+  violation also carries its old id as `legacyId` (Python: `legacy_id`)
+  for this release; it is removed in 1.6.0. Entries above this one, and
+  older releases, use the old scanner ids.
+
+  | Old scanner id | New id |
+  |---|---|
+  | `INJ-001` to `INJ-028` | `GUARD-INJ-001` to `GUARD-INJ-028` |
+  | `INJ-UNICODE`, `INJ-OVERSIZE` | `GUARD-INJ-UNICODE`, `GUARD-INJ-OVERSIZE` |
+  | `SEC-001`, `SEC-001b`, `SEC-002` to `SEC-015` | `GUARD-SEC-001`, `GUARD-SEC-001b`, `GUARD-SEC-002` to `GUARD-SEC-015` |
 
 ### Known limits (not fixed here)
 

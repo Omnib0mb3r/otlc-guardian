@@ -24,45 +24,45 @@
 
 export const INJECTION_PATTERNS = [
   // Classic instruction override
-  { pattern: /ignore\s+(all\s+)?previous\s+instructions/i,          severity: "CRITICAL", id: "INJ-001" },
-  { pattern: /ignore\s+(all\s+)?above\s+instructions/i,             severity: "CRITICAL", id: "INJ-002" },
-  { pattern: /disregard\s+(all\s+)?previous/i,                      severity: "CRITICAL", id: "INJ-003" },
-  { pattern: /forget\s+(all\s+)?(your\s+)?instructions/i,           severity: "CRITICAL", id: "INJ-004" },
-  { pattern: /override\s+(system|previous)\s+(prompt|instructions)/i, severity: "CRITICAL", id: "INJ-005" },
+  { pattern: /ignore\s+(all\s+)?previous\s+instructions/i,          severity: "CRITICAL", id: "GUARD-INJ-001" },
+  { pattern: /ignore\s+(all\s+)?above\s+instructions/i,             severity: "CRITICAL", id: "GUARD-INJ-002" },
+  { pattern: /disregard\s+(all\s+)?previous/i,                      severity: "CRITICAL", id: "GUARD-INJ-003" },
+  { pattern: /forget\s+(all\s+)?(your\s+)?instructions/i,           severity: "CRITICAL", id: "GUARD-INJ-004" },
+  { pattern: /override\s+(system|previous)\s+(prompt|instructions)/i, severity: "CRITICAL", id: "GUARD-INJ-005" },
 
   // Role hijacking
-  { pattern: /you\s+are\s+now\s+(?:a|an|the)\s+/i,                  severity: "HIGH",     id: "INJ-006" },
-  { pattern: /pretend\s+(?:you(?:'re| are)\s+|to\s+be\s+)/i,        severity: "HIGH",     id: "INJ-007" },
-  { pattern: /from\s+now\s+on,?\s+you\s+(?:are|will|should|must)/i, severity: "HIGH",     id: "INJ-008" },
-  { pattern: /act\s+as\s+(?:a|an|the)\s+(?!user|customer|person)/i, severity: "HIGH",     id: "INJ-009" },
-  { pattern: /roleplay\s+as/i,                                       severity: "HIGH",     id: "INJ-010" },
-  { pattern: /simulate\s+(?:a|an|the)\s+/i,                         severity: "MEDIUM",   id: "INJ-011" },
+  { pattern: /you\s+are\s+now\s+(?:a|an|the)\s+/i,                  severity: "HIGH",     id: "GUARD-INJ-006" },
+  { pattern: /pretend\s+(?:you(?:'re| are)\s+|to\s+be\s+)/i,        severity: "HIGH",     id: "GUARD-INJ-007" },
+  { pattern: /from\s+now\s+on,?\s+you\s+(?:are|will|should|must)/i, severity: "HIGH",     id: "GUARD-INJ-008" },
+  { pattern: /act\s+as\s+(?:a|an|the)\s+(?!user|customer|person)/i, severity: "HIGH",     id: "GUARD-INJ-009" },
+  { pattern: /roleplay\s+as/i,                                       severity: "HIGH",     id: "GUARD-INJ-010" },
+  { pattern: /simulate\s+(?:a|an|the)\s+/i,                         severity: "MEDIUM",   id: "GUARD-INJ-011" },
 
   // Prompt extraction
-  { pattern: /(?:print|output|reveal|show|display|repeat)\s+(?:your\s+)?(?:system\s+)?(?:prompt|instructions)/i, severity: "HIGH", id: "INJ-012" },
-  { pattern: /what\s+(?:are|were)\s+your\s+(?:original\s+)?instructions/i, severity: "HIGH", id: "INJ-013" },
-  { pattern: /tell\s+me\s+your\s+(?:system\s+)?prompt/i,            severity: "HIGH",     id: "INJ-014" },
+  { pattern: /(?:print|output|reveal|show|display|repeat)\s+(?:your\s+)?(?:system\s+)?(?:prompt|instructions)/i, severity: "HIGH", id: "GUARD-INJ-012" },
+  { pattern: /what\s+(?:are|were)\s+your\s+(?:original\s+)?instructions/i, severity: "HIGH", id: "GUARD-INJ-013" },
+  { pattern: /tell\s+me\s+your\s+(?:system\s+)?prompt/i,            severity: "HIGH",     id: "GUARD-INJ-014" },
 
   // Token/delimiter injection (LLM-specific)
-  { pattern: /<\/?(?:system|assistant|human|user)>/i,                severity: "CRITICAL", id: "INJ-015" },
-  { pattern: /\[SYSTEM\]/i,                                          severity: "CRITICAL", id: "INJ-016" },
-  { pattern: /\[INST\]/i,                                            severity: "CRITICAL", id: "INJ-017" },
-  { pattern: /<<\s*SYS\s*>>/i,                                       severity: "CRITICAL", id: "INJ-018" },
-  // INJ-019 / INJ-020 match the prompt-template delimiter forms
+  { pattern: /<\/?(?:system|assistant|human|user)>/i,                severity: "CRITICAL", id: "GUARD-INJ-015" },
+  { pattern: /\[SYSTEM\]/i,                                          severity: "CRITICAL", id: "GUARD-INJ-016" },
+  { pattern: /\[INST\]/i,                                            severity: "CRITICAL", id: "GUARD-INJ-017" },
+  { pattern: /<<\s*SYS\s*>>/i,                                       severity: "CRITICAL", id: "GUARD-INJ-018" },
+  // GUARD-INJ-019 / GUARD-INJ-020 match the prompt-template delimiter forms
   // ("### Instruction:", "--- SYSTEM ---"), not ordinary headings. The
   // 1.4 forms matched "### System Overview", "### Instructions" and any
   // YAML front matter whose first key starts with "system", which made
   // the hook deny legitimate writes to planning files.
-  { pattern: /#{3,6}[ \t]*(?:system(?:[ \t]+prompt)?|instructions?|prompt)[ \t]*:/i, severity: "CRITICAL", id: "INJ-019" },
-  { pattern: /-{3,}[ \t]*system(?:[ \t]+(?:prompt|message|instructions?))?[ \t]*(?:-{3,}|:|$)/im, severity: "CRITICAL", id: "INJ-020" },
+  { pattern: /#{3,6}[ \t]*(?:system(?:[ \t]+prompt)?|instructions?|prompt)[ \t]*:/i, severity: "CRITICAL", id: "GUARD-INJ-019" },
+  { pattern: /-{3,}[ \t]*system(?:[ \t]+(?:prompt|message|instructions?))?[ \t]*(?:-{3,}|:|$)/im, severity: "CRITICAL", id: "GUARD-INJ-020" },
 
   // Jailbreak classics
-  { pattern: /do\s+anything\s+now/i,                                 severity: "HIGH",     id: "INJ-021" },
-  { pattern: /DAN\s+mode/i,                                          severity: "HIGH",     id: "INJ-022" },
-  { pattern: /developer\s+mode/i,                                    severity: "HIGH",     id: "INJ-023" },
-  { pattern: /jailbreak/i,                                           severity: "HIGH",     id: "INJ-024" },
-  { pattern: /without\s+(?:any\s+)?restrictions/i,                   severity: "HIGH",     id: "INJ-025" },
-  { pattern: /bypass\s+(?:your\s+)?(?:safety|filter|guideline)/i,   severity: "HIGH",     id: "INJ-026" },
+  { pattern: /do\s+anything\s+now/i,                                 severity: "HIGH",     id: "GUARD-INJ-021" },
+  { pattern: /DAN\s+mode/i,                                          severity: "HIGH",     id: "GUARD-INJ-022" },
+  { pattern: /developer\s+mode/i,                                    severity: "HIGH",     id: "GUARD-INJ-023" },
+  { pattern: /jailbreak/i,                                           severity: "HIGH",     id: "GUARD-INJ-024" },
+  { pattern: /without\s+(?:any\s+)?restrictions/i,                   severity: "HIGH",     id: "GUARD-INJ-025" },
+  { pattern: /bypass\s+(?:your\s+)?(?:safety|filter|guideline)/i,   severity: "HIGH",     id: "GUARD-INJ-026" },
 
   // Context poisoning via markup.
   //
@@ -76,8 +76,8 @@ export const INJECTION_PATTERNS = [
   // from one comment into the next. `pattern` is kept as a cheap
   // descriptor for callers that report `pattern.source`. `matchAll`
   // yields every hit, for scanChange().
-  { pattern: /<!--/,  ...commentMatcher("<!--", "-->"), severity: "MEDIUM", id: "INJ-027" },
-  { pattern: /\/\*/,  ...commentMatcher("/*", "*/"),    severity: "MEDIUM", id: "INJ-028" },
+  { pattern: /<!--/,  ...commentMatcher("<!--", "-->"), severity: "MEDIUM", id: "GUARD-INJ-027" },
+  { pattern: /\/\*/,  ...commentMatcher("/*", "*/"),    severity: "MEDIUM", id: "GUARD-INJ-028" },
 ];
 
 /**
@@ -113,7 +113,7 @@ function commentMatcher(open, close) {
 //
 // Two sets, on purpose:
 //
-//   DETECT: characters whose presence is itself reported (INJ-UNICODE).
+//   DETECT: characters whose presence is itself reported (GUARD-INJ-UNICODE).
 //           Zero-width and bidi controls, word joiner and its invisible
 //           operator siblings, the Mongolian vowel separator, the Arabic
 //           letter mark, and the Unicode tag block (U+E0000..U+E007F).
@@ -273,13 +273,13 @@ function normalizeForScan(text) {
 // ---------------------------------------------------------------------------
 // SECRET LEAK DETECTOR
 // Warns if output or input accidentally contains secret-shaped strings
-// SEC-006 scoped to context-adjacent matches to reduce false positives (v1.0.1)
+// GUARD-SEC-006 scoped to context-adjacent matches to reduce false positives (v1.0.1)
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// SEC-001 / SEC-010 — OpenAI + Anthropic key formats
+// GUARD-SEC-001 / GUARD-SEC-010 — OpenAI + Anthropic key formats
 // ---------------------------------------------------------------------------
-// The original SEC-001 pattern was /sk-[a-zA-Z0-9]{20,}/ which silently
+// The original GUARD-SEC-001 pattern was /sk-[a-zA-Z0-9]{20,}/ which silently
 // broke on current-generation API keys:
 //   - OpenAI projects keys are `sk-proj-...`  (introduced mid-2024)
 //   - Anthropic / Claude keys are `sk-ant-api03-...`
@@ -294,25 +294,25 @@ function normalizeForScan(text) {
 // they just leaked (operational clarity matters when you're triaging).
 // Test coverage in tests/injection-guard.test.js.
 const SECRET_PATTERNS = [
-  { pattern: /sk-proj-[a-zA-Z0-9_-]{20,}/,               label: "OpenAI Project API Key",    id: "SEC-001" },
-  { pattern: /sk-ant-(?:api|oat|admin)\d{2}-[a-zA-Z0-9_-]{20,}/, label: "Anthropic API Key",  id: "SEC-010" },
+  { pattern: /sk-proj-[a-zA-Z0-9_-]{20,}/,               label: "OpenAI Project API Key",    id: "GUARD-SEC-001" },
+  { pattern: /sk-ant-(?:api|oat|admin)\d{2}-[a-zA-Z0-9_-]{20,}/, label: "Anthropic API Key",  id: "GUARD-SEC-010" },
   // Legacy OpenAI format (`sk-...` without a provider tag) — kept for
   // historical keys still in circulation. Negative lookahead excludes
   // the provider-tagged variants so they're reported under their
   // specific label above rather than this generic one.
-  { pattern: /sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}/, label: "OpenAI API Key (legacy)", id: "SEC-001b" },
-  { pattern: /AIza[0-9A-Za-z\-_]{35}/,                 label: "Google API Key",     id: "SEC-002" },
-  { pattern: /ghp_[a-zA-Z0-9]{36}/,                    label: "GitHub Token",       id: "SEC-003" },
-  { pattern: /gho_[a-zA-Z0-9]{36}/,                    label: "GitHub OAuth Token", id: "SEC-004" },
-  { pattern: /AKIA[0-9A-Z]{16}/,                        label: "AWS Access Key",     id: "SEC-005" },
-  // SEC-006: scoped to secret-adjacent context only — avoids false positives on JWTs/images
-  { pattern: /(?:secret|token|key|password|auth)\s*[:=]\s*["']?[A-Za-z0-9+/]{40,}["']?/i, label: "Context-Adjacent Base64 Secret", id: "SEC-006" },
-  // SEC-007: any PEM private key header (RSA, EC, DSA, OPENSSH, ENCRYPTED, bare).
+  { pattern: /sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}/, label: "OpenAI API Key (legacy)", id: "GUARD-SEC-001b" },
+  { pattern: /AIza[0-9A-Za-z\-_]{35}/,                 label: "Google API Key",     id: "GUARD-SEC-002" },
+  { pattern: /ghp_[a-zA-Z0-9]{36}/,                    label: "GitHub Token",       id: "GUARD-SEC-003" },
+  { pattern: /gho_[a-zA-Z0-9]{36}/,                    label: "GitHub OAuth Token", id: "GUARD-SEC-004" },
+  { pattern: /AKIA[0-9A-Z]{16}/,                        label: "AWS Access Key",     id: "GUARD-SEC-005" },
+  // GUARD-SEC-006: scoped to secret-adjacent context only — avoids false positives on JWTs/images
+  { pattern: /(?:secret|token|key|password|auth)\s*[:=]\s*["']?[A-Za-z0-9+/]{40,}["']?/i, label: "Context-Adjacent Base64 Secret", id: "GUARD-SEC-006" },
+  // GUARD-SEC-007: any PEM private key header (RSA, EC, DSA, OPENSSH, ENCRYPTED, bare).
   // The old form only allowed an optional "RSA", so OpenSSH and EC keys passed clean.
-  { pattern: /-----BEGIN\s+(?:[A-Z0-9]+\s+){0,3}PRIVATE\s+KEY-----/, label: "Private Key", id: "SEC-007" },
-  { pattern: /password\s*[:=]\s*["']?[^\s"']{8,}/i,    label: "Inline Password",   id: "SEC-008" },
-  { pattern: /api[_-]?key\s*[:=]\s*["']?[^\s"']{8,}/i, label: "Inline API Key",    id: "SEC-009" },
-  // SEC-011: connection strings with embedded credentials.
+  { pattern: /-----BEGIN\s+(?:[A-Z0-9]+\s+){0,3}PRIVATE\s+KEY-----/, label: "Private Key", id: "GUARD-SEC-007" },
+  { pattern: /password\s*[:=]\s*["']?[^\s"']{8,}/i,    label: "Inline Password",   id: "GUARD-SEC-008" },
+  { pattern: /api[_-]?key\s*[:=]\s*["']?[^\s"']{8,}/i, label: "Inline API Key",    id: "GUARD-SEC-009" },
+  // GUARD-SEC-011: connection strings with embedded credentials.
   // Covers the common protocol schemes (postgres/postgresql, mysql,
   // mongodb and mongodb+srv SRV records, redis/rediss, amqp/amqps)
   // when they contain a `user:pass@host` authority. The user part
@@ -321,13 +321,13 @@ const SECRET_PATTERNS = [
   // so the regex cannot walk past the credential boundary into the
   // host portion. See tests/injection-guard.test.js for the full set
   // of examples the rule must and must not match.
-  { pattern: /(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqps?):\/\/[^:@\/\s"'`]{0,256}:[^@\s"'`]{1,512}@/i, label: "Connection String with Embedded Credentials", id: "SEC-011" },
-  // SEC-011 note: both credential parts are length-bounded. Unbounded,
+  { pattern: /(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqps?):\/\/[^:@\/\s"'`]{0,256}:[^@\s"'`]{1,512}@/i, label: "Connection String with Embedded Credentials", id: "GUARD-SEC-011" },
+  // GUARD-SEC-011 note: both credential parts are length-bounded. Unbounded,
   // a long run of "redis://a:b" with no "@" made the rule quadratic.
-  { pattern: /github_pat_[A-Za-z0-9_]{40,}/,            label: "GitHub Fine-Grained Token",   id: "SEC-012" },
-  { pattern: /gh[sur]_[A-Za-z0-9]{36,}/,                label: "GitHub App/Server Token",     id: "SEC-013" },
-  { pattern: /xox[abprs]-[A-Za-z0-9-]{10,}/,            label: "Slack Token",                 id: "SEC-014" },
-  { pattern: /[sr]k_live_[A-Za-z0-9]{20,}/,             label: "Stripe Live Key",             id: "SEC-015" },
+  { pattern: /github_pat_[A-Za-z0-9_]{40,}/,            label: "GitHub Fine-Grained Token",   id: "GUARD-SEC-012" },
+  { pattern: /gh[sur]_[A-Za-z0-9]{36,}/,                label: "GitHub App/Server Token",     id: "GUARD-SEC-013" },
+  { pattern: /xox[abprs]-[A-Za-z0-9-]{10,}/,            label: "Slack Token",                 id: "GUARD-SEC-014" },
+  { pattern: /[sr]k_live_[A-Za-z0-9]{20,}/,             label: "Stripe Live Key",             id: "GUARD-SEC-015" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -338,7 +338,7 @@ const SECRET_PATTERNS = [
  * Hard cap on raw input size before `scan()` does any work. Protects
  * direct callers of `scan()` from:
  *   - accidental mega-inputs (a user dumping a megabyte log file)
- *   - deliberate DoS via crafted comment patterns (see INJ-027/028)
+ *   - deliberate DoS via crafted comment patterns (see GUARD-INJ-027/028)
  *   - the normalizer's own amplification (URL + base64 decode concat)
  *
  * `guardInput()` already enforces its own `maxLength` (default 4000),
@@ -350,7 +350,7 @@ const SECRET_PATTERNS = [
  * memory bound, not a workaround for slow regexes.
  *
  * This does not silently corrupt the text — if truncation happens we
- * still scan everything under the cap and report an INJ-OVERSIZE
+ * still scan everything under the cap and report an GUARD-INJ-OVERSIZE
  * finding for the remainder, so truncation is never silent. The console note
  * mirrors `guardInput()`'s existing truncation log so operators see it.
  */
@@ -364,6 +364,14 @@ const MAX_SCAN_LENGTH = 1_000_000;
  * @param {'injection'|'secrets'|'all'} mode
  * @returns {{ violations: Array, hasSecrets: boolean, hasCritical: boolean }}
  */
+/**
+ * Rule ids carry the engine prefix GUARD- (1.5.0) so they cannot be
+ * confused with the audit's ids, which reuse INJ-* and SEC-* for other
+ * rules. `legacyId` is the pre-1.5.0 id, kept for one release so callers
+ * that match on it can migrate. Removed in 1.6.0.
+ */
+const legacyId = (id) => id.replace(/^GUARD-/, "");
+
 export function scan(text, mode = "all") {
   if (typeof text !== "string") return { violations: [], hasSecrets: false, hasCritical: false };
 
@@ -390,6 +398,7 @@ export function scan(text, mode = "all") {
         violations.push({
           type: "injection",
           id,
+          legacyId: legacyId(id),
           severity,
           matched,
           pattern: pattern.source,
@@ -404,7 +413,8 @@ export function scan(text, mode = "all") {
     if (unscanned > 0) {
       violations.push({
         type: "injection",
-        id: "INJ-OVERSIZE",
+        id: "GUARD-INJ-OVERSIZE",
+        legacyId: "INJ-OVERSIZE",
         severity: "MEDIUM",
         matched: `${unscanned} characters past the ${MAX_SCAN_LENGTH} scan limit were not scanned`,
         pattern: "length",
@@ -415,7 +425,8 @@ export function scan(text, mode = "all") {
     if (INVISIBLE_UNICODE_PATTERN.test(text)) {
       violations.push({
         type: "injection",
-        id: "INJ-UNICODE",
+        id: "GUARD-INJ-UNICODE",
+        legacyId: "INJ-UNICODE",
         severity: "HIGH",
         matched: "invisible unicode characters detected",
         pattern: INVISIBLE_UNICODE_PATTERN.source,
@@ -432,6 +443,7 @@ export function scan(text, mode = "all") {
         violations.push({
           type: "secret",
           id,
+          legacyId: legacyId(id),
           severity: "CRITICAL",
           matched: `[REDACTED — ${label}]`,
           label,
@@ -532,9 +544,9 @@ export function scanChange(before, after, mode = "all") {
 
   const added = [];
   for (const v of violations) {
-    if (v.id === "INJ-OVERSIZE") {
+    if (v.id === "GUARD-INJ-OVERSIZE") {
       added.push(v); // unscanned text is never "already accounted for"
-    } else if (v.id === "INJ-UNICODE") {
+    } else if (v.id === "GUARD-INJ-UNICODE") {
       if (countInvisible(newWindow) > countInvisible(oldWindow)) added.push(v);
     } else {
       const matched = firstAddedMatch(rules.get(v.id), oldViews, newViews);

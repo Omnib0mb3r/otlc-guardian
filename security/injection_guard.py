@@ -58,7 +58,7 @@ def _comment_matcher(open_tok: str, close_tok: str) -> Callable[[str], Optional[
     """
     Linear-time matcher for "comment containing a control word".
 
-    Replaces the regex form of INJ-027/INJ-028, which backtracked
+    Replaces the regex form of GUARD-INJ-027/GUARD-INJ-028, which backtracked
     cubically on input made of many unterminated comment openers.
     Returns the full comment on a hit, else None.
     """
@@ -83,43 +83,43 @@ def _comment_matcher(open_tok: str, close_tok: str) -> Callable[[str], Optional[
 
 
 INJECTION_PATTERNS: list[InjectionPattern] = [
-    InjectionPattern("INJ-001", re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.I), "CRITICAL", "Classic instruction override"),
-    InjectionPattern("INJ-002", re.compile(r"ignore\s+(all\s+)?above\s+instructions",    re.I), "CRITICAL", "Above instruction override"),
-    InjectionPattern("INJ-003", re.compile(r"disregard\s+(all\s+)?previous",              re.I), "CRITICAL", "Disregard previous"),
-    InjectionPattern("INJ-004", re.compile(r"forget\s+(all\s+)?(your\s+)?instructions",  re.I), "CRITICAL", "Forget instructions"),
-    InjectionPattern("INJ-005", re.compile(r"override\s+(system|previous)\s+(prompt|instructions)", re.I), "CRITICAL", "System override"),
-    InjectionPattern("INJ-006", re.compile(r"you\s+are\s+now\s+(?:a|an|the)\s+",         re.I), "HIGH",     "Role hijack: you are now"),
-    InjectionPattern("INJ-007", re.compile(r"pretend\s+(?:you(?:'re| are)\s+|to\s+be\s+)", re.I), "HIGH",   "Role hijack: pretend"),
-    InjectionPattern("INJ-008", re.compile(r"from\s+now\s+on,?\s+you\s+(?:are|will|should|must)", re.I), "HIGH", "Role hijack: from now on"),
-    InjectionPattern("INJ-009", re.compile(r"act\s+as\s+(?:a|an|the)\s+(?!user|customer|person)", re.I), "HIGH", "Role hijack: act as"),
-    InjectionPattern("INJ-010", re.compile(r"roleplay\s+as",                               re.I), "HIGH",     "Roleplay hijack"),
-    InjectionPattern("INJ-011", re.compile(r"simulate\s+(?:a|an|the)\s+",                 re.I), "MEDIUM",   "Simulation hijack"),
-    InjectionPattern("INJ-012", re.compile(r"(?:print|output|reveal|show|display|repeat)\s+(?:your\s+)?(?:system\s+)?(?:prompt|instructions)", re.I), "HIGH", "Prompt extraction"),
-    InjectionPattern("INJ-013", re.compile(r"what\s+(?:are|were)\s+your\s+(?:original\s+)?instructions", re.I), "HIGH", "Instruction extraction"),
-    InjectionPattern("INJ-014", re.compile(r"tell\s+me\s+your\s+(?:system\s+)?prompt",    re.I), "HIGH",     "System prompt extraction"),
-    InjectionPattern("INJ-015", re.compile(r"</?(?:system|assistant|human|user)>",        re.I), "CRITICAL", "Delimiter injection"),
-    InjectionPattern("INJ-016", re.compile(r"\[SYSTEM\]",                                 re.I), "CRITICAL", "SYSTEM tag injection"),
-    InjectionPattern("INJ-017", re.compile(r"\[INST\]",                                   re.I), "CRITICAL", "INST tag injection"),
-    InjectionPattern("INJ-018", re.compile(r"<<\s*SYS\s*>>",                              re.I), "CRITICAL", "SYS tag injection"),
-    # INJ-019 / INJ-020 match prompt-template delimiters ("### Instruction:",
+    InjectionPattern("GUARD-INJ-001", re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.I), "CRITICAL", "Classic instruction override"),
+    InjectionPattern("GUARD-INJ-002", re.compile(r"ignore\s+(all\s+)?above\s+instructions",    re.I), "CRITICAL", "Above instruction override"),
+    InjectionPattern("GUARD-INJ-003", re.compile(r"disregard\s+(all\s+)?previous",              re.I), "CRITICAL", "Disregard previous"),
+    InjectionPattern("GUARD-INJ-004", re.compile(r"forget\s+(all\s+)?(your\s+)?instructions",  re.I), "CRITICAL", "Forget instructions"),
+    InjectionPattern("GUARD-INJ-005", re.compile(r"override\s+(system|previous)\s+(prompt|instructions)", re.I), "CRITICAL", "System override"),
+    InjectionPattern("GUARD-INJ-006", re.compile(r"you\s+are\s+now\s+(?:a|an|the)\s+",         re.I), "HIGH",     "Role hijack: you are now"),
+    InjectionPattern("GUARD-INJ-007", re.compile(r"pretend\s+(?:you(?:'re| are)\s+|to\s+be\s+)", re.I), "HIGH",   "Role hijack: pretend"),
+    InjectionPattern("GUARD-INJ-008", re.compile(r"from\s+now\s+on,?\s+you\s+(?:are|will|should|must)", re.I), "HIGH", "Role hijack: from now on"),
+    InjectionPattern("GUARD-INJ-009", re.compile(r"act\s+as\s+(?:a|an|the)\s+(?!user|customer|person)", re.I), "HIGH", "Role hijack: act as"),
+    InjectionPattern("GUARD-INJ-010", re.compile(r"roleplay\s+as",                               re.I), "HIGH",     "Roleplay hijack"),
+    InjectionPattern("GUARD-INJ-011", re.compile(r"simulate\s+(?:a|an|the)\s+",                 re.I), "MEDIUM",   "Simulation hijack"),
+    InjectionPattern("GUARD-INJ-012", re.compile(r"(?:print|output|reveal|show|display|repeat)\s+(?:your\s+)?(?:system\s+)?(?:prompt|instructions)", re.I), "HIGH", "Prompt extraction"),
+    InjectionPattern("GUARD-INJ-013", re.compile(r"what\s+(?:are|were)\s+your\s+(?:original\s+)?instructions", re.I), "HIGH", "Instruction extraction"),
+    InjectionPattern("GUARD-INJ-014", re.compile(r"tell\s+me\s+your\s+(?:system\s+)?prompt",    re.I), "HIGH",     "System prompt extraction"),
+    InjectionPattern("GUARD-INJ-015", re.compile(r"</?(?:system|assistant|human|user)>",        re.I), "CRITICAL", "Delimiter injection"),
+    InjectionPattern("GUARD-INJ-016", re.compile(r"\[SYSTEM\]",                                 re.I), "CRITICAL", "SYSTEM tag injection"),
+    InjectionPattern("GUARD-INJ-017", re.compile(r"\[INST\]",                                   re.I), "CRITICAL", "INST tag injection"),
+    InjectionPattern("GUARD-INJ-018", re.compile(r"<<\s*SYS\s*>>",                              re.I), "CRITICAL", "SYS tag injection"),
+    # GUARD-INJ-019 / GUARD-INJ-020 match prompt-template delimiters ("### Instruction:",
     # "--- SYSTEM ---"), not ordinary headings or YAML front matter.
-    InjectionPattern("INJ-019", re.compile(r"#{3,6}[ \t]*(?:system(?:[ \t]+prompt)?|instructions?|prompt)[ \t]*:", re.I), "CRITICAL", "Markdown system tag"),
-    InjectionPattern("INJ-020", re.compile(r"-{3,}[ \t]*system(?:[ \t]+(?:prompt|message|instructions?))?[ \t]*(?:-{3,}|:|$)", re.I | re.M), "CRITICAL", "YAML system override"),
-    InjectionPattern("INJ-021", re.compile(r"do\s+anything\s+now",                        re.I), "HIGH",     "DAN variant"),
-    InjectionPattern("INJ-022", re.compile(r"DAN\s+mode",                                 re.I), "HIGH",     "DAN mode"),
-    InjectionPattern("INJ-023", re.compile(r"developer\s+mode",                           re.I), "HIGH",     "Developer mode jailbreak"),
-    InjectionPattern("INJ-024", re.compile(r"jailbreak",                                  re.I), "HIGH",     "Jailbreak keyword"),
-    InjectionPattern("INJ-025", re.compile(r"without\s+(?:any\s+)?restrictions",          re.I), "HIGH",     "Restriction bypass"),
-    InjectionPattern("INJ-026", re.compile(r"bypass\s+(?:your\s+)?(?:safety|filter|guideline)", re.I), "HIGH", "Safety bypass"),
+    InjectionPattern("GUARD-INJ-019", re.compile(r"#{3,6}[ \t]*(?:system(?:[ \t]+prompt)?|instructions?|prompt)[ \t]*:", re.I), "CRITICAL", "Markdown system tag"),
+    InjectionPattern("GUARD-INJ-020", re.compile(r"-{3,}[ \t]*system(?:[ \t]+(?:prompt|message|instructions?))?[ \t]*(?:-{3,}|:|$)", re.I | re.M), "CRITICAL", "YAML system override"),
+    InjectionPattern("GUARD-INJ-021", re.compile(r"do\s+anything\s+now",                        re.I), "HIGH",     "DAN variant"),
+    InjectionPattern("GUARD-INJ-022", re.compile(r"DAN\s+mode",                                 re.I), "HIGH",     "DAN mode"),
+    InjectionPattern("GUARD-INJ-023", re.compile(r"developer\s+mode",                           re.I), "HIGH",     "Developer mode jailbreak"),
+    InjectionPattern("GUARD-INJ-024", re.compile(r"jailbreak",                                  re.I), "HIGH",     "Jailbreak keyword"),
+    InjectionPattern("GUARD-INJ-025", re.compile(r"without\s+(?:any\s+)?restrictions",          re.I), "HIGH",     "Restriction bypass"),
+    InjectionPattern("GUARD-INJ-026", re.compile(r"bypass\s+(?:your\s+)?(?:safety|filter|guideline)", re.I), "HIGH", "Safety bypass"),
     # Context poisoning via markup — lazy quantifiers + DOTALL so the
     # pattern can span lines and does not ReDoS on long inputs without
-    # a closing delimiter. Mirrors the JS module's INJ-027 / INJ-028.
-    InjectionPattern("INJ-027", re.compile(r"<!--"), "MEDIUM", "HTML-comment context poisoning",  _comment_matcher("<!--", "-->")),
-    InjectionPattern("INJ-028", re.compile(r"/\*"), "MEDIUM", "Block-comment context poisoning", _comment_matcher("/*", "*/")),
+    # a closing delimiter. Mirrors the JS module's GUARD-INJ-027 / GUARD-INJ-028.
+    InjectionPattern("GUARD-INJ-027", re.compile(r"<!--"), "MEDIUM", "HTML-comment context poisoning",  _comment_matcher("<!--", "-->")),
+    InjectionPattern("GUARD-INJ-028", re.compile(r"/\*"), "MEDIUM", "Block-comment context poisoning", _comment_matcher("/*", "*/")),
 ]
 
 # Invisible unicode used in steganographic attacks
-# Reported as INJ-UNICODE when present: zero-width and bidi controls, the
+# Reported as GUARD-INJ-UNICODE when present: zero-width and bidi controls, the
 # word joiner family, Mongolian vowel separator, Arabic letter mark, and
 # the Unicode tag block (the "ASCII smuggling" channel).
 INVISIBLE_UNICODE_PATTERN = re.compile(
@@ -172,8 +172,8 @@ class SecretPattern:
     pattern: re.Pattern
     label: str
 
-# SEC-001 / SEC-001b / SEC-010 / SEC-011 rationale:
-# The pre-1.1.1 SEC-001 pattern was `sk-[a-zA-Z0-9]{20,}`, which broke on
+# GUARD-SEC-001 / GUARD-SEC-001b / GUARD-SEC-010 / GUARD-SEC-011 rationale:
+# The pre-1.1.1 GUARD-SEC-001 pattern was `sk-[a-zA-Z0-9]{20,}`, which broke on
 # the two provider formats users are actually leaking today:
 #   - OpenAI project keys  : sk-proj-...     (mid-2024 onward)
 #   - Anthropic Claude keys: sk-ant-api03-...
@@ -183,28 +183,28 @@ class SecretPattern:
 #
 # Fix: split into provider-specific rules so the label names the provider
 # (operationally useful when triaging an incident), plus a legacy fallback
-# for historical `sk-...` keys still in circulation. SEC-011 adds coverage
+# for historical `sk-...` keys still in circulation. GUARD-SEC-011 adds coverage
 # for connection strings with embedded credentials — the common protocol
 # schemes (postgres, mysql, mongodb, redis, amqp) whose URLs pin a
 # user:pass@host authority into source. See tests/audit.test.js for the
 # full matrix of examples the rule must and must not fire on.
 SECRET_PATTERNS: list[SecretPattern] = [
-    SecretPattern("SEC-001",  re.compile(r"sk-proj-[a-zA-Z0-9_-]{20,}"),          "OpenAI Project API Key"),
-    SecretPattern("SEC-010",  re.compile(r"sk-ant-(?:api|oat|admin)\d{2}-[a-zA-Z0-9_-]{20,}"),  "Anthropic API Key"),
-    SecretPattern("SEC-001b", re.compile(r"sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}"), "OpenAI API Key (legacy)"),
-    SecretPattern("SEC-002",  re.compile(r"AIza[0-9A-Za-z\-_]{35}"),              "Google API Key"),
-    SecretPattern("SEC-003",  re.compile(r"ghp_[a-zA-Z0-9]{36}"),                 "GitHub Token"),
-    SecretPattern("SEC-004",  re.compile(r"gho_[a-zA-Z0-9]{36}"),                 "GitHub OAuth Token"),
-    SecretPattern("SEC-005",  re.compile(r"AKIA[0-9A-Z]{16}"),                    "AWS Access Key"),
-    SecretPattern("SEC-006",  re.compile(r"(?:secret|token|key|password|auth)\s*[:=]\s*[\"']?[A-Za-z0-9+/]{40,}[\"']?", re.I), "Context-Adjacent Base64 Secret"),
-    SecretPattern("SEC-007",  re.compile(r"-----BEGIN\s+(?:[A-Z0-9]+\s+){0,3}PRIVATE\s+KEY-----"), "Private Key"),
-    SecretPattern("SEC-008",  re.compile(r"password\s*[:=]\s*[\"']?[^\s\"']{8,}",  re.I), "Inline Password"),
-    SecretPattern("SEC-009",  re.compile(r"api[_-]?key\s*[:=]\s*[\"']?[^\s\"']{8,}", re.I), "Inline API Key"),
-    SecretPattern("SEC-011",  re.compile(r"(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqps?)://[^:@/\s\"'`]{0,256}:[^@\s\"'`]{1,512}@", re.I), "Connection String with Embedded Credentials"),
-    SecretPattern("SEC-012",  re.compile(r"github_pat_[A-Za-z0-9_]{40,}"),        "GitHub Fine-Grained Token"),
-    SecretPattern("SEC-013",  re.compile(r"gh[sur]_[A-Za-z0-9]{36,}"),            "GitHub App/Server Token"),
-    SecretPattern("SEC-014",  re.compile(r"xox[abprs]-[A-Za-z0-9-]{10,}"),        "Slack Token"),
-    SecretPattern("SEC-015",  re.compile(r"[sr]k_live_[A-Za-z0-9]{20,}"),         "Stripe Live Key"),
+    SecretPattern("GUARD-SEC-001",  re.compile(r"sk-proj-[a-zA-Z0-9_-]{20,}"),          "OpenAI Project API Key"),
+    SecretPattern("GUARD-SEC-010",  re.compile(r"sk-ant-(?:api|oat|admin)\d{2}-[a-zA-Z0-9_-]{20,}"),  "Anthropic API Key"),
+    SecretPattern("GUARD-SEC-001b", re.compile(r"sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}"), "OpenAI API Key (legacy)"),
+    SecretPattern("GUARD-SEC-002",  re.compile(r"AIza[0-9A-Za-z\-_]{35}"),              "Google API Key"),
+    SecretPattern("GUARD-SEC-003",  re.compile(r"ghp_[a-zA-Z0-9]{36}"),                 "GitHub Token"),
+    SecretPattern("GUARD-SEC-004",  re.compile(r"gho_[a-zA-Z0-9]{36}"),                 "GitHub OAuth Token"),
+    SecretPattern("GUARD-SEC-005",  re.compile(r"AKIA[0-9A-Z]{16}"),                    "AWS Access Key"),
+    SecretPattern("GUARD-SEC-006",  re.compile(r"(?:secret|token|key|password|auth)\s*[:=]\s*[\"']?[A-Za-z0-9+/]{40,}[\"']?", re.I), "Context-Adjacent Base64 Secret"),
+    SecretPattern("GUARD-SEC-007",  re.compile(r"-----BEGIN\s+(?:[A-Z0-9]+\s+){0,3}PRIVATE\s+KEY-----"), "Private Key"),
+    SecretPattern("GUARD-SEC-008",  re.compile(r"password\s*[:=]\s*[\"']?[^\s\"']{8,}",  re.I), "Inline Password"),
+    SecretPattern("GUARD-SEC-009",  re.compile(r"api[_-]?key\s*[:=]\s*[\"']?[^\s\"']{8,}", re.I), "Inline API Key"),
+    SecretPattern("GUARD-SEC-011",  re.compile(r"(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqps?)://[^:@/\s\"'`]{0,256}:[^@\s\"'`]{1,512}@", re.I), "Connection String with Embedded Credentials"),
+    SecretPattern("GUARD-SEC-012",  re.compile(r"github_pat_[A-Za-z0-9_]{40,}"),        "GitHub Fine-Grained Token"),
+    SecretPattern("GUARD-SEC-013",  re.compile(r"gh[sur]_[A-Za-z0-9]{36,}"),            "GitHub App/Server Token"),
+    SecretPattern("GUARD-SEC-014",  re.compile(r"xox[abprs]-[A-Za-z0-9-]{10,}"),        "Slack Token"),
+    SecretPattern("GUARD-SEC-015",  re.compile(r"[sr]k_live_[A-Za-z0-9]{20,}"),         "Stripe Live Key"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -219,6 +219,14 @@ class Violation:
     matched: str
     description: str
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    # Rule ids carry the engine prefix GUARD- (1.5.0) so they cannot be
+    # confused with the audit's INJ-* / SEC-* ids. legacy_id is the
+    # pre-1.5.0 id, kept for one release so callers can migrate.
+    legacy_id: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.legacy_id:
+            self.legacy_id = self.id[len("GUARD-"):] if self.id.startswith("GUARD-") else self.id
 
 
 # ---------------------------------------------------------------------------
@@ -332,7 +340,7 @@ def scan(text: str, mode: str = "all") -> list[Violation]:
         if unscanned > 0:
             violations.append(Violation(
                 type="injection",
-                id="INJ-OVERSIZE",
+                id="GUARD-INJ-OVERSIZE",
                 severity="MEDIUM",
                 matched=f"{unscanned} characters past the {MAX_SCAN_LENGTH} scan limit were not scanned",
                 description="Input exceeds scan limit",
@@ -341,7 +349,7 @@ def scan(text: str, mode: str = "all") -> list[Violation]:
         if INVISIBLE_UNICODE_PATTERN.search(text):
             violations.append(Violation(
                 type="injection",
-                id="INJ-UNICODE",
+                id="GUARD-INJ-UNICODE",
                 severity="HIGH",
                 matched="invisible unicode characters",
                 description="Invisible Unicode detected — potential steganographic injection",

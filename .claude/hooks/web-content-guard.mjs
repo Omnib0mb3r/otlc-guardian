@@ -91,12 +91,12 @@ const WATCHED_TOOLS = new Set([
 // 1.5.0: no local window. This hook used to scan only the first 64 KB,
 // so a payload placed after 64 KB of filler was never looked at. scan()
 // is linear in its input and enforces its own cap (MAX_SCAN_LENGTH), and
-// it reports anything past that cap as an INJ-OVERSIZE finding instead
+// it reports anything past that cap as an GUARD-INJ-OVERSIZE finding instead
 // of dropping it silently.
 
 function scanContent(text) {
   // Use the runtime scanner so we get NFKC normalization, URL decode,
-  // base64 decode, and INJ-UNICODE detection — all the bypass defenses
+  // base64 decode, and GUARD-INJ-UNICODE detection — all the bypass defenses
   // that the duplicated raw-pattern walk used to miss.
   const { violations } = scan(text, "injection");
   return violations.map((v) => ({

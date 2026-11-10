@@ -183,7 +183,7 @@ The detection is **always logged visibly** to your console — never silently di
 ⚠️  [OTLC GUARDIAN] PROMPT INJECTION DETECTED
     Context  : POST /api/v1/chat
     Count    : 1 pattern(s) matched
-    [CRITICAL] INJ-001 — matched: "ignore all previous instructions"
+    [CRITICAL] GUARD-INJ-001 — matched: "ignore all previous instructions"
 ```
 
 For CRITICAL severity patterns, `guardInput()` throws a `GuardianError` which you catch and return as a 400 response. For MEDIUM patterns, input is sanitized and the violation logged, but execution continues.
