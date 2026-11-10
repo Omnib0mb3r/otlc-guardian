@@ -285,7 +285,7 @@ it can only warn. If a hook itself fails, the tool call is not blocked,
 but the failure is printed and reported as a hook error. Both are wired up
 automatically by `guardian init` and registered in `.claude/settings.json`.
 
-### Hook 1 — `injection-guard-hook.mjs` (PreToolUse on Write, Edit, MultiEdit, NotebookEdit, Bash, PowerShell)
+### Hook 1: `injection-guard-hook.mjs` (PreToolUse on Write, Edit, MultiEdit, NotebookEdit, Bash, PowerShell)
 
 Fires every time Claude writes or edits a file in a watched location, or
 runs a Bash command that names or writes one, and scans the content for
@@ -304,7 +304,7 @@ Claude session as instructions, memory, or research:
 - `MEMORY.md` — auto-memory index
 - `.env*` — environment files (sometimes contain embedded payloads)
 
-### Hook 2 — `web-content-guard.mjs` (PostToolUse on WebFetch, WebSearch, `mcp__firecrawl__crawl`, `mcp__exa__search`)
+### Hook 2: `web-content-guard.mjs` (PostToolUse on WebFetch, WebSearch, `mcp__firecrawl__crawl`, `mcp__exa__search`)
 
 Fires every time Claude fetches a URL or runs a web search, and scans the
 returned content **before Claude reasons about it**. This is the entry
@@ -356,6 +356,20 @@ asks for confirmation when an agent tries to add an entry. The
 marker inside a write exempted it, so any payload could exempt itself;
 the first 1.5.0 build honored a marker already on disk, which an agent
 could plant with one write and use with the next.
+
+### Guardian's own files
+
+A change to `.claude/settings.json` or `settings.local.json` that weakens
+Guardian asks for confirmation, and so does any change to the hook
+scripts (`.claude/hooks/injection-guard-hook.mjs`,
+`.claude/hooks/web-content-guard.mjs`) or the scanner they import
+(`security/01-injection-guard.js`), by a file tool, a Bash or PowerShell
+write, or a command that moves or removes the folder holding one. In a
+session with permission prompts bypassed each of these is denied, so
+an agent's edits to Guardian's own code need a session that prompts.
+`guardian update` writes the files from its own process, which the hook
+does not see; run it yourself. Routes the hook cannot see are listed in
+`SECURITY.md`, "What the PreToolUse hook cannot see".
 
 ### Verifying the hooks work
 

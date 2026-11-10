@@ -230,8 +230,15 @@ project (each project picks it up when `guardian update` is run there).
 
 - Detection is pattern-based. A reworded instruction with no known
   pattern still passes.
-- The hook files and the scanner are not write-protected against the
-  agent they guard. Only `.claude/settings.json` is.
+- The content hook judges what a command spells out. It does not see a
+  target held in a variable, computed by inline code (`node -e` with
+  `path.join`) or matched by a glob; a script file or a PowerShell `-File`
+  script that writes the target; content assembled or encoded in the
+  shell (`printf` octal, `rev`, `tr` rot13, `base64 -d`, variable
+  concatenation, quote-split words); or git branch switches, `reset`,
+  `stash` and `merge`, which replace files without naming them. These are
+  inputs for the planned hard-no hook that DevNeural hosts, not for this
+  hook.
 - The hook command in `.claude/settings.json` is still a relative path.
   Whether to switch it to `$CLAUDE_PROJECT_DIR` needs a test on Windows.
 

@@ -347,7 +347,8 @@ lifecycle, which no other agent exposes today. They're installed automatically b
   file, asks for confirmation on a Bash command that carries one and writes to a
   watched file (a command that only reads or names it gets an advisory),
   asks before `.claude/settings.json` or `settings.local.json` is changed in a way that
-  weakens Guardian (by Edit, Write or a Bash write), and
+  weakens Guardian (by Edit, Write or a Bash write), asks before any change to the
+  hook scripts or the scanner they import, and
   warns on HIGH/MEDIUM findings. It scans Write, Edit, MultiEdit, NotebookEdit,
   Bash and PowerShell on a wide default watch list — `.planning/`,
   `.gsd/`, `.plans/`, `.cursor/`, `.continue/`, `.aider/`, `.windsurf/`, every `*/memory/`
