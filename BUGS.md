@@ -92,6 +92,9 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-078 | IN-PROGRESS | HIGH (staged hook only): a guarded-name ask replaces a payload deny, so approving `cp notes/x.md CLAUDE.md && cat .claude/settings.json` lets the payload in |
 | BUG-079 | IN-PROGRESS | Scanner joins its views with newlines, so a pattern matches across two views: honest text is reported (staged: init'd STANDARDS.md fails APPLY.md step 3) |
 | BUG-080 | IN-PROGRESS | Staged hook only: false asks on folders that are not Guardian's (`pytest tests/security`, `rm -rf src/security`, `rm -rf src/.claude`, `pytest -k security`) |
+| BUG-081 | OPEN | Audit walks every checkout under `.claude/worktrees/`, so each finding is reported once per worktree (bridger-base-camp: 95 extra `SEC-005`) |
+| BUG-082 | OPEN | Audit `INJ-002` (innerHTML) fires on a comparison (`a.innerHTML === b.innerHTML`) and misses `innerHTML +=` |
+| BUG-083 | OPEN | Audit `SEC-001b` (legacy OpenAI key) fires on any word ending in `sk-` plus 20 alphanumerics, e.g. `task-<32 hex>` |
 
 <!-- INDEX END -->
 
@@ -1172,5 +1175,35 @@ Smoke test after applying: in a project with a `src/security` folder ask Claude 
 **Lex ruling on the pushback (2026-11-10): agreed, code stays as committed.** A quoted `'security'` inside inline code (`node -e`, `bun --eval`, `python -c`) keeps counting as guarded: those three forms really deleted the folder in re-probe 3, and a false ask on a harmless `print('security')` is the cheaper side. E8's bare-word rule holds for shell words only.
 
 **Open question for re-probe 5 to rule on (not changed).** `npx rimraf security` at the project root is silent: the word is a bare shell word, and `rimraf` is a program the readers do not parse, so neither the name check nor a reader sees that it deletes Guardian's `security` folder (the scanner, `security/package.json`, `security/claude-settings.js`). The same holds for any other deleter outside the readers' list given the bare word (`trash security`, `shx rm -rf security`). `rm`, `mv`, `chmod`, `git mv`, `Remove-Item` and `rd` are parsed and ask, and so do `./security` and `security/`. It is listed in SECURITY.md under "Commands that do not name a guarded file". Whether the bare word should count for some programs (and which), or the limit stands, is for the re-probe and Lex.
+
+### BUG-081: Audit walks every checkout under `.claude/worktrees/`
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Seen by the worker while running the audit on real projects, ruled a bug by Lex (2026-11-10): a worktree is a second checkout of the same code, not the project's code.
+
+- `SKIP_DIRS` in `security/03-audit.js` does not cover `.claude/worktrees/`, where Claude Code keeps its git worktrees, so `collectFiles()` walks each checkout as if it were project source and every finding in the project is reported again for each worktree.
+- `C:/dev/Projects/bridger-base-camp` reports 95 extra `SEC-005` findings from its worktrees.
+- Lex's order: skip `.claude/worktrees` only, not every folder named `worktrees`.
+
+### BUG-082: Audit `INJ-002` fires on an innerHTML comparison and misses `innerHTML +=`
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Found by the firing and silent samples for INJ-002 (gate plan step 0 item 2).
+
+- The pattern is `/\.innerHTML\s*=/`. It matches the first `=` of `==` and `===`, so `const same = a.innerHTML === b.innerHTML;` is reported HIGH as "innerHTML assignment". A comparison writes nothing.
+- It does not match `list.innerHTML += rowHtml;`, which is an assignment and the same XSS risk.
+- Both samples are kept as known-bug tests (`knownBug("BUG-082", ...)`) in `tests/audit.test.js`.
+
+### BUG-083: Audit `SEC-001b` fires on any word ending in `sk-` plus 20 alphanumerics
+
+**Status:** OPEN · **Found:** 2026-11-10
+
+Found by the silent sample for SEC-001b (gate plan step 0 item 2).
+
+- The pattern is `/sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}/` with no left boundary, so `const job = "task-550e8400e29b41d4a716446655440000";` is reported CRITICAL as a hardcoded OpenAI key. The same holds for `disk-`, `risk-`, `mask-` and `desk-` followed by 20 or more letters and digits.
+- The runtime twin `GUARD-SEC-001b` in `security/01-injection-guard.js` has the same pattern, so `guardOutput()` and the hook's secret scan take the same text for a key. That file is protected and its fix goes through `staging/`, which is frozen while Lex runs re-probe 5.
+- The sample is kept as a known-bug test (`knownBug("BUG-083", ...)`) in `tests/audit.test.js`.
 
 <!-- DETAILS END -->

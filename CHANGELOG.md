@@ -219,6 +219,12 @@ project (each project picks it up when `guardian update` is run there).
   sign-in limits that reset.
 - In `bypassPermissions` mode the hook's two "ask" decisions become "deny",
   because prompts are off there and nobody would be asked.
+- **A rule without tests fails `npm test`.** `tests/audit.test.js` keeps a
+  ledger of what each test saw a rule do and ends with a check that every
+  id in `AUDIT_RULES` was seen firing and seen silent. Eight rules had
+  only half of the pair (CFG-002, INJ-002, TS-001, SEC-010, SEC-001b,
+  SEC-012, SEC-013, SEC-014); each now has both. The new samples found
+  BUG-082 and BUG-083.
 
 ### Staged (fixed in staging/, not yet live)
 
