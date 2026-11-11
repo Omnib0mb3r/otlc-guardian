@@ -106,16 +106,28 @@ process.on("exit", () => rmSync(EMPTY_PROJECT, { recursive: true, force: true })
 const HOOK_ENV = { ...process.env };
 delete HOOK_ENV.CLAUDE_PROJECT_DIR;
 
+// How long the harness waits for one hook process. A hook run takes about
+// 200 ms; on a loaded machine (another suite, a virus scan of each new
+// process) 10 s was not always enough and a different test failed each
+// run (BUG-077). This is the harness's patience only: the hook's own
+// timeout in settings is another number. GUARDIAN_TEST_HOOK_TIMEOUT_MS
+// overrides it, in milliseconds.
+const HOOK_SPAWN_TIMEOUT_MS = Number(process.env.GUARDIAN_TEST_HOOK_TIMEOUT_MS) || 30_000;
+
 /** @param {object} [env] - variables to set for this run (CLAUDE_PROJECT_DIR, when the session cwd is a subfolder) */
 function runHook(hookPath, payload, env = {}) {
   const cwd = payload.cwd ?? EMPTY_PROJECT;
   const result = spawnSync("node", [hookPath], {
     input:    JSON.stringify({ ...payload, cwd }),
     encoding: "utf8",
-    timeout:  10_000,
+    timeout:  HOOK_SPAWN_TIMEOUT_MS,
     cwd,
     env:      { ...HOOK_ENV, ...env },
   });
+  if (result.status === null && result.error?.code === "ETIMEDOUT") {
+    throw new Error(`The test harness stopped the hook after ${HOOK_SPAWN_TIMEOUT_MS} ms (a loaded machine, not a hook verdict; BUG-077). ` +
+      "Rerun, or raise GUARDIAN_TEST_HOOK_TIMEOUT_MS.");
+  }
   if (result.status !== 0) {
     throw new Error(`Hook exited with non-zero status ${result.status}: ${result.stderr}`);
   }

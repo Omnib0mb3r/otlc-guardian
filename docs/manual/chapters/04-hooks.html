@@ -309,7 +309,7 @@
 </ul></div>
 
 <h3 id="hk-tests">What the tests verify</h3>
-<p><code>tests/hook.test.js</code> drives both hooks as child processes. Its groups:</p>
+<p><code>tests/hook.test.js</code> drives both hooks as child processes. <code>runHook()</code> waits <code>HOOK_SPAWN_TIMEOUT_MS</code> for each one: 30 seconds, or <code>GUARDIAN_TEST_HOOK_TIMEOUT_MS</code> in milliseconds. A hook run takes about 200 ms; the wait was 10 seconds until BUG-077, and on a loaded machine a different test failed each run. A run the harness kills now says so ("The test harness stopped the hook after N ms"). This is the harness's patience only, not the hook timeout in settings. Its groups:</p>
 <div class="tbl dense"><table>
 <thead><tr><th>Group</th><th>Covers</th></tr></thead>
 <tbody>

@@ -542,12 +542,15 @@ function runCli(dir, ...args) {
   return r;
 }
 
+// The harness's patience for one hook process (BUG-077; see tests/hook.test.js).
+const HOOK_SPAWN_TIMEOUT_MS = Number(process.env.GUARDIAN_TEST_HOOK_TIMEOUT_MS) || 30_000;
+
 /** Pipe a Write of `content` to a new watched file through the project's installed hook. */
 function runInstalledHook(dir, content) {
   const hook = path.join(dir, ".claude", "hooks", "injection-guard-hook.mjs");
   return spawnSync("node", [hook], {
     input: JSON.stringify({ tool_name: "Write", cwd: dir, tool_input: { file_path: path.join(dir, ".planning", "notes.md"), content } }),
-    encoding: "utf8", timeout: 10_000, cwd: dir, env: HOOK_ENV,
+    encoding: "utf8", timeout: HOOK_SPAWN_TIMEOUT_MS, cwd: dir, env: HOOK_ENV,
   });
 }
 
@@ -973,7 +976,7 @@ describe("BUG-028 / BUG-034: Guardian's hook commands do not depend on the sessi
         const sub = path.join(dir, "src", "deep");
         mkdirSync(sub, { recursive: true });
         const r = spawnSync("bash", ["-c", command], {
-          cwd: sub, encoding: "utf8", timeout: 10_000,
+          cwd: sub, encoding: "utf8", timeout: HOOK_SPAWN_TIMEOUT_MS,
           env: { ...HOOK_ENV, CLAUDE_PROJECT_DIR: dir },
           input: JSON.stringify({ tool_name: "Write", cwd: sub, tool_input: { file_path: path.join(dir, ".planning", "notes.md"), content: OVERRIDE_PAYLOAD } }),
         });

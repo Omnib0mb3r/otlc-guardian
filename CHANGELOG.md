@@ -585,6 +585,12 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
 ### Fixed
 
+- **The hook test suites no longer fail at random on a loaded machine
+  (BUG-077).** The test harness gave each hook process 10 seconds and
+  reported a kill as "status null"; under load a different test failed
+  each run. The harness now waits 30 seconds
+  (`GUARDIAN_TEST_HOOK_TIMEOUT_MS` overrides it) and says when it, not the
+  hook, stopped a run. Tests only; the hook timeout in settings is unchanged.
 - **Guardian's CLAUDE.md no longer quotes a live injection phrase
   (BUG-002).** The VISIBLE AUDIT OUTPUT example quoted a CRITICAL
   pattern, and `guardian init` merges that file into every project's

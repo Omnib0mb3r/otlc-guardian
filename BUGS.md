@@ -88,6 +88,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-074 | IN-PROGRESS | HIGH: a settings change that adds a command (a SessionStart or Stop hook, a second PreToolUse hook, `statusLine`, `apiKeyHelper`) can delete Guardian, silently |
 | BUG-075 | IN-PROGRESS | HIGH: shell forms no reader parses change Guardian's files silently: `{ rm ...; }`, brace expansion, `$'...'`, `cmd /r`, PowerShell pipelines, `python -Ic`, a heredoc fed to `bash` |
 | BUG-076 | OPEN | Runtime `GUARD-SEC-008`/`-009` miss a JSON key: `"password": "hunter2hunter2"` and `"api_key": "..."` scan clean |
+| BUG-077 | SMOKE-TESTING | Hook test suites fail at random under machine load: the harness kills a hook spawn after 10 s and reports "status null" |
 
 <!-- INDEX END -->
 
@@ -1108,5 +1109,13 @@ Re-probe 3 (`C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5
 **Status:** OPEN · **Found:** 2026-11-10
 
 Found while fixing BUG-072. `GUARD-SEC-008` and `-009` require `:` or `=` right after the key word (after optional whitespace), so the closing quote of a JSON or JS-object key breaks the match: `"password": "hunter2hunter2"`, `{"api_key": "abcd1234efgh"}` and `'password': 'hunter2hunter2'` scan clean in `secrets` mode, live and staged, Node and Python. These are the most common shape of a quoted password literal in model output (a JSON config, a fetch body). Proposed fix, not started (needs Lex's go, as it widens what fires): allow an optional closing quote after the key (`password["']?\s*[:=]`) in `inlineValue()` and `_inline_value()`, with firing tests for the JSON forms and silent controls (`"password": { "type": "string" }`, `"password": "string"`). The audit's own `SEC-005`/`SEC-006` are separate (SECRET_PARITY) and need the same check.
+
+### BUG-077: Hook test suites fail at random under machine load
+
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
+
+`runHook()` in `tests/hook.test.js` spawned each hook with `timeout: 10_000`; `runInstalledHook()` and the BUG-028 bash spawn in `tests/init.test.js` did the same. One hook run takes 140 to 220 ms on a quiet machine. On 2026-11-10, with the CPU at 94% and 147 node processes (Lex's re-probe 4 running beside the gate), a different test died on each run with `Hook exited with non-zero status null:` and an empty stderr, which is `spawnSync` killing the child at the timeout: "a tool outside the web servers is not scanned: mcp__playwright_browser_snapshot", "a hostile mcp__car-browser__browser_snapshot result is reported", "custom watchPaths match case-insensitively", "asks: find . -name '*.log' -exec rm -rf .claude \; (S10)". Four gate runs failed this way before one passed, and one staged run earlier the same day (578 passed, 1 failed, name not captured) was the same thing. The message gave no hint that the harness, not the hook, had stopped the run. Test harness only: the hook's own timeout in settings is a different number and is not involved.
+
+**Fix (2026-11-10, Lex decision: test harness only, 30 s).** `tests/hook.test.js`: `HOOK_SPAWN_TIMEOUT_MS` (30,000 ms, or `GUARDIAN_TEST_HOOK_TIMEOUT_MS`) replaces the literal in `runHook()`, and a run the harness killed (`status === null` with `ETIMEDOUT`) throws "The test harness stopped the hook after N ms (a loaded machine, not a hook verdict; BUG-077)". `tests/init.test.js`: the same constant for `runInstalledHook()` and the BUG-028 bash spawn. `tests/staging.mjs` runs `tests/hook.test.js`, so the staged suite has it too. Reproduced on demand before the change by setting the wait to 60 ms through the new variable with the old code path: 71 of 258 tests failed with `Hook exited with non-zero status null`; after it the killed runs carry the new message (113 at 60 ms; the count varies with timing) and the default run is 258 passed, 0 failed. A first version failed every run that passed the timer even when the hook had finished with status 0; narrowed to killed runs. Not changed: the hook timeout in `.claude/settings.json`, and the 60 s waits on the CLI spawns in `tests/init.test.js`. Verified by: the gate runs of this session passing while other suites load the machine; goes to RESOLVED when a loaded run passes.
 
 <!-- DETAILS END -->
