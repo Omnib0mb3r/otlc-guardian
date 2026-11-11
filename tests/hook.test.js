@@ -5999,6 +5999,187 @@ describe("PreToolUse hook - a starter's option can choose the program (re-probe 
 });
 
 // ---------------------------------------------------------------------------
+// RE-PROBE 8, J4 (staged): a test run blanked its whole stage whatever
+// its options said, and pytest empties the folder --basetemp names before
+// a run. A runner is a test run to the reader only when every option it
+// is given is on that runner's list of options known to choose tests or
+// shape what is printed; an output, temp, report, config or plugin option
+// loses the exemption.
+
+describe("PreToolUse hook - a test runner earns the exemption only with options known to choose tests (re-probe 8, J4)", () => {
+  const backslash = String.fromCharCode(92);
+  for (const command of [
+    // The re-probe's forms.
+    "pytest --basetemp=security",
+    "pytest --basetemp security",
+    "python -m pytest --basetemp=security",
+    "npm test -- --basetemp=security",
+    "npx vitest run --coverage --coverage.reportsDirectory=security",
+    "npx jest --coverage --coverageDirectory=security",
+    "cargo test --config 'target.x86_64-pc-windows-msvc.runner=\"rm -rf\"' security",
+    `printf 'def test_x(tmp_path):${backslash}n    assert True${backslash}n' > test_a.py; pytest --basetemp=security -q -p no:cacheprovider`,
+    // pytest: configuration, plugins, places it writes.
+    "pytest -o cache_dir=security --cache-clear",
+    "pytest -p evil security",
+    "pytest -c evil.ini security",
+    "pytest --cov-report=html:security",
+    "pytest -W error::evil.Mod security",
+    "pytest --pyargs security",
+    "pytest --debug=security",
+    "pytest --override-ini=addopts=--basetemp=security",
+    "py.test --basetemp=security",
+    "uv run pytest --basetemp=security",
+    "python -m unittest --basetemp=security",
+    // Django: the settings, the runner and the path are modules Python imports.
+    "python manage.py test --settings=evil security",
+    "python manage.py test --testrunner=evil.Runner security",
+    "python manage.py test --pythonpath=e security",
+    "./manage.py test --settings=evil security",
+    // jest.
+    "npx jest --config=evil.js security",
+    "npx jest -c evil.js security",
+    "npx jest --setupFiles=./e.js security",
+    "npx jest --cacheDirectory=security",
+    "npx jest --reporters=./e.js security",
+    "npx jest --testRunner=./e.js security",
+    "npx jest --globalSetup=./e.js security",
+    "npx jest --coverage-directory=security",
+    "jest --clearCache --cacheDirectory=security",
+    "yarn jest --coverageDirectory=security",
+    // vitest.
+    "npx vitest run --config=evil.ts security",
+    "npx vitest run --outputFile=security",
+    "npx vitest run --reporter=./e.js security",
+    "npx vitest run --reporter ./e.js security",
+    "npx vitest run --pool=./e.js security",
+    // mocha.
+    "npx mocha --require ./e.js security",
+    "npx mocha -r ./e.js security",
+    "npx mocha --config evil.js security",
+    "npx mocha --reporter ./e.js security",
+    "npx mocha -R ./e.js security",
+    "npx mocha --reporter-option output=security security",
+    "npx mocha --file ./e.js security",
+    "npx mocha --loader=./e.mjs security",
+    // go and cargo.
+    "go test -exec 'rm -rf' security",
+    "go test -o security ./...",
+    "go test -coverprofile=security ./...",
+    "go test -c -o security",
+    "go test -outputdir=security ./...",
+    "go test ./... -args security",
+    "go test -modfile=e.mod ./... -run security",
+    "go test -overlay=e.json -run security",
+    "cargo test --target-dir=security",
+    "cargo test --manifest-path=e/Cargo.toml security",
+    "cargo test -Z unstable-options security",
+    // The test script of package.json: npm's own options, and options for a runner the reader does not know.
+    "npm test --script-shell=./e security",
+    "npm test --script-shell=./e -- security",
+    "npm run test --script-shell=./e -- security",
+    "npm test -- --config=evil.js security",
+    "npm test -- -o addopts=--basetemp=security",
+    "npm test -- --coverageDirectory=security",
+    "yarn test --coverageDirectory=security",
+    "pnpm test --coverageDirectory=security",
+    "bun test --preload ./e.js security",
+    "bun test --coverage-dir=security",
+    // npm reads its own options after a script's name as well.
+    "npm run security --script-shell=./e",
+    // The cost: everyday options that write, configure or load, asking now.
+    "pytest --cov=src --cov-report=html -k security",
+    "pytest --junitxml=report.xml -k security",
+    "pytest -o log_cli=true -k security",
+    "npx jest security -u",
+    "npx jest security --config jest.config.js",
+    "npx vitest run security --reporter=junit --outputFile=out.xml",
+    "go test ./... -run security -coverprofile=cover.out",
+    "cargo test security --target-dir /tmp/t",
+    "python -u manage.py test security",
+    "python manage.py test security --settings=app.test",
+    "npm test -- security --updateSnapshot",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    "pytest security",
+    "pytest -k security",
+    "pytest -xq -k security",
+    "pytest -vv tests/security",
+    "pytest tests -k 'security and not slow' --tb=short -x",
+    "pytest -m security --maxfail=1",
+    "pytest -n auto -k security",
+    "pytest -n4 -rA -k security",
+    "pytest --cov=src --cov-report=term-missing -k security",
+    "pytest --lf -k security",
+    "pytest -ksecurity",
+    "pytest -- security",
+    "pytest -p no:cacheprovider -k security",
+    "python -m pytest tests/security -v",
+    "python -mpytest -k security",
+    "python3 -m unittest security",
+    "python -m unittest discover -s tests -p 'test_security*.py' -v",
+    "python -m unittest -k security",
+    "python manage.py test security",
+    "python manage.py test security --keepdb -v 2",
+    "./manage.py test security --failfast",
+    "npx jest security",
+    "npx jest -t security",
+    "npx jest --testNamePattern=security --ci",
+    "npx jest security --coverage",
+    "npx jest --runInBand --watchAll=false security",
+    "npx jest -i security --verbose",
+    "yarn jest security --maxWorkers=2",
+    "npx vitest run security",
+    "npx vitest --run security",
+    "npx vitest run -t security --reporter=verbose",
+    "npx vitest run security --coverage",
+    "npx mocha --grep security",
+    "npx mocha -g security --recursive --exit",
+    "npx mocha -R dot --grep security",
+    "npx mocha --reporter spec --timeout 5000 -g security",
+    "go test ./... -run security",
+    "go test -v -race -run Security ./...",
+    "go test -count=1 -run=security ./...",
+    "go test ./... -cover -short -run security",
+    "cargo test security",
+    "cargo test security -- --nocapture",
+    "cargo test -p core security --release",
+    "cargo test --workspace security -- --test-threads=1",
+    "npm test -- security",
+    "npm test security",
+    "npm t security",
+    "npm run test -- security",
+    "npm test -- -t security",
+    "npm test -- --testPathPattern=security",
+    "npm test -- --watchAll=false security",
+    "npm test -- -k security -x",
+    "npm test --silent -- security",
+    "yarn test security",
+    "yarn test -t security",
+    "yarn test --coverage security",
+    "pnpm test security",
+    "pnpm test -- security",
+    "bun test security",
+    "bun test -t security",
+    "uv run pytest -x -k security",
+    "poetry run pytest -q -k security",
+    "pytest -k security > out.txt 2>&1",
+    "npm run security",
+    "npm run security -- --fix",
+    "npm run security --silent",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

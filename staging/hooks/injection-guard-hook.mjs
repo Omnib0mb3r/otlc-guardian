@@ -1642,8 +1642,7 @@ function shellWords(text, dialect, depth = 0) {
 
 // Programs whose arguments name tests to run. "security" given to one is
 // a test filter or a module name (pytest -k security, npm test -- security).
-const TEST_RUNNERS      = new Set(["pytest", "py.test", "jest", "vitest", "mocha"]);
-const PYTHON_TEST_MODULES = new Set(["pytest", "unittest"]);
+// They are the keys of TEST_RUN_OPTIONS and PYTHON_TEST_MODULES below.
 const PACKAGE_MANAGERS  = new Set(["npm", "pnpm", "yarn", "bun"]);
 const PACKAGE_RUNNERS   = new Set(["npx", "pnpx", "bunx"]);
 const TEST_SCRIPT       = /^(?:t|test)$/;
@@ -1674,6 +1673,104 @@ function afterKnownOptions(words, known) {
 }
 
 /**
+ * The options a test runner is known by (re-probe 8, J4): the ones that
+ * choose which tests run or shape what is printed. A runner given any
+ * other option is no test run to the reader, because that option can
+ * name a folder the runner empties (pytest --basetemp, jest
+ * --coverageDirectory), a file it writes, a configuration, or code it
+ * loads (a plugin, a reporter, cargo --config with a runner).
+ *
+ * @param {string} shortFlags - the letters that take no value
+ * @param {string} shortValued - the letters that take one
+ * @param {string} flags - long names that take no value, space separated
+ * @param {string} valued - long names that take one
+ * @param {Record<string, RegExp>} [only] - for an option whose value can
+ *   name code or a place to write, the values that do neither
+ * @param {boolean} [oneDash] - whether a long name is also spelled with
+ *   one dash and letters do not cluster (go test -run)
+ */
+function testOptions(shortFlags, shortValued, flags, valued, only = {}, oneDash = false) {
+  const names = (list) => list.split(" ").filter(Boolean);
+  return { flags: new Set([...shortFlags, ...names(flags)]), valued: new Set([...shortValued, ...names(valued)]), only, oneDash };
+}
+// The reporters that print to the terminal. Any other value can be a
+// module the runner loads, or one that writes a folder (html).
+const TERMINAL_REPORTER = /^(?:default|verbose|dot|basic|spec|list|min|progress|nyan|landing|tap|tap-flat|json|github-actions|hanging-process)$/;
+const PYTEST_OPTIONS = testOptions("xqvsl", "kmnrp",
+  "exitfirst quiet verbose showlocals lf last-failed ff failed-first nf new-first sw stepwise co collect-only no-header no-summary disable-warnings strict-markers strict-config cov no-cov cov-branch",
+  "maxfail tb durations durations-min cov cov-fail-under timeout color deselect ignore ignore-glob capture show-capture log-level log-cli-level cov-report",
+  // -p loads a plugin, which is code; -p no:NAME turns one off.
+  { "cov-report": /^term(?:-missing)?(?::skip-covered)?$/, p: /^no:[\w.-]+$/ });
+const JEST_OPTIONS = testOptions("ibofe", "tw",
+  "ci silent verbose coverage runInBand bail passWithNoTests detectOpenHandles forceExit no-cache noStackTrace onlyChanged onlyFailures all colors no-coverage expand errorOnDeprecated listTests logHeapUsage useStderr",
+  "testNamePattern testPathPattern testPathPatterns maxWorkers testTimeout bail shard changedSince testPathIgnorePatterns selectProjects ignoreProjects maxConcurrency coverage watch watchAll",
+  { coverage: /^(?:true|false)$/, watch: /^false$/, watchAll: /^false$/ });
+const VITEST_OPTIONS = testOptions("", "t",
+  "run coverage no-coverage silent passWithNoTests changed",
+  "testNamePattern project shard maxWorkers minWorkers testTimeout hookTimeout retry bail changed reporter pool environment watch",
+  { reporter: TERMINAL_REPORTER, pool: /^(?:threads|forks|vmThreads|vmForks)$/, environment: /^(?:node|jsdom|happy-dom|edge-runtime)$/, watch: /^false$/ });
+const MOCHA_OPTIONS = testOptions("bcpiAS", "gftsjRu",
+  "bail exit forbid-only forbid-pending check-leaks color no-color parallel recursive invert dry-run full-trace inline-diffs async-only allow-uncaught sort fail-zero",
+  "grep fgrep timeout timeouts slow retries jobs reporter ui spec ignore exclude extension",
+  { R: TERMINAL_REPORTER, reporter: TERMINAL_REPORTER, u: /^(?:bdd|tdd|qunit|exports)$/, ui: /^(?:bdd|tdd|qunit|exports)$/ });
+const TEST_RUN_OPTIONS = { pytest: PYTEST_OPTIONS, "py.test": PYTEST_OPTIONS, jest: JEST_OPTIONS, vitest: VITEST_OPTIONS, mocha: MOCHA_OPTIONS };
+const PYTHON_TEST_MODULES = {
+  pytest: PYTEST_OPTIONS,
+  unittest: testOptions("vqfbc", "kspt", "verbose quiet failfast buffer catch locals", "start-directory pattern top-level-directory durations"),
+};
+const DJANGO_TEST_OPTIONS = testOptions("b", "vk",
+  "failfast keepdb noinput no-input reverse buffer debug-mode debug-sql timing parallel shuffle",
+  "verbosity tag exclude-tag parallel shuffle durations");
+const GO_TEST_OPTIONS = testOptions("", "",
+  "v race short failfast cover json benchmem",
+  "run bench count timeout parallel p cpu tags skip shuffle covermode coverpkg benchtime list", {}, true);
+const CARGO_TEST_OPTIONS = testOptions("qvr", "pFj",
+  "quiet verbose release lib bins examples tests benches doc all-targets workspace all all-features no-default-features no-fail-fast no-run locked offline frozen ignored include-ignored nocapture show-output exact list",
+  "package test bin example bench features jobs exclude test-threads skip color profile");
+// For the test script of package.json (npm test, yarn test, bun test),
+// whose runner the reader does not know: the options that choose tests
+// or shape the output in every runner that has them. `-o` is jest's
+// --onlyChanged and pytest's --override-ini, so it is not here.
+const SCRIPT_TEST_OPTIONS = testOptions("xqvsib", "kmtgw",
+  "verbose silent ci bail coverage no-coverage runInBand passWithNoTests run exitfirst lf ff exit recursive forceExit detectOpenHandles if-present workspaces changed",
+  "testNamePattern testPathPattern testPathPatterns test-name-pattern grep fgrep maxWorkers maxfail tb timeout workspace reporter watch watchAll",
+  { reporter: TERMINAL_REPORTER, watch: /^false$/, watchAll: /^false$/ });
+
+/**
+ * Whether every option in a runner's arguments is one `spec` lists
+ * (testOptions()), with a value `spec.only` allows. `--name=value` needs
+ * a name that takes a value; a short option that takes one takes the
+ * rest of its word or the next word. Words that are no option choose
+ * tests, and "--" changes nothing: what follows it is held to the same
+ * list (npm test -- --basetemp=x).
+ * @param {{ flags: Set<string>, valued: Set<string>, only: Record<string, RegExp>, oneDash: boolean }} spec
+ * @param {string[]} args
+ */
+function knownTestOptions(spec, args) {
+  const fits = (name, value) => value !== undefined && (!Object.hasOwn(spec.only, name) || spec.only[name].test(value));
+  for (let k = 0; k < args.length; k++) {
+    const arg = args[k];
+    if (!arg.startsWith("-") || arg === "--") continue;
+    if (arg.startsWith("--") || spec.oneDash) {
+      const eq = arg.indexOf("=");
+      const name = arg.slice(arg.startsWith("--") ? 2 : 1, eq < 0 ? undefined : eq);
+      if (eq >= 0) {
+        if (!spec.valued.has(name) || !fits(name, arg.slice(eq + 1))) return false;
+      } else if (!spec.flags.has(name) && !(spec.valued.has(name) && fits(name, args[++k]))) return false;
+      continue;
+    }
+    if (arg === "-") return false;
+    for (let j = 1; j < arg.length; j++) {
+      if (spec.flags.has(arg[j])) continue;
+      const stuck = arg.slice(j + 1).replace(/^=/, "");
+      if (!spec.valued.has(arg[j]) || !fits(arg[j], stuck === "" ? args[++k] : stuck)) return false;
+      break;
+    }
+  }
+  return true;
+}
+
+/**
  * Whether a stage's words run a test runner: pytest, jest, vitest and
  * mocha (directly, through npx, bunx, yarn or pnpm exec, or under a run
  * wrapper such as uv run and poetry run: wrapperWords()), python -m
@@ -1683,7 +1780,8 @@ function afterKnownOptions(words, known) {
  * to run, so neither is a test run here. A starter runs the program its
  * words name only with the options known to leave that alone
  * (afterKnownOptions()), and only when the name is not spelled as a path
- * (re-probe 8, J3).
+ * (re-probe 8, J3). And the runner is given only options known to choose
+ * tests or shape what is printed (knownTestOptions(); re-probe 8, J4).
  */
 function isTestRun(words) {
   const wrapped = wrapperWords(words);
@@ -1695,24 +1793,33 @@ function isTestRun(words) {
   }
   const name = commandName(words[0] ?? "");
   const args = words.slice(1);
-  const plain = args.filter((a) => !a.startsWith("-"));
-  if (TEST_RUNNERS.has(name)) return true;
-  if (name === "manage.py") return plain[0] === "test";
+  /** Whether the words from `at` on are a runner of TEST_RUN_OPTIONS and options it is known by. */
+  const runs = (from, at) => at >= 0 && Object.hasOwn(TEST_RUN_OPTIONS, from[at]) && knownTestOptions(TEST_RUN_OPTIONS[from[at]], from.slice(at + 1));
+  if (Object.hasOwn(TEST_RUN_OPTIONS, name)) return knownTestOptions(TEST_RUN_OPTIONS[name], args);
+  if (name === "manage.py") return args[0] === "test" && knownTestOptions(DJANGO_TEST_OPTIONS, args.slice(1));
   if (name === "python" || name === "python3" || name === "py") {
-    if (/^-m/.test(args[0] ?? "")) return PYTHON_TEST_MODULES.has(args[0].slice(2) || args[1]);
-    return commandName(plain[0] ?? "") === "manage.py" && plain[1] === "test";
+    if (/^-m/.test(args[0] ?? "")) {
+      const stuck = args[0].length > 2;
+      const module = stuck ? args[0].slice(2) : args[1];
+      return Object.hasOwn(PYTHON_TEST_MODULES, module ?? "") && knownTestOptions(PYTHON_TEST_MODULES[module], args.slice(stuck ? 1 : 2));
+    }
+    return commandName(args[0] ?? "") === "manage.py" && args[1] === "test" && knownTestOptions(DJANGO_TEST_OPTIONS, args.slice(2));
   }
-  if (PACKAGE_RUNNERS.has(name)) return TEST_RUNNERS.has(args[afterKnownOptions(args, RUNNER_OPTIONS)]);
+  if (PACKAGE_RUNNERS.has(name)) return runs(args, afterKnownOptions(args, RUNNER_OPTIONS));
   if (PACKAGE_MANAGERS.has(name)) {
     const at = afterKnownOptions(args, MANAGER_OPTIONS);
     if (at < 0) return false;
     const rest = args.slice(at + 1);
-    if (TEST_SCRIPT.test(args[at]) || TEST_RUNNERS.has(args[at])) return true;
-    if (args[at] === "run") return rest[afterKnownOptions(rest, MANAGER_OPTIONS)] === "test";
-    return args[at] === "exec" && TEST_RUNNERS.has(rest[afterKnownOptions(rest, RUNNER_OPTIONS)]);
+    if (TEST_SCRIPT.test(args[at])) return knownTestOptions(SCRIPT_TEST_OPTIONS, rest);
+    if (runs(args, at)) return true;
+    if (args[at] === "run") {
+      const script = afterKnownOptions(rest, MANAGER_OPTIONS);
+      return rest[script] === "test" && knownTestOptions(SCRIPT_TEST_OPTIONS, rest.slice(script + 1));
+    }
+    return args[at] === "exec" && runs(rest, afterKnownOptions(rest, RUNNER_OPTIONS));
   }
-  if (name === "go") return args[0] === "test" && !args.some((a) => /^--?exec(?:=|$)/.test(a));
-  if (name === "cargo") return args[0] === "test";
+  if (name === "go") return args[0] === "test" && knownTestOptions(GO_TEST_OPTIONS, args.slice(1));
+  if (name === "cargo") return args[0] === "test" && knownTestOptions(CARGO_TEST_OPTIONS, args.slice(1));
   return false;
 }
 
@@ -1843,7 +1950,12 @@ function scriptNameSpans(stage) {
   if (!first) return [];
   if (/^run(?:-script)?$/.test(first.word)) {
     const name = after(stage.slice(stage.indexOf(first) + 1));
-    return name ? [[name.start, name.end]] : [];
+    if (!name) return [];
+    // npm reads its own options after the script name too, up to "--".
+    const rest = stage.slice(stage.indexOf(name) + 1).map((tok) => tok.word);
+    const own = rest.slice(0, rest.includes("--") ? rest.indexOf("--") : rest.length);
+    if (manager === "npm" && own.some((word) => word.startsWith("-") && !MANAGER_OPTIONS.has(word))) return [];
+    return [[name.start, name.end]];
   }
   // yarn NAME and pnpm NAME run the script NAME when NAME is not a
   // command of the manager itself (re-probe 6, G6).

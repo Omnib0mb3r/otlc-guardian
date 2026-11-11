@@ -233,6 +233,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A test runner earns the exemption only with options known to
+  choose tests (BUG-080, re-probe 8 J4).** `pytest --basetemp=security`
+  empties the folder before a run, and the hook blanked a test run's
+  whole stage whatever its options said. Each runner now has a list
+  of options that choose tests or shape the output (`-k`, `-m`, `-x`,
+  `-t`, `--grep`, `--run`, `--tb`, `--coverage`). Any other option
+  loses the exemption: `--basetemp`, `--coverageDirectory`,
+  `--config`, `--junitxml`, `-u`, `-coverprofile`, a reporter that is
+  a file.
+
 - **A starter's option can choose the program (BUG-080, re-probe 8
   J3).** `npx --package=./e jest security` installs the folder `e` and
   runs its `jest` on the word, and the hook read a test run from the
