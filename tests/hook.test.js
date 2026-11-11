@@ -6425,6 +6425,80 @@ describe("PreToolUse hook - a repair restores from the index or HEAD only (re-pr
 });
 
 // ---------------------------------------------------------------------------
+// RE-PROBE 8, J10 (staged): a scanner that loads but throws when it is
+// called, or returns something that is no result, made the handler fail
+// with nothing recorded, and the call ran unread. The hook asks both
+// functions once at load and blocks when either does not answer.
+// With it, Lex's ruling on the repair path: the hook file itself can be
+// restored by name; the .claude/hooks folder, which can hold the user's
+// own hooks, cannot.
+
+describe("PreToolUse hook - a scanner that does not answer blocks, and the hook file is repairable by name (re-probe 8, J10)", () => {
+  const scanner = (body) => (install) => writeFileSync(path.join(install, SCANNER), body);
+  const payloadWrite = (install) => ({ tool_name: "Write", tool_input: { file_path: path.join(install, "CLAUDE.md"), content: `${CRITICAL_PAYLOAD}\n` } });
+
+  for (const [name, body, says] of [
+    ["both functions throw", "export function scan() { throw new Error('x'); }\nexport function scanChange() { throw new Error('x'); }\n", /throws when it is called/],
+    ["scanChange() throws", "export const scan = () => ({ violations: [] });\nexport function scanChange() { throw new Error('x'); }\n", /throws when it is called/],
+    ["scan() throws", "export function scan() { throw new Error('x'); }\nexport const scanChange = () => ({ violations: [] });\n", /throws when it is called/],
+    ["both return null", "export const scan = () => null;\nexport const scanChange = () => null;\n", /does not answer as a scanner does/],
+    ["both return an object with no violations list", "export const scan = () => ({});\nexport const scanChange = () => ({});\n", /does not answer as a scanner does/],
+    ["violations is not a list", "export const scan = () => ({ violations: 0 });\nexport const scanChange = () => ({ violations: 0 });\n", /does not answer as a scanner does/],
+    ["empty text is given a violation", "export const scan = () => ({ violations: [{}] });\nexport const scanChange = () => ({ violations: [] });\n", /does not answer as a scanner does/],
+  ]) {
+    stagedOnly(`blocks a Write of a payload when ${name}`, () => {
+      const result = runBroken(scanner(body), payloadWrite);
+      assert.equal(result.status, 2, result.stderr.slice(0, 300));
+      assert.match(result.stderr, says);
+      assert.match(result.stderr, /guardian update/);
+      assert.equal(result.stdout, "");
+    });
+  }
+
+  const throwing = scanner("export function scan() { throw new Error('x'); }\nexport function scanChange() { throw new Error('x'); }\n");
+  stagedOnly("blocks a shell command when the scanner throws", () => {
+    assert.equal(runBroken(throwing, shellCall("ls")).status, 2);
+  });
+  stagedOnly("lets guardian update through when the scanner throws", () => {
+    const result = runBroken(throwing, shellCall("guardian update"));
+    assert.equal(result.status, 1, result.stderr.slice(0, 200));
+    assert.match(result.stderr, /let through/);
+  });
+  stagedOnly("with a scanner that answers, the same Write is denied by the scan", () => {
+    const result = runBroken(() => {}, payloadWrite);
+    assert.equal(result.status, 0, result.stderr.slice(0, 200));
+    assert.equal(decisionOf(result.stdout), "deny");
+  });
+
+  // The repair path names the hook file, not its folder.
+  for (const command of [
+    "git checkout -- .claude/hooks/injection-guard-hook.mjs",
+    "git checkout HEAD -- .claude/hooks/injection-guard-hook.mjs",
+    "git restore --source=HEAD -- .claude/hooks/injection-guard-hook.mjs",
+    "git restore -- security/01-injection-guard.js .claude/hooks/injection-guard-hook.mjs",
+  ]) {
+    stagedOnly(`lets the repair through: ${command}`, () => {
+      const result = runBroken(noScanner, shellCall(command));
+      assert.equal(result.status, 1, `${command} -> exit ${result.status} ${result.stderr.slice(0, 200)}`);
+      assert.match(result.stderr, /let through/);
+    });
+  }
+  for (const command of [
+    "git checkout -- .claude/hooks",
+    "git restore -- .claude/hooks",
+    "git restore -- security/01-injection-guard.js .claude/hooks",
+    "git checkout -- .claude",
+    "git checkout -- .claude/hooks/my-own-hook.mjs",
+    "git checkout -- .claude/settings.json",
+  ]) {
+    stagedOnly(`blocks: ${command}`, () => {
+      const result = runBroken(noScanner, shellCall(command));
+      assert.equal(result.status, 2, `${command} -> exit ${result.status} ${result.stderr.slice(0, 200)}`);
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

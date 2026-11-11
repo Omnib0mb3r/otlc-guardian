@@ -233,6 +233,14 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A scanner that does not answer blocks (BUG-027, re-probe 8 J10).**
+  A scanner file that loaded but threw when called, or returned
+  something that is no result, made the staged hook fail with exit 1
+  and the write went through. The hook now calls `scan()` and
+  `scanChange()` once on empty text when it loads and blocks every
+  call (exit 2) when either throws or reports anything but an empty
+  list of violations.
+
 - **A repair restores from the index or HEAD only (BUG-027, re-probe 8
   J9).** With the scanner missing, the staged hook let `git checkout
   evil -- security` and `git checkout security` through, so an older

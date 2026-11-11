@@ -587,6 +587,24 @@ Tests: `tests/hook.test.js`, "a repair restores from the index or HEAD only (re-
 
 Smoke test after applying: in a scratch `guardian init` project that is a git repository with its files committed, delete `security/01-injection-guard.js` by hand, then ask Claude to run `git checkout HEAD~1 -- security`; the call is blocked and the message names `guardian update`. Ask for `git checkout -- security/01-injection-guard.js`; it runs and the next tool call is judged again.
 
+**J10 (re-probe 8, Y10), Lex's decision of 2026-11-11: a scanner that loads but does not answer blocks. Fixed in staging, not yet live.** With a scanner file that exports `scan` and `scanChange` and each throws or returns null, a Write of "ignore all previous instructions" to CLAUDE.md exited 1 ("did not run: unexpected error") and the write went through (re-probe 8, h8\h10.mjs, states `throws` and `returnsNull`). With a working scanner it is denied.
+
+Cause: `loadModule()` checked only that both exports are functions. The first real call threw inside the handler, whose catch fails open when nothing was recorded.
+
+Change in `staging/hooks/injection-guard-hook.mjs`: right after the scanner loads, the hook calls `scan("", "injection")` and `scanChange("", "", "injection")`. A throw, or an answer whose `violations` is not an empty list, sets `cannotJudge`, and the handler blocks every Write, Edit, MultiEdit, NotebookEdit, Bash and PowerShell call with exit 2, as it does for a missing scanner. The repairs stay open. The block message now spells the git repair the way J9 requires it (`git checkout -- <file>`, `git restore -- <file>`).
+
+Held, as the re-probe has it: a scanner whose top-level code never settles exits 13, and one that calls `process.exit(0)` at import exits 0. Code the hook imports runs as the hook, and no check inside the hook can stop that.
+
+Lex's ruling of 2026-11-11 on the repair path, tested here: the hook file can be restored by name, the folder cannot. `git checkout -- .claude/hooks/injection-guard-hook.mjs` and `git restore -- security/01-injection-guard.js .claude/hooks/injection-guard-hook.mjs` are let through. `git checkout -- .claude/hooks`, `git restore -- security/01-injection-guard.js .claude/hooks`, `git checkout -- .claude`, `git checkout -- .claude/hooks/my-own-hook.mjs` and `git checkout -- .claude/settings.json` are blocked, because the folder can hold the user's own hooks. `REPAIRABLE` already held the two hook scripts by name, so the hook needed no change for this; the tests are new.
+
+J9's comparison, completed after its commit (a2876a3 against 7a5acc9, in the foreground, one list at a time): re-probe 8's 851 commands and the 197 everyday commands, 0 changed, no hook process killed.
+
+Cost: none measured. A scanner that answers empty text with a violation would block everything; neither the live nor the staged scanner does.
+
+Tests: `tests/hook.test.js`, "a scanner that does not answer blocks, and the hook file is repairable by name (re-probe 8, J10)": 7 scanner states blocked on a Write of a payload, a shell command blocked, `guardian update` let through, the same Write denied by a scanner that answers, 4 repairs let through and 6 blocked: 20 tests. Against the hook at a2876a3, 9 failed (the scanner states; the repair-path tests passed already). Staged hook suite before: 2347 passed, 9 failed. After: 2356 passed, 0 failed. Re-probe 7's 640 commands, re-probe 8's 851 and the everyday 75 and 197: 0 changed, compared in the foreground one list at a time. Lex's regress harness: no line changed.
+
+Smoke test after applying: in a scratch `guardian init` project replace the body of `security/01-injection-guard.js` by hand with `export function scan() { throw new Error("x"); } export function scanChange() { throw new Error("x"); }`, then ask Claude to write any file; the call is blocked and the message says the scanner throws when it is called. Run `guardian update` in a terminal; the next write is judged again.
+
 ### BUG-028 - Hook command path is cwd-relative
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

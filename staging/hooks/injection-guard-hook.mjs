@@ -127,6 +127,21 @@ await loadModule("scanner", guardModulePath, (mod) => {
   return Boolean(scan && scanChange);
 }, "scan() and scanChange()");
 
+// A scanner that loads can still throw when it is called, or answer with
+// something that is no result. The handler would then fail with nothing
+// recorded and the call would run unread, so both functions are asked
+// once here: empty text has no violation (re-probe 8, J10).
+if (!cannotJudge) {
+  try {
+    const answers = [scan("", "injection"), scanChange("", "", "injection")];
+    if (!answers.every((answer) => Array.isArray(answer?.violations) && answer.violations.length === 0)) {
+      cannotJudge = `the scanner at ${guardModulePath} does not answer as a scanner does (empty text must give no violations)`;
+    }
+  } catch (err) {
+    cannotJudge = `the scanner at ${guardModulePath} throws when it is called (${err?.message ?? "unknown error"})`;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // SETTINGS READER IMPORT: one reading of Claude Code's settings
 // ---------------------------------------------------------------------------
@@ -5283,8 +5298,8 @@ process.stdin.on("end", () => {
       if (repair) failOpenLoudly(`${cannotJudge}. This command repairs Guardian's files, so it is let through`);
       process.stderr.write(`${TAG} injection-guard-hook cannot run: ${cannotJudge}. Guardian cannot scan this tool call, ` +
         `so it is blocked. Repair Guardian first: run "guardian update" (or "guardian init") in the project, or restore the ` +
-        `file with git checkout or git restore. Those commands are let through. Everything else stays blocked until the ` +
-        `file loads again.\n`);
+        `file from git with "git checkout -- <file>" or "git restore -- <file>". Those commands are let through. Everything ` +
+        `else stays blocked until the file loads again.\n`);
       process.exit(2);
     }
 
