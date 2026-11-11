@@ -3832,6 +3832,100 @@ describe("PreToolUse hook - a cd with an option or CDPATH is not followed (re-pr
 });
 
 // ---------------------------------------------------------------------------
+// Re-probe 6, G2 (BUG-080): an exemption is earned only by a plain command
+// ---------------------------------------------------------------------------
+//
+// F1 and F1b blank the bare word where it is text: a read-only stage, a
+// test runner's stage, a message, a script name, a write to an ordinary
+// file. Each trusted the reader's split of the command, and the shell
+// splits differently: the output of a subshell, a group or a case arm is
+// piped on after it closes; a PowerShell ( ) is an expression whose value
+// is used; `printf -v` writes a variable; a function defined in the same
+// command replaces git, npm or pytest; a glob names a file again. Real
+// effect in the re-probe: the scanner deleted in each (real\subsh, grpnl,
+// procsub, caseesac, printfv, gitfn, ghfn, npmfn, pyfn, glob, case, ghook;
+// realps\riget, rires, riecho, move, arr, dirdel, gisec). Lex's decision:
+// no exemption unless the whole command is plain.
+
+describe("PreToolUse hook - an exemption is earned only by a plain command (re-probe 6, G2)", () => {
+  const run = (command, { mode, tool = "Bash" } = {}) => withTempProject((dir) => {
+    for (const rel of [".claude/settings.json", "security/01-injection-guard.js", "src/a.js", "docs/a.md", "README.md", "CLAUDE.md"]) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), rel.endsWith(".json") ? "{}" : "x\n");
+    }
+    return runHook(PRE_HOOK, { tool_name: tool, cwd: dir, tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) },
+      { CLAUDE_PROJECT_DIR: dir });
+  });
+  const show = (command) => JSON.stringify(command).slice(1, -1);
+
+  for (const [command, tool] of [
+    // W2: a reading stage whose output is used after it closes.
+    ["( echo security ) | xargs rm -rf"],
+    ["(echo security) | xargs npx rimraf"],
+    ["{\necho security\n} | xargs rm -rf"],
+    ["case x in x) echo security;; esac | xargs rm -rf"],
+    ["xargs rm -rf < <(echo security)"],
+    ["echo security > >(xargs rm -rf)"],
+    ["Remove-Item -Recurse -Force (Get-Item security)", "PowerShell"],
+    ["Remove-Item -Recurse -Force (Resolve-Path security)", "PowerShell"],
+    ["ri -r -fo (echo security)", "PowerShell"],
+    ["Remove-Item -Recurse -Force -Path (Write-Output security)", "PowerShell"],
+    ["Remove-Item -Recurse -Force @(Get-Item security)", "PowerShell"],
+    ["(Get-Item security).Delete($true)", "PowerShell"],
+    ["(gi security).Delete(1)", "PowerShell"],
+    ["(Get-Item security).MoveTo(\"old\")", "PowerShell"],
+    ["Move-Item (Get-Item security) old", "PowerShell"],
+    ["[IO.Directory]::Delete((Resolve-Path security).Path, $true)", "PowerShell"],
+    ["Get-ChildItem (Get-Item security) | Remove-Item -Recurse -Force", "PowerShell"],
+    // W4: an exempt stage trusted by its command name.
+    ["printf -v c \"rm -rf %s\" security; $c"],
+    ["printf -v c security; rm -rf $c"],
+    ["printf -v c security; npx rimraf \"$c\""],
+    ["git() { rm -rf \"$3\"; }; git commit -m security"],
+    ["function git { npx rimraf \"$4\"; }; git commit -m security"],
+    ["gh() { rm -rf \"$4\"; }; gh pr create --title security"],
+    ["npm() { rm -rf \"$2\"; }; npm run security"],
+    ["pytest() { rm -rf \"$@\"; }; pytest security"],
+    ["alias git='rm -rf'; git commit -m security"],
+    ["read c <<< security; rm -rf $c"],
+    ["eval \"echo security\" | xargs rm -rf"],
+    ["c=echo; $c security | xargs rm -rf"],
+    // W7: the file written is named again, or is one a tool runs.
+    ["echo security > l.txt; cat *.txt | xargs rm -rf"],
+    ["echo security > l.txt; xargs rm -rf < l.tx?"],
+    ["echo security > L.TXT; xargs rm -rf < l.txt"],
+    ["cat > l.txt <<EOF; xargs rm -rf < $(ls l.*)\nsecurity\nEOF"],
+    ["echo \"rm -rf security\" > x.sh; sh *.sh"],
+    ["echo \"rm -rf security\" > .git/hooks/pre-commit; git commit --allow-empty -qm x"],
+    ["echo \"rm -rf security\" > .husky/pre-commit && git commit --allow-empty -qm x"],
+    ["echo security > l.txt; F=l.txt; xargs rm -rf < $F"],
+  ]) {
+    stagedOnly(`asks${tool ? ` (${tool})` : ""}: ${show(command)}`, () => {
+      const out = run(command, { tool });
+      assert.equal(decisionOf(out), "ask", `${show(command)} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const [command, tool] of [
+    // Plain commands keep every exemption. Brackets inside quotes are text.
+    ["git add -A && git commit -m \"fix(security): close the gap\""],
+    ["git add -A && git commit -m \"$(cat <<'EOF'\nfix(security): close the gap\n\nDetails.\nEOF\n)\""],
+    ["gh pr create --title \"security (part 2)\" --body \"see {notes}\""],
+    ["grep -rn security src/*.js docs"],
+    ["git log --oneline | grep -i security | head -5"],
+    ["echo \"## Security\" >> README.md && git status"],
+    ["npm run security && npm test"],
+    ["pytest -k security"],
+    ["git commit -m \"security\"", "PowerShell"],
+    ["Get-Content README.md | Select-String security", "PowerShell"],
+  ]) {
+    stagedOnly(`silent${tool ? ` (${tool})` : ""}: ${show(command)}`, () => {
+      expectSilent(run(command, { mode: "bypassPermissions", tool }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

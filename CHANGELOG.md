@@ -233,6 +233,22 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **The bare word `security` is text only in a plain command (BUG-080,
+  re-probe 6 G2).** The exemptions for a read-only stage, a test runner,
+  a message, a script name and a write to an ordinary file trusted the
+  reader's split of the command. `( echo security ) | xargs rm -rf`,
+  `Remove-Item -Recurse -Force (Get-Item security)`,
+  `printf -v c security; rm -rf $c`,
+  `git() { rm -rf "$3"; }; git commit -m security` and
+  `echo security > l.txt; cat *.txt | xargs rm -rf` were silent and
+  deleted the scanner. A command with a subshell, a group, a case, a
+  process substitution, a function or alias definition, eval, source,
+  read, `printf -v`, a variable as its command, or a PowerShell
+  parenthesised expression now earns no exemption, and neither does a
+  stage followed by an argument with a glob, a variable or a
+  substitution. A file under `.git/` or `.husky/` is not an ordinary
+  file.
+
 - **A cd with an option, or CDPATH, is a location the resolver does not
   know (BUG-080, re-probe 6 G3).** `cd -P src/a && npx rimraf
   ../../security` was resolved as if the directory were named `-P`,

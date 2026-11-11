@@ -1497,6 +1497,67 @@ function scriptNameSpans(stage) {
   return [[plain[1].start, plain[1].end]];
 }
 
+// Commands that make a stage, and with it the whole command, not plain
+// (re-probe 6, G2): each runs text as a command, defines one, or reads a
+// value into a variable a later stage can run.
+const NOT_PLAIN_COMMANDS = new Set(["case", "eval", "source", ".", "read", "mapfile", "readarray", "function", "alias",
+  "invoke-expression", "iex", "&"]);
+const quotesOut = (raw) => raw.replace(/'[^']*'|"(?:\\[\s\S]|[^"\\])*"/g, "");
+const singleQuotesOut = (raw) => raw.replace(/'[^']*'/g, "");
+const isRedirect = (op) => op !== undefined && /[<>]/.test(op) && op !== "<<" && op !== "<<-";
+
+/**
+ * Whether a command is plain: stages of a command and its arguments,
+ * joined by pipes, `&&`, `||`, `;` and newlines, and nothing else
+ * (re-probe 6, G2). Only a plain command earns an exemption in
+ * bareWordText(), because the exemptions rest on the reader's split of
+ * the command into stages, and the shell splits these differently:
+ *   - a ( ) subshell, a { } group, a case arm, a process substitution:
+ *     what a stage inside prints is piped or redirected on after the
+ *     closing bracket; in PowerShell ( ) is an expression whose value is
+ *     an argument or the object of a member call;
+ *   - a function or alias definition, which replaces the program a later
+ *     stage names (git() { rm -rf "$3"; }; git commit -m security);
+ *   - eval, source, read, mapfile and `printf -v`, which run text or put
+ *     it in a variable;
+ *   - a command word that is a variable or a substitution ($c security);
+ *   - a glob, a variable or a substitution in a redirect target.
+ * Brackets inside quotes are text (git commit -m "fix(security): x").
+ *
+ * @returns {{ lastOpen: number }|null} null when the command is not plain;
+ *   else the place of its last argument that holds a glob, a variable or a
+ *   substitution (-1 when none). Such an argument can name a file again or
+ *   carry a word on, so a stage is exempt only when none comes after it.
+ */
+function plainCommand(text, tokens) {
+  let first = true;
+  let stageName = "";
+  let lastOpen = -1;
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (tok.word === undefined) {
+      if (tok.op === "(" || tok.op === ")") return null;
+      if (CONTROL_OPERATORS.has(tok.op)) first = true;
+      continue;
+    }
+    const raw = text.slice(tok.start, tok.end);
+    const bare = quotesOut(raw);
+    if (bare === "{" || bare === "}" || /[()]/.test(bare)) return null;
+    const open = (/[*?[]/.test(bare) && bare !== "[" && bare !== "[[") || /[$`]/.test(singleQuotesOut(raw));
+    const redirected = isRedirect(tokens[i - 1]?.op);
+    if (first && !redirected) {
+      first = false;
+      stageName = commandName(tok.word);
+      if (open || NOT_PLAIN_COMMANDS.has(stageName)) return null;
+    } else if (stageName === "printf" && tok.word === "-v") return null;
+    else if (open) {
+      if (redirected) return null;
+      lastOpen = tok.start;
+    }
+  }
+  return { lastOpen };
+}
+
 /**
  * A command's text with the places blanked where a bare guarded word
  * ("security") is not a file a program could act on (re-probe 5, F1):
@@ -1517,6 +1578,11 @@ function scriptNameSpans(stage) {
  * trap, a git config value, inline code and a heredoc fed to anything
  * that does not only read all run.
  *
+ * None of this is earned unless the whole command is plain
+ * (plainCommand(); re-probe 6, G2), and a stage is exempt only when no
+ * argument after it holds a glob, a variable or a substitution. A comment
+ * is blanked either way: it is not part of the command.
+ *
  * @param {((word: string) => boolean)|null} plainSink - whether a redirect
  *   target, as spelled, is a file that is neither Guardian's nor watched
  */
@@ -1524,9 +1590,19 @@ function bareWordText(text, dialect, plainSink = null) {
   const { tokens, heredocs, comments, uncertain } = lexShell(text, dialect);
   if (uncertain) return text;
   const blank = [...comments];
+  const blanked = () => {
+    let out = text;
+    for (const [a, b] of blank) out = `${out.slice(0, a)}${" ".repeat(b - a)}${out.slice(b)}`;
+    return out;
+  };
+  const plain = plainCommand(text, tokens);
+  if (!plain) return blanked();
+  /** Whether nothing after `end` can name a file again or carry a word on. */
+  const earned = (end) => plain.lastOpen < end;
+  // Without case: on Windows and macOS L.TXT and l.txt are one file.
   const namedOnce = (file) => {
-    const base = file.replace(/\\/g, "/").split("/").pop();
-    return base !== "" && tokens.filter((tok) => tok.word?.includes(base)).length === 1;
+    const base = file.replace(/\\/g, "/").split("/").pop().toLowerCase();
+    return base !== "" && tokens.filter((tok) => tok.word?.toLowerCase().includes(base)).length === 1;
   };
   const sink = plainSink && ((word) => namedOnce(word) && plainSink(word));
   const inert = (body) => !body.expands || !/[$`]/.test(body.text);
@@ -1553,13 +1629,14 @@ function bareWordText(text, dialect, plainSink = null) {
     const moves = (s) => DIRECTORY_MOVERS.has(commandName(s[0].word));
     let reading = pipeline.length;
     while (reading > 0 && !moves(pipeline[reading - 1]) && onlyReads(text.slice(pipeline[reading - 1][0].start, to), dialect, 0, sink)) reading--;
-    if (reading < pipeline.length) {
+    if (reading < pipeline.length && earned(to)) {
       const from = pipeline[reading][0].start;
       blank.push([from, to]);
       for (const { at, body } of bodies) if (at >= from && inert(body)) blank.push([body.start, body.end]);
     }
     for (const s of pipeline.slice(0, reading)) {
       const whole = [s[0].start, s.at(-1).end];
+      if (!earned(whole[1])) continue;
       if (isTestRun(s.map((tok) => tok.word)) && lexShell(text.slice(...whole), dialect).subs.length === 0) blank.push(whole);
       else blank.push(...[...messageSpans(s), ...scriptNameSpans(s)].filter(substitutionsRead));
     }
@@ -1575,9 +1652,7 @@ function bareWordText(text, dialect, plainSink = null) {
     }
   }
   endPipeline();
-  let out = text;
-  for (const [a, b] of blank) out = `${out.slice(0, a)}${" ".repeat(b - a)}${out.slice(b)}`;
-  return out;
+  return blanked();
 }
 
 /**
@@ -1666,11 +1741,13 @@ function guardedNameIn(texts, dialect, cwd, root, watches = () => false) {
     // (npx rimraf security), a command string (trap 'rm -rf security'
     // EXIT), a literal in inline code (rmSync('security')).
     // A redirect target that is spelled out, from every folder the
-    // command can be in, and is neither in Guardian's folders nor watched.
+    // command can be in, and is neither in Guardian's folders nor watched,
+    // nor under .git or .husky, whose files git runs (hooks, config).
     const plainSink = (word) => certain && !/[$`*?[\]{}]/.test(word) && bases.every((base) => {
       const file = path.resolve(base, drivePath(word.replace(/^~(?=$|\/)/, os.homedir())));
       const key = watchKey(file);
-      return !guardedFolders.some((folder) => key === folder || key.startsWith(`${folder}/`)) && !watches(file);
+      return !guardedFolders.some((folder) => key === folder || key.startsWith(`${folder}/`)) && !watches(file) &&
+        !/\/\.(?:git|husky)\//.test(key);
     });
     for (const view of nameViews(bareWordText(text, dialect, plainSink))) {
       for (const { name, re } of WORD_FOLDER_PATTERNS) {
