@@ -4454,7 +4454,8 @@ describe("PreToolUse hook - a later command is not downstream (G2b)", () => {
     ["git commit -m security | xargs rm -rf"],
     ["npm run security | xargs npx rimraf"],
     // The file written is named again: a glob or a brace that matches it, a substitution.
-    ["echo \"## Security\" >> README.md && git add *.md"],
+    // (In git add the glob does not count: re-probe 7, cost (b).)
+    ["echo \"## Security\" >> README.md && npx prettier --write *.md"],
     ["echo \"rm -rf security\" > x.sh; sh ./x.s?"],
     ["echo \"rm -rf security\" > x.sh; sh x.{sh,}"],
     ["echo security > l.txt; rm -rf \"$(cat l.*)\""],
@@ -5327,6 +5328,146 @@ describe("PreToolUse hook - a path stuck to an option that names no write target
     stagedOnly(`asks: ${command}`, () => {
       const out = runGuarded(command);
       assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// RE-PROBE 7, COST (b) (staged): plainness is judged for the statement
+// that holds the exempt word and for what can reach it; a file is named
+// again only in a stage that could run it or hand its content to a
+// program; a substitution known to say no name names nothing. The same
+// change closes what the whole-command rule let through: an exempt stage
+// inside a compound command, trap, history, exec with a redirect, and a
+// name split by a variable the command does not set.
+
+describe("PreToolUse hook - plainness by statement, and what names a file again (re-probe 7, cost (b))", () => {
+  for (const command of [
+    // Limit 3: a quoted heredoc fed to cat says what is written in it.
+    "echo \"## Security\" >> README.md && git commit -m \"$(cat <<'EOF'\ndocs: security section\n\nMore text.\nEOF\n)\"",
+    "echo \"## Security\" >> README.md && gh pr create --title \"docs\" --body \"$(cat <<'EOF'\nAdds a security section.\nEOF\n)\"",
+    // Named again in a stage that neither runs the file nor hands its
+    // content to a program.
+    "echo \"## Security\" >> README.md && git add README.md && git commit -m \"docs: security section\"",
+    "echo \"## Security\" >> README.md && git add *.md",
+    "echo \"## Security\" >> README.md && git diff README.md",
+    "echo \"## Security\" >> README.md && cat README.md",
+    "echo \"## Security\" >> README.md && wc -l README.md",
+    "echo \"## Security\" >> README.md && head -5 README.md | grep -c Sec",
+    "cat >> README.md <<'EOF'\n## Security\nEOF\ngit add README.md && git commit -m \"docs\"",
+    "echo \"security\" > notes.txt && cat notes.txt",
+    "pytest -k security > out.txt 2>&1; tail -20 out.txt",
+    "npm test -- security 2>&1 | tee test.log; grep -c FAIL test.log",
+    // A substitution that prints a value of git or of the machine.
+    "echo \"## Security\" >> README.md && git push origin \"$(git branch --show-current)\"",
+    "echo \"## Security\" >> README.md && git tag \"v$(date +%F)\"",
+    "cp src/a.js \"backup-$(date +%F).js\" && git commit -m \"security backup\"",
+    "mkdir -p \"out/$(git rev-parse --short HEAD)\" && npm run security",
+    "git add $(git ls-files -m) && git commit -m \"security fix\"",
+    // Another statement's loop, test or subshell.
+    "for f in src/*.ts; do npx prettier --write \"$f\"; done && git commit -am \"security fixes\"",
+    "for f in src/a.ts src/b.ts; do npx eslint --fix \"$f\"; done; npm run security",
+    "if [ -f package-lock.json ]; then npm ci; fi && npm run security",
+    "if [ -d .venv ]; then source .venv/bin/activate; fi; pytest -k security",
+    "(cd src && make) && git commit -m \"security fixes\"",
+    "git commit -m security; for f in a b; do echo $f; done",
+    "git commit -m security; alias ll='ls -la'",
+    // time and ! stand in front of a command.
+    "time pytest -k security",
+    "! grep -q security README.md",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+
+  for (const command of [
+    // A naming that still counts: the file is run, or its content goes
+    // to a program.
+    "echo 'rm -rf security' > x.sh; cat x.sh | sh",
+    "echo 'rm -rf security' > x.sh; cat x.sh | head -3 | sh",
+    "echo 'rm -rf security' > x.sh; git add x.sh; sh x.sh",
+    "echo 'rm -rf security' > x.sh; git add x.sh | sh",
+    "echo 'rm -rf security' > x.sh; cat x.sh > y.sh; sh y.sh",
+    "echo 'rm -rf security' > x.sh; cat x.sh & sh x.sh",
+    "echo 'rm -rf security' > x.sh; ./cat x.sh",
+    "echo 'rm -rf security' > x.sh; git -c core.pager=sh diff x.sh",
+    "echo 'rm -rf security' > x.sh; { cat x.sh; } | sh",
+    "echo 'rm -rf security' > x.sh; cat() { sh \"$1\"; }; cat x.sh",
+    "echo 'rm -rf security' > x.sh; git() { sh \"$2\"; }; git add x.sh",
+    "echo security > l.txt; git commit -F l.txt | xargs rm -rf",
+    "printf \"\\n## Security\\n\" >> README.md && npx prettier --write README.md",
+    // Held (H8): the exempt stage's own redirect counts.
+    "git commit -m security > l.txt; xargs rm -rf < l.txt",
+    // A substitution that can say a name.
+    "echo 'rm -rf security' > x.sh; sh $(git ls-files -o)",
+    "echo 'rm -rf security' > x.sh; sh \"$(ls)\"",
+    "echo 'rm -rf security' > x.sh; sh \"$(cat <<'EOF'\nx.sh\nEOF\n)\"",
+    "echo 'rm -rf security' > x.sh; sh $(date +x.sh)",
+    "echo 'rm -rf security' > x.sh; sh \"$(git rev-parse x.sh)\"",
+    "echo 'rm -rf security' > x.sh; date() { ls; }; sh \"$(date)\"",
+    "echo \"## Security\" >> README.md && gh pr create --body \"$(cat README.md)\"",
+    "cp evil \"$(cat <<'EOF'\n/home/u/bin/git\nEOF\n)\"; git commit -m security",
+    // A name split by a variable the command does not set.
+    "echo 'rm -rf security' > x.sh; sh x$U.sh",
+    "echo 'rm -rf security' > x.sh; sh x.s$U\"h\"",
+    "echo 'rm -rf security' > x.sh; sh x.${U:-sh}",
+    "echo 'rm -rf security' > x0.sh; sh x${#U}.sh",
+    "echo 'rm -rf security' > x0.sh; sh x$?.sh",
+    "echo 'rm -rf security' > x.sh; sh x$1.sh",
+    "printf 'x' > ~/bin/gi$U\"t\"; git commit -m security",
+    "printf 'x' > node_modules/.bin/je${U}st; npx jest security",
+    // The variable of a for loop stands for the loop's words.
+    "echo 'rm -rf security' > x.sh; for f in x; do sh $f.sh; done",
+    "echo 'rm -rf security' > x.sh; for f in *.sh; do sh \"$f\"; done",
+    "echo 'rm -rf security' > x.sh; for f in x; do sh ${f/x/x.sh}; done",
+    "echo 'rm -rf security' > x.sh; for f in x; do f=$f.sh; sh $f; done",
+    "for n in git; do cp evil ~/bin/$n; done; git commit -m security",
+    "for n in gi; do cp evil ~/bin/${n}t; done; git commit -m security",
+    "for f in $(ls ~/bin); do cp evil ~/bin/$f; done; git commit -m security",
+    // An exempt stage inside a compound command or a bracket.
+    "for f in 1; do true; git commit -m security; done | xargs rm -rf",
+    "if true; then :; git commit -m security; fi | xargs rm -rf",
+    "while true; do :; git commit -m security; break; done | xargs rm -rf",
+    "for f in 1; do true; echo security; done | xargs rm -rf",
+    "for f in 1; do true; git commit -m security; done > l.txt; xargs rm -rf < l.txt",
+    "( a; echo security; b ) | xargs rm -rf",
+    "{ a; git commit -m security; b; } | xargs rm -rf",
+    "echo security > >(xargs rm -rf)",
+    "if [ -f x ]; then\nnpm run security\nfi",
+    // Text run in the shell itself, the shell's history, and exec.
+    "trap 'rm -rf \"$_\"' DEBUG; git commit -m security; true",
+    "trap 'rm -rf \"$_\"' EXIT; git commit -m security",
+    "git commit -m security; eval 'rm -rf \"$_\"'",
+    "git commit -m security; e=eval; $e 'rm -rf \"$_\"'",
+    "git commit -m security; rm -rf \"$_\"",
+    "set -o history; git commit -m security; history | xargs rm -rf",
+    "set -o history\ngit commit -m security\nfc -ln -1 | xargs rm -rf",
+    "set -H -o history\ngit commit -m security\nrm -rf !$",
+    "shopt -so history; git commit -m security; history | xargs rm -rf",
+    "exec > l.txt; git commit -m security; exec >&2; xargs rm -rf < l.txt",
+    "exec > l.txt; echo security; exec >&2; xargs rm -rf < l.txt",
+    "exec 3> l.txt; git commit -m security >&3; xargs rm -rf < l.txt",
+    // A command that changes what a later command word runs.
+    "alias git='rm -rf'; git commit -m security",
+    "time hash -p ./g.sh git; git commit -m security",
+    "if true; then alias git='rm -rf'; fi; git commit -m security",
+    "git commit -m security & git() { rm -rf \"$3\"; }",
+    "echo ${c:=security}; rm -rf $c",
+    "c=security; git commit -m x; rm -rf $c",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    "echo \"## Security\" >> README.md; Get-Content README.md",
+    "git add README.md; git commit -m \"security fix\"",
+  ]) {
+    stagedOnly(`silent, PowerShell tool: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions", tool: "PowerShell" }));
     });
   }
 });

@@ -233,6 +233,19 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Plainness is judged by statement, and a file is named again only
+  where it could run (BUG-080, re-probe 7 cost b).** `echo "## Security"
+  >> README.md && git add README.md && git commit -m "docs"`, the same
+  with Claude Code's heredoc commit message, and a `for` loop before a
+  commit were denied in bypass mode. A naming now counts only in a
+  stage that could run the file or hand its content to a program, a
+  quoted heredoc fed to `cat` names nothing, and a loop or a subshell
+  in another statement costs an exempt stage nothing. Closed with it:
+  an exempt stage inside a loop that is piped on (`for ...; do ...; git
+  commit -m security; done | xargs rm -rf`), `trap` with `$_`, `exec >
+  file`, the shell's history, and a file named again through an unset
+  variable (`sh x$U.sh`) were silent.
+
 - **A compiler's include folder above the project is not a write
   (BUG-074, re-probe 7 cost a).** `gcc -I.. -c a.c`, `ld -L.. a.o` and
   `cmake -S.. -Bbuild` at a project root were denied in bypass mode:

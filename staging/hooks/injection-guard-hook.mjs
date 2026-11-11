@@ -1746,16 +1746,32 @@ function scriptNameSpans(stage) {
   return own && plain[0] && !own.has(plain[0].word) ? [[plain[0].start, plain[0].end]] : [];
 }
 
-// Commands that make a stage, and with it the whole command, not plain
-// (re-probe 6, G2): each runs text as a command, defines one, or reads a
-// value into a variable a later stage can run.
-const NOT_PLAIN_COMMANDS = new Set(["case", "eval", "source", ".", "read", "mapfile", "readarray", "function", "alias",
-  "invoke-expression", "iex", "&",
-  // Each of these makes a later command word run something else
-  // (re-probe 7, H6): hash -p ./g.sh git, enable -f ./x.so git,
-  // Set-Alias pytest Remove-Item, doskey git=rd, and cmd's path, which
-  // sets PATH.
+// Commands that make the whole command not plain, wherever they stand
+// (re-probe 6, G2): each runs text as a command in the shell itself, so
+// it can read what any other command left behind.
+const RUNS_TEXT_COMMANDS = new Set(["eval", "source", ".", "invoke-expression", "iex", "&"]);
+// The same for bash and cmd (re-probe 7, cost (b)): `trap` runs its text
+// before or after other commands, where $_ is the last word of an exempt
+// stage, and `history` and `fc` print the commands already run.
+const SHELL_RUNS_TEXT_COMMANDS = new Set(["trap", "history", "fc"]);
+// Commands that make every statement after them not plain: each defines
+// a command, reads a value into a variable a later stage can run, or
+// makes a later command word run something else (re-probe 7, H6: hash -p
+// ./g.sh git, enable -f ./x.so git, Set-Alias pytest Remove-Item, doskey
+// git=rd, and cmd's path, which sets PATH). `exec` with a redirect sends
+// the output of every later command to a file (exec > l.txt).
+const NOT_PLAIN_COMMANDS = new Set(["case", "read", "mapfile", "readarray", "function", "alias", "exec",
   "hash", "enable", "set-alias", "sal", "new-alias", "nal", "doskey", "path"]);
+// The words that open and close a compound command in bash, and the ones
+// a command follows. What a command inside a compound prints goes where
+// the compound's own pipe or redirect sends it.
+const BLOCK_OPENERS = new Set(["if", "for", "while", "until", "case", "select"]);
+const BLOCK_CLOSERS = new Set(["fi", "done", "esac"]);
+const COMMAND_PREFIXES = new Set(["if", "while", "until", "then", "do", "else", "elif", "!", "time"]);
+// `set` turning on the shell's history, which keeps the words of every
+// command for `!$` and `history` to hand on: -o history, -o histexpand,
+// -H alone or in a cluster.
+const SET_HISTORY = /^(?:hist\w*|[-+][A-Za-z]*H[A-Za-z]*)$/;
 // The script a Python virtual environment is entered with. Sourcing it
 // is everyday work and leaves a command plain (H6).
 const VENV_ACTIVATE = /^(?:\.[\\/])?\.?venv[\\/](?:bin|Scripts)[\\/]activate(?:\.(?:sh|fish|csh|ps1|bat))?$/i;
@@ -1847,55 +1863,80 @@ const VARIABLE_SETTERS = new Set(["read", "mapfile", "readarray", "declare", "ty
 const PS_VARIABLE_SETTERS = new Set(["set-variable", "sv", "set", "new-variable", "nv"]);
 
 /**
- * Whether a command is plain: stages of a command and its arguments,
- * joined by pipes, `&&`, `||`, `;` and newlines, and nothing else
- * (re-probe 6, G2). Only a plain command earns an exemption in
- * bareWordText(), because the exemptions rest on the reader's split of
- * the command into stages, and the shell splits these differently:
- *   - a ( ) subshell, a { } group, a case arm, a process substitution:
- *     what a stage inside prints is piped or redirected on after the
- *     closing bracket;
- *   - a PowerShell ( ) expression, whose value is an argument or the
- *     object of a member call, unless the statement it stands in only
- *     reads (G2b): `(Get-Content README.md) -match "security"` is plain,
- *     `Remove-Item (Get-Item security)` and `rimraf (gi security)` are not;
- *   - a function or alias definition, which replaces the program a later
- *     stage names (git() { rm -rf "$3"; }; git commit -m security);
- *   - eval, source, read, mapfile and `printf -v`, which run text or put
- *     it in a variable;
- *   - any variable at all, when the command holds a setter the reader
- *     does not follow (VARIABLE_SETTERS, printf -v in any spelling, a
- *     PowerShell parameter that names a variable; re-probe 7, H5);
- *   - a command word that is a variable or a substitution ($c security);
+ * Which statements of a command are plain: stages of a command and its
+ * arguments, joined by pipes, and nothing else (re-probe 6, G2). Only a
+ * stage in a plain statement earns an exemption in bareWordText(),
+ * because the exemptions rest on the reader's split of the command into
+ * stages, and the shell splits these differently.
+ *
+ * Plainness is judged for each statement (the commands between `;`,
+ * `&&`, `||`, `&` and newlines, outside every bracket) and for what can
+ * reach it (re-probe 7, cost (b)). PowerShell is judged as one statement.
+ *
+ * Nothing in the command is plain when it holds:
+ *   - eval, source, trap, history or fc, which run text in the shell
+ *     itself or hand on the words of commands already run, and `set` or
+ *     `shopt` turning the shell's history on;
+ *   - a command word that is a glob or holds a variable or a
+ *     substitution ($c security): it can be any command, eval included;
+ *   - $_, the last word of whichever command ran before it;
+ *   - brackets or compound words that do not pair up;
+ *   - in PowerShell, a ( ) expression whose statement does more than
+ *     read (G2b): `(Get-Content README.md) -match "security"` is plain,
+ *     `Remove-Item (Get-Item security)` and `rimraf (gi security)` are
+ *     not; a script block; a word on the env: drive; and every form
+ *     listed below.
+ *
+ * No statement after one of these is plain (none at all when the
+ * command sends something to the background), since each changes what a
+ * later command word runs or where its output goes:
+ *   - a function or alias definition (git() { rm -rf "$3"; }; git commit
+ *     -m security), hash, enable, Set-Alias, doskey (re-probe 7, H6);
+ *   - PATH set to anything but absolute folders outside the project
+ *     (PATH=./bin, an empty entry, a variable other than $PATH and
+ *     $HOME), and an environment assignment whose name is not on
+ *     HARMLESS_ENVIRONMENT (H6);
+ *   - read, mapfile and case;
+ *   - exec, which with a redirect sends the output of every later
+ *     command to a file (exec > l.txt).
+ *
+ * A statement is not plain itself when it holds:
+ *   - a ( ) subshell, a { } group, a process substitution, or a compound
+ *     command (if, for, while, until, case, select): what a stage inside
+ *     prints is piped or redirected on after the closing bracket or word
+ *     (for f in 1; do true; git commit -m security; done | xargs rm -rf);
+ *   - an unquoted substitution, ${NAME:=value}, `printf -v`;
  *   - an argument or redirect target that holds a variable the same
- *     command can set (c=security; rm -rf $c, and $_ after any command).
- *     A variable the command does not set ($BRANCH, $HOME) carries
- *     nothing over from an exempt stage (G2b);
+ *     command can set (c=security; rm -rf $c), or any variable at all
+ *     when the command holds a setter the reader does not follow
+ *     (VARIABLE_SETTERS, printf -v in any spelling; re-probe 7, H5). A
+ *     variable the command does not set ($BRANCH, $HOME) carries nothing
+ *     over from an exempt stage (G2b);
  *   - a glob, a brace list or a substitution in a redirect target.
  * Brackets inside quotes are text (git commit -m "fix(security): x").
  *
  * A later command joined by `&&` or `;` is not downstream of an exempt
  * stage: only a stage that receives its output is, and the pipeline rule
  * of bareWordText() covers that (G2b). What a later command can still do
- * is name again a file an exempt stage wrote, so the arguments that could
- * are returned.
+ * is name again a file an exempt stage wrote, so the words that could
+ * are returned in `opens`, from every statement.
  *
- * A command can also put another program in the place of the one a
- * later stage names (re-probe 7, H6). hash, enable, alias, Set-Alias and
- * a function definition make it not plain, and so does PATH set to
- * anything but absolute folders outside the project (PATH=./bin, an
- * empty entry, a variable other than $PATH and $HOME). PATH set to
- * such folders, and a Python virtual environment sourced, leave it
- * plain and are reported in `redirects`: bareWordText() then trusts a
- * program only when nothing else in the command could have written one.
+ * PATH set to absolute folders outside the project, and a Python virtual
+ * environment sourced, leave a command plain and are reported in
+ * `redirects`: bareWordText() then trusts a program only when nothing
+ * else in the command could have written one (H6).
  *
  * @param {((spelled: string) => boolean)|null} outside - whether a path,
  *   as spelled, is absolute and outside the project
- * @returns {{ opens: Array<{ start: number, word: string, sub: boolean }>, reads: Array<[number, number]>, redirects: boolean }|null}
- *   null when the command is not plain; else `opens`, the arguments that
- *   hold a glob, a brace list or a substitution, `reads`, the place of
- *   each PowerShell statement with a ( ) that only reads, and
- *   `redirects`, whether PATH or a virtual environment is set
+ * @returns {{ opens: Array<{ start: number, end: number, word: string, sub: boolean, loose: boolean, expanded?: boolean }>, reads: Array<[number, number]>, redirects: boolean, at: (pos: number) => boolean, replacedFrom: number }|null}
+ *   null when nothing in the command is plain; else `opens`, the words
+ *   that hold a glob, a brace list, a substitution (`sub`) or something
+ *   the reader cannot spell out (`loose`), with the words a for loop's
+ *   variable stands for (`expanded`); `reads`, the place of each
+ *   PowerShell statement with a ( ) that only reads; `redirects`, whether
+ *   PATH or a virtual environment is set; `at`, whether the statement at
+ *   a place in the text is plain; and `replacedFrom`, the place from
+ *   which a command word may run something else
  */
 function plainCommand(text, tokens, dialect, outside = null) {
   // A PowerShell ( ) is an expression. It is no hazard when the statement
@@ -1928,6 +1969,8 @@ function plainCommand(text, tokens, dialect, outside = null) {
   const sets = new Set(["_", ...(dialect === "powershell" ? PS_FILLED_VARIABLES : [])]);
   let positional = false;
   let settable = false; // a setter the reader does not follow: any variable may be set (H5)
+  const assignedNames = new Set(); // the variables an assignment gives a value
+  const loops = new Map(); // the name of each for loop with the words it takes, or null
   tokens.forEach((tok, i) => {
     if (tok.word === undefined) return;
     const name = commandName(tok.word);
@@ -1936,71 +1979,226 @@ function plainCommand(text, tokens, dialect, outside = null) {
       if (PS_VARIABLE_SETTERS.has(name) || PS_VARIABLE_OPTION.test(tok.word.split(":")[0])) settable = true;
     } else if (VARIABLE_SETTERS.has(name) || (name === "printf" && /^-[A-Za-z]*v/.test(tokens[i + 1]?.word ?? ""))) settable = true;
     const assigned = /^([A-Za-z_]\w*)\+?=/.exec(tok.word);
-    if (assigned) sets.add(assigned[1]);
-    for (const m of singleQuotesOut(text.slice(tok.start, tok.end)).matchAll(/\$\{([A-Za-z_]\w*):?=/g)) sets.add(m[1]);
-    if (tok.word === "for" || tok.word === "select") sets.add(tokens[i + 1]?.word ?? "");
+    if (assigned) assignedNames.add(assigned[1]);
+    for (const m of singleQuotesOut(text.slice(tok.start, tok.end)).matchAll(/\$\{([A-Za-z_]\w*):?=/g)) assignedNames.add(m[1]);
+    if (tok.word === "for" || tok.word === "select") {
+      const name = tokens[i + 1]?.word ?? "";
+      sets.add(name);
+      // for NAME in WORDS: the words NAME takes, when each is spelled out
+      // and one loop alone uses the name.
+      let spelled = tok.word === "for" && tokens[i + 2]?.word === "in" && !loops.has(name);
+      const words = [];
+      for (let k = i + 3; spelled && tokens[k]?.word !== undefined; k++) {
+        if (/[$`]/.test(singleQuotesOut(text.slice(tokens[k].start, tokens[k].end)))) spelled = false;
+        words.push(tokens[k].word);
+      }
+      loops.set(name, spelled ? words : null);
+    }
     if (tok.word === "set") positional = true;
   });
+  for (const name of assignedNames) sets.add(name);
   const setsOneOf = (raw) => [...singleQuotesOut(raw).matchAll(VARIABLE_REFERENCE)]
     .some((m) => settable || sets.has(dialect === "powershell" ? m[1].toLowerCase() : m[1]) || (positional && /^[\d@*]/.test(m[1])));
   const substitution = DIALECTS[dialect].backticks ? /\$\(|`/ : /\$\(/;
+  /**
+   * The words a word can be when the one variable in it that the command
+   * sets is the name of a `for` loop over words spelled out, written
+   * $NAME or ${NAME} and assigned nowhere else: `"$f"` in `for f in
+   * src/*.ts` is src/*.ts. Null when the reader cannot say.
+   */
+  const loopWords = (raw, word) => {
+    const names = new Set([...singleQuotesOut(raw).matchAll(VARIABLE_REFERENCE)].map((m) => m[1])
+      .filter((name) => sets.has(name) || (positional && /^[\d@*]/.test(name))));
+    const [name] = names;
+    const words = names.size === 1 && !settable && !assignedNames.has(name) ? loops.get(name) : null;
+    if (!words || !/^[A-Za-z_]\w*$/.test(name)) return null;
+    const reference = new RegExp(`\\$\\{${name}\\}|\\$${name}(?!\\w)`, "g");
+    if ([...singleQuotesOut(raw).replace(reference, "").matchAll(VARIABLE_REFERENCE)].some((m) => m[1] === name)) return null;
+    return words.map((value) => word.replace(reference, () => value));
+  };
 
+  // PowerShell is judged as one: its ( ) and { } are expressions and
+  // script blocks, which this reader does not split into statements.
+  const whole = dialect === "powershell";
   let first = true;
   let stageName = "";
   let redirects = false;
   const opens = [];
+  // The statements of the command, each with whether it is plain, and
+  // the place of the first command that changes what a later command
+  // word runs or where its output goes.
+  const statements = [];
+  let current = null;
+  let depth = 0;
+  let replacedFrom = Infinity;
+  /** Marks the statement being read not plain; true when the whole command is judged as one. */
+  const spoils = (tok, replaces = false) => {
+    if (whole) return true;
+    current.plain = false;
+    if (replaces) replacedFrom = Math.min(replacedFrom, tok.start);
+    return false;
+  };
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i];
+    current ??= { start: tok.start, end: tok.end, plain: true };
+    current.end = tok.end;
     if (tok.word === undefined) {
-      if ((tok.op === "(" || tok.op === ")") && dialect !== "powershell") return null;
+      if ((tok.op === "(" || tok.op === ")") && !whole) {
+        // name() defines a function; any other bracket is a subshell, a
+        // process substitution or a test.
+        spoils(tok, tok.op === "(" && tokens[i + 1]?.op === ")");
+        depth += tok.op === "(" ? 1 : -1;
+        if (depth < 0) return null;
+      }
       if (CONTROL_OPERATORS.has(tok.op)) first = true;
+      if (depth === 0 && (STATEMENT_ENDS.has(tok.op) || tok.op === "&")) {
+        statements.push(current);
+        current = null;
+      }
       continue;
     }
     const raw = text.slice(tok.start, tok.end);
     const bare = quotesOut(raw);
-    if (bare === "{" || bare === "}" || /[()]/.test(bare)) return null;
+    if (bare === "{" || bare === "}") {
+      if (spoils(tok)) return null;
+      depth += bare === "{" ? 1 : -1;
+      if (depth < 0) return null;
+      continue;
+    }
+    if (/[()]/.test(bare) && spoils(tok)) return null;
+    const unquoted = singleQuotesOut(raw);
+    if (!whole) {
+      // $_ is the last word of the command before it, whichever that was.
+      if ([...unquoted.matchAll(VARIABLE_REFERENCE)].some((m) => m[1] === "_")) return null;
+      // ${NAME:=value} sets a variable where it stands.
+      if (/\$\{[A-Za-z_]\w*:?=/.test(unquoted)) spoils(tok);
+    }
     // PATH decides which program a name runs. Each entry must be $PATH
     // itself or an absolute folder outside the project ($HOME and ~ are
     // read as the home folder); a relative or empty entry is the
     // folder the shell is in (H6).
-    const pathSet = dialect === "powershell" ? null : /^PATH\+?=([\s\S]*)$/i.exec(tok.word);
+    const pathSet = whole ? null : /^PATH\+?=([\s\S]*)$/i.exec(tok.word);
     if (pathSet) {
       const safe = outside !== null && pathSet[1].split(":").every((entry) =>
         /^\$\{?PATH\}?$/.test(entry) || outside(entry.replace(/^\$\{?HOME\}?(?=$|\/)/, "~")));
-      if (!safe) return null;
-      redirects = true;
+      if (safe) redirects = true;
+      else spoils(tok, true);
       continue;
     }
     const pattern = (/[*?[]/.test(bare) && bare !== "[" && bare !== "[[") || BRACE_LIST.test(bare);
-    const sub = substitution.test(singleQuotesOut(raw));
+    const sub = substitution.test(unquoted);
     const redirected = isRedirect(tokens[i - 1]?.op);
     // A value put in the environment, or in a variable that is already
     // there, can be what a later program runs. Only the names known to
-    // be harmless leave the command plain (H6). PowerShell reaches the
+    // be harmless leave what follows plain (H6). PowerShell reaches the
     // environment through its env: drive ($env:X is a variable word).
-    if (dialect === "powershell") {
+    if (whole) {
       if (/^env:/i.test(tok.word)) return null;
     } else if (!redirected && (first || ENVIRONMENT_SETTERS.has(stageName))) {
       const assigned = ASSIGNMENT.exec(tok.word);
-      if (assigned && !HARMLESS_ENVIRONMENT.has(assigned[1])) return null;
+      if (assigned && !HARMLESS_ENVIRONMENT.has(assigned[1])) spoils(tok, true);
     }
+    // Set when the reader cannot say what the word is: it holds a
+    // variable the command can set, or stands where a glob or a
+    // substitution decides the command or the file written.
+    let loose = false;
     if (first && !redirected) {
       first = false;
       stageName = commandName(tok.word);
       const next = tokens[i + 1]?.word;
       if ((stageName === "source" || stageName === ".") && next !== undefined && VENV_ACTIVATE.test(next) && tokens[i + 2]?.word === undefined) {
         redirects = true;
+        current.end = tokens[i + 1].end;
         i++;
         continue;
       }
-      if (pattern || /[$`]/.test(singleQuotesOut(raw)) || NOT_PLAIN_COMMANDS.has(stageName)) return null;
-      // builtin hash, command enable: the wrapper is not the command.
-      if ((stageName === "builtin" || stageName === "command") && next !== undefined && NOT_PLAIN_COMMANDS.has(commandName(next))) return null;
-    } else if (stageName === "printf" && /^-[A-Za-z]*v/.test(tok.word) && tokens[i - 1]?.word !== undefined && commandName(tokens[i - 1].word) === "printf") return null;
-    else if (setsOneOf(raw) || (redirected && (pattern || sub))) return null;
-    else if (pattern || sub) opens.push({ start: tok.start, word: tok.word, sub });
+      if (dialect === "bash" && raw === tok.word) {
+        const closes = BLOCK_CLOSERS.has(raw);
+        if (BLOCK_OPENERS.has(raw) || closes) {
+          current.plain = false;
+          depth += closes ? -1 : 1;
+          if (depth < 0) return null;
+        }
+        // The word after one of these is a command too.
+        if (COMMAND_PREFIXES.has(raw)) {
+          first = true;
+          continue;
+        }
+        if (closes) continue;
+      }
+      // A command word that is a glob or holds a variable or a
+      // substitution can be any command, eval included.
+      if (pattern || /[$`]/.test(unquoted)) return null;
+      // builtin hash, command eval: the wrapper is not the command.
+      const run = (stageName === "builtin" || stageName === "command") && next !== undefined ? commandName(next) : stageName;
+      if (RUNS_TEXT_COMMANDS.has(run) || (!whole && SHELL_RUNS_TEXT_COMMANDS.has(run))) return null;
+      if (!whole && (run === "set" || run === "shopt")) {
+        for (let k = i + 1; tokens[k]?.word !== undefined; k++) if (SET_HISTORY.test(tokens[k].word)) return null;
+      }
+      if (NOT_PLAIN_COMMANDS.has(run) && spoils(tok, true)) return null;
+    } else if (stageName === "printf" && /^-[A-Za-z]*v/.test(tok.word) && tokens[i - 1]?.word !== undefined && commandName(tokens[i - 1].word) === "printf") {
+      if (spoils(tok)) return null;
+    } else if (setsOneOf(raw) || (redirected && (pattern || sub))) {
+      if (spoils(tok)) return null;
+      const words = redirected || sub ? null : loopWords(raw, tok.word);
+      for (const word of words ?? []) opens.push({ start: tok.start, end: tok.end, word, sub: false, loose: false, expanded: true });
+      loose = words === null;
+    }
+    if (pattern || sub || loose) opens.push({ start: tok.start, end: tok.end, word: tok.word, sub: sub || loose, loose });
   }
-  return { opens, reads, redirects };
+  if (depth !== 0) return null;
+  if (current) statements.push(current);
+  // A command sent to the background runs beside what follows it, so
+  // "after" is not known there.
+  if (replacedFrom < Infinity && tokens.some((tok) => tok.op === "&")) replacedFrom = -1;
+  const at = (pos) => whole || statements.some((st) => pos >= st.start && pos < st.end && st.plain && st.start < replacedFrom);
+  return { opens, reads, redirects, at, replacedFrom: whole ? Infinity : replacedFrom };
+}
+
+// Programs that print a value of the machine or of git's state, with the
+// arguments each may take: never the name of a file the command wrote,
+// unless an argument spells it (date +x.sh).
+const VALUE_PRINTERS = {
+  date: /^(?:\+.*|-u|--utc|--universal|-I\w*|--iso-8601(?:=\w+)?|-R|--rfc-email|--rfc-3339=\w+)$/,
+  whoami: /^$/,
+  hostname: /^$/,
+  nproc: /^$/,
+  pwd: /^-[LP]$/,
+  uname: /^-[asnrvmpio]+$/,
+  id: /^-[ugnrG]+$/,
+};
+const GIT_VALUE_PRINTERS = {
+  "branch": /^--show-current$/,
+  "rev-parse": /^(?:--abbrev-ref|--short(?:=\d+)?|--verify|-q|--quiet|--show-toplevel|--show-prefix|--git-dir|--is-inside-work-tree|--symbolic-full-name|(?:HEAD|@)(?:[~^]\d*)*|@\{(?:u|upstream|push)\})$/,
+  "describe": /^--(?:tags|always|all|long|dirty|exact-match|first-parent|abbrev(?:=\d+)?)$/,
+  "symbolic-ref": /^(?:--short|-q|--quiet|HEAD)$/,
+};
+
+/**
+ * The text a substitution can put in a word, when the reader knows it
+ * (re-probe 7, cost (b)): the body of a quoted heredoc fed to cat, which
+ * the shell hands over as written (Claude Code's commit message form), or
+ * the substitution's own words when it runs a program of VALUE_PRINTERS
+ * or GIT_VALUE_PRINTERS with arguments on its list. Null for any other:
+ * a program that lists files (ls, git ls-files, find) prints the name of
+ * one the command just wrote.
+ * @returns {string|null}
+ */
+function substitutionText(sub, dialect) {
+  const { tokens, subs, heredocs, uncertain } = lexShell(sub, dialect);
+  if (uncertain || subs.length > 0) return null;
+  const words = tokens.filter((tok) => tok.word !== undefined).map((tok) => tok.word);
+  const ops = tokens.filter((tok) => tok.word === undefined && tok.op !== "\n").map((tok) => tok.op);
+  if (ops.length === 1 && (ops[0] === "<<" || ops[0] === "<<-")) {
+    return words.length === 2 && words[0] === "cat" && heredocs.length === 1 && !heredocs[0].expands ? heredocs[0].text : null;
+  }
+  if (ops.length > 0 || words.length === 0) return null;
+  const git = words[0] === "git";
+  const table = git ? GIT_VALUE_PRINTERS : VALUE_PRINTERS;
+  const program = words[git ? 1 : 0];
+  const args = words.slice(git ? 2 : 1);
+  if (program === undefined || !Object.hasOwn(table, program) || (git && args.length === 0)) return null;
+  return args.every((arg) => table[program].test(arg)) ? words.join(" ") : null;
 }
 
 /**
@@ -2023,11 +2221,17 @@ function plainCommand(text, tokens, dialect, outside = null) {
  * trap, a git config value, inline code and a heredoc fed to anything
  * that does not only read all run.
  *
- * None of this is earned unless the whole command is plain
- * (plainCommand(); re-probe 6, G2). A file a reading stage writes counts
- * as named again when a later argument holds a glob or a brace list that
- * expands to its name, or a substitution (G2b). A comment is blanked
- * either way: it is not part of the command.
+ * None of this is earned unless the statement the stage stands in is
+ * plain (plainCommand(); re-probe 6, G2; re-probe 7, cost (b)). A file a
+ * reading stage writes counts as named again when another word holds its
+ * name, in any spelling a variable the command does not set allows
+ * (x$U.sh), or a later word holds a glob or a brace list that expands to
+ * it, or a substitution or a variable the reader cannot spell out (G2b).
+ * A naming does not count in a stage that neither runs the file nor
+ * hands its content to a program (`passive`: cat README.md, git add
+ * README.md, git commit), nor does a substitution known to say no name
+ * (substitutionText()). A comment is blanked either way: it is not part
+ * of the command.
  *
  * Every one of these rests on a program being the one its name says, so
  * a stage earns nothing when the command could have put another program
@@ -2058,20 +2262,54 @@ function bareWordText(text, dialect, plainSink = null, outside = null) {
   const plain = plainCommand(text, tokens, dialect, outside);
   if (!plain) return blanked();
   blank.push(...plain.reads);
-  /** Whether a word with a glob or a brace list in it can expand to a file of this name. */
-  const expandsTo = (word, base) => expandBraces(word).split(/\s+/).some((spelled) => {
+  /**
+   * What a word can spell when a variable in it that the command does
+   * not set is empty or takes the default the word gives: x$U.sh and
+   * x.${U:-sh} are x.sh, x${#U}.sh is x0.sh.
+   */
+  const spellings = (tok) => {
+    if (tok.expanded || !tok.word.includes("$")) return [tok.word];
+    // Read from the text, where the quotes still tell x.s$U"h" from x.s$Uh.
+    const raw = text.slice(tok.start, tok.end);
+    const reference = /\$\{[#!]?[A-Za-z_]\w*(?::?[-+]([^}]*))?[^}]*\}|\$[A-Za-z_]\w*|\$[\d@*#?]/g;
+    const word = (spelled) => lexShell(spelled, dialect).tokens.map((part) => part.word ?? "").join("");
+    return [tok.word, word(raw.replace(reference, "")), word(raw.replace(reference, (m, value) => value ?? (/^\$(?:\{#|[#?]$)/.test(m) ? "0" : "")))];
+  };
+  /** Whether a word, with any glob or brace list in it, can expand to a file of this name. */
+  const expandsTo = (tok, base) => spellings(tok).some((one) => expandBraces(one).split(/\s+/).some((spelled) => {
     const last = spelled.replace(/\\/g, "/").split("/").pop().toLowerCase();
     return last === base || Boolean(globRegex(last)?.test(base));
-  });
-  // A file is named once when one word holds its name and no argument
-  // after that word can name it again: a glob or brace list that expands
-  // to it, or a substitution, whose result is not known. Without case:
-  // on Windows and macOS L.TXT and l.txt are one file.
+  }));
+  /**
+   * Whether a word the reader cannot spell out is known not to hold a
+   * name: every substitution in it says only text substitutionText()
+   * knows, none of it a name `named` finds, and no command before it
+   * can have replaced the program the substitution runs.
+   */
+  const namesNothing = (arg, named) => !arg.loose && arg.start < plain.replacedFrom &&
+    lexShell(text.slice(arg.start, arg.end), dialect).subs.every((inner) => {
+      const said = substitutionText(inner, dialect);
+      return said !== null && !named(said);
+    });
+  // A file is named once when one word holds its name and nothing else
+  // in the command can name it to a stage that could run it or hand its
+  // content to a program: another word that holds the name, a glob or a
+  // brace list that expands to it, or a word the reader cannot spell out
+  // (a substitution, a variable the command sets) after it. A naming in
+  // a stage that is `passive` does not count (re-probe 7, cost (b)).
+  // Without case: on Windows and macOS L.TXT and l.txt are one file.
   const namedOnce = (file) => {
     const base = file.replace(/\\/g, "/").split("/").pop().toLowerCase();
-    const holding = tokens.filter((tok) => tok.word?.toLowerCase().includes(base));
-    return base !== "" && holding.length === 1 &&
-      !plain.opens.some((arg) => arg.start > holding[0].start && (arg.sub || expandsTo(arg.word, base)));
+    if (base === "") return false;
+    const active = (at) => {
+      const from = holder(at);
+      return !from || !passive(from);
+    };
+    // A redirect that writes the file counts in any stage: git commit -m x > l.txt.
+    const holding = tokens.filter((tok, i) => tok.word !== undefined && spellings(tok).some((one) => one.toLowerCase().includes(base)) &&
+      (WRITE_REDIRECTS.has(tokens[i - 1]?.op) || active(tok.start)));
+    return holding.length === 1 && !plain.opens.some((arg) => (background || arg.start > holding[0].start) && active(arg.start) &&
+      ((arg.sub && !namesNothing(arg, (said) => said.toLowerCase().includes(base))) || expandsTo(arg, base)));
   };
   const sink = plainSink && ((word) => namedOnce(word) && plainSink(word));
   const inert = (body) => !body.expands || !/[$`]/.test(body.text);
@@ -2089,6 +2327,10 @@ function bareWordText(text, dialect, plainSink = null, outside = null) {
   let fed = [];
   let heredocsSeen = 0;
   const endStage = () => {
+    // then, do, else and their like stand in front of a command, and
+    // fi, done and esac are no command.
+    while (dialect === "bash" && stage.length > 0 && (COMMAND_PREFIXES.has(stage[0].word) || BLOCK_CLOSERS.has(stage[0].word)) &&
+      text.slice(stage[0].start, stage[0].end) === stage[0].word) stage.shift();
     if (stage.length > 0) stages.push(stage);
     stage = [];
   };
@@ -2125,6 +2367,9 @@ function bareWordText(text, dialect, plainSink = null, outside = null) {
   const kinds = new Map();
   const kind = (s) => {
     if (!kinds.has(s)) {
+      // Whether a file is a sink can turn on what another stage is, and
+      // that on this one: while a stage is being judged it is neither.
+      kinds.set(s, { quiet: false, settled: false });
       const quiet = moves(s) || entersVenv(s) || assigns(s) || onlyReads(text.slice(...place(s)), dialect, 0, null, outside);
       kinds.set(s, { quiet, settled: quiet || exempt(s) || onlyReads(text.slice(...place(s)), dialect, 0, sink, outside) });
     }
@@ -2133,6 +2378,22 @@ function bareWordText(text, dialect, plainSink = null, outside = null) {
   // A command sent to the background runs beside what follows it, so
   // "before" is not known there.
   const background = tokens.some((tok) => tok.op === "&");
+  // git add and git commit put the files they are given in git's store.
+  // Neither runs one or writes one in the working tree.
+  const gitKeeps = (s) => s[0].word === "git" && (s[1]?.word === "add" || s[1]?.word === "commit");
+  /**
+   * Whether a stage neither runs a file it is given nor hands its
+   * content to a program (cost (b)). It stands in a plain statement and
+   * either ends its pipeline as git add or git commit, or only reads
+   * with no redirect to a file, as does every stage after it in its
+   * pipeline; and each of those programs is the one its name says.
+   */
+  const passive = (s) => {
+    const line = pipelines.find(({ stages: among }) => among.includes(s)).stages;
+    const rest = line.slice(line.indexOf(s));
+    if (!plain.at(s[0].start) || !rest.every((one) => trusted(one, [commandName(one[0].word)]))) return false;
+    return (rest.length === 1 && gitKeeps(s)) || onlyReads(text.slice(s[0].start, rest.at(-1).at(-1).end), dialect, 0, null, outside);
+  };
   /**
    * Whether the programs a stage runs are the ones their names say (H6).
    * @param {string[]} names - the programs the stage runs (programNames())
@@ -2145,13 +2406,17 @@ function bareWordText(text, dialect, plainSink = null, outside = null) {
     const stems = names.map(programStem);
     for (const other of all) {
       if (other === s || kind(other).quiet) continue;
-      if (other.slice(1).some((tok) => stems.some((stem) => holdsProgram(tok.word, stem)))) return false;
+      if (other.slice(1).some((tok) => spellings(tok).some((one) => stems.some((stem) => holdsProgram(one, stem))))) return false;
     }
     for (const arg of plain.opens) {
       const from = holder(arg.start);
       if (!from || from === s || kind(from).quiet) continue;
-      if (arg.sub ? (background || arg.start < s[0].start) && !kind(from).settled
-        : stems.some((stem) => PROGRAM_EXTENSIONS.some((ending) => expandsTo(arg.word, `${stem}${ending}`)))) return false;
+      if (stems.some((stem) => PROGRAM_EXTENSIONS.some((ending) => expandsTo(arg, `${stem}${ending}`)))) return false;
+      // A word the reader cannot spell out can be the program's file,
+      // unless its stage writes no file (git add) or what it says is
+      // known and is not the program's name (cost (b)).
+      if (arg.sub && (background || arg.start < s[0].start) && !kind(from).settled && !gitKeeps(from) &&
+        !namesNothing(arg, (said) => stems.some((stem) => holdsProgram(said, stem)))) return false;
     }
     return true;
   };
@@ -2171,6 +2436,9 @@ function bareWordText(text, dialect, plainSink = null, outside = null) {
     });
   };
   for (const { stages: line, bodies } of pipelines) {
+    // Plainness is judged for the statement that holds the pipeline and
+    // what reaches it (cost (b)).
+    if (!plain.at(line[0][0].start)) continue;
     const to = line.at(-1).at(-1).end;
     // The first stage from which the rest of the pipeline only reads.
     let reading = line.length;
