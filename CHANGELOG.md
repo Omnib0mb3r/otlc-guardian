@@ -233,6 +233,13 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A PowerShell script block is read (BUG-080, re-probe 7 H4).**
+  `(Get-Content README.md) -split { Remove-Item -Recurse -Force
+  .claude\hooks }` was silent: a stage that starts with an operator after
+  `( )` counted as reading whatever followed. An operator stage now reads
+  only when the rest of it is operators and values, and a script block
+  only when it compares (`{ $_.Name -like '*.json' }`).
+
 - **A cd with no target, to `-`, or to a home the command sets is not
   followed (BUG-080, re-probe 7 H3).** `cd src && HOME=.. cd && npx rimraf
   security` was silent: the reader went to the real home folder while the

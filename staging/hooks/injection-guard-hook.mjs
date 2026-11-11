@@ -2446,7 +2446,7 @@ const PS_READ_PARAMS = {
   "write-output": ["inputobject", "noenumerate"],
   "write-host": ["object", "nonewline", "separator", "foregroundcolor", "backgroundcolor"],
   "select-object": ["property", "excludeproperty", "expandproperty", "first", "last", "skip", "skiplast", "unique", "index", "wait", "inputobject", "casesensitive"],
-  "where-object": ["property", "value", "inputobject", "is", "isnot", "not", ...PS_WHERE_OPERATORS, ...PS_WHERE_OPERATORS.flatMap((o) => [`c${o}`, `i${o}`])],
+  "where-object": ["property", "value", "filterscript", "inputobject", "is", "isnot", "not", ...PS_WHERE_OPERATORS, ...PS_WHERE_OPERATORS.flatMap((o) => [`c${o}`, `i${o}`])],
   "measure-object": ["property", "line", "word", "character", "sum", "average", "maximum", "minimum", "allstats", "standarddeviation", "ignorewhitespace", "inputobject"],
   "format-list": ["property", "groupby", "view", "expand", "force", "showerror", "displayerror", "inputobject"],
   "format-table": ["property", "groupby", "view", "expand", "force", "showerror", "displayerror", "inputobject", "autosize", "hidetableheaders", "wrap", "repeatheader"],
@@ -2561,9 +2561,6 @@ function knownReadParams(params, args) {
 function readsWithOptions(name, w, dialect) {
   const args = w.slice(1);
   if (dialect === "powershell") {
-    // A script block is code the cmdlet runs (Where-Object { ... }, a
-    // calculated property), and its words are not read here.
-    if (w.some((x) => /[{}]/.test(x))) return false;
     const bare = w[0].toLowerCase() === name;
     const cmdlet = PS_READ_PARAMS[name] ? name : (bare ? PS_READ_ALIASES[name] : undefined);
     if (cmdlet) return knownReadParams(PS_READ_PARAMS[cmdlet], args);
@@ -2585,6 +2582,50 @@ function gitOnlyReads(args) {
 // and a property or index of a value (.Count, .Directory.Name, [0]).
 const PS_OPERATOR = /^-(?:[ci]?(?:eq|ne|gt|ge|lt|le|like|notlike|match|notmatch|contains|notcontains|in|notin|replace|split)|is|isnot|as|and|or|xor|not|band|bor|bxor|join|f)$/i;
 const PS_PROPERTY = /^(?:\.[A-Za-z_]\w*|\[-?\d+\])+$/;
+// A value as PowerShell spells one: a variable with properties or an
+// index ($_.Name, $x[0]), a single-quoted string, a double-quoted string
+// with nothing to expand, a number, a type ([int]); or a comma list of
+// them. A bare word is not one: where a value stands it would be a
+// command.
+const PS_VALUE = String.raw`(?:\$[A-Za-z_]\w*(?:\.[A-Za-z_]\w*|\[-?\d+\])*|'[^']*'|"[^"$]*"|-?\d+(?:\.\d+)?(?:kb|mb|gb)?|\[[\w.]+(?:\[\])?\])`;
+const PS_VALUES = new RegExp(`^(?:,|,?${PS_VALUE}(?:,${PS_VALUE})*,?)$`, "i");
+const PS_QUOTED_LITERAL = /^(?:'[^']*'|"[^"$]*")$/;
+
+/**
+ * A PowerShell stage's words without its script blocks, when each block
+ * only compares: `{ $_.Name -like '*.json' }` holds values (PS_VALUES)
+ * and reading operators (PS_OPERATOR) and nothing else, so it runs no
+ * command (re-probe 7, H4). A pipe, a semicolon or a ( ) inside a block
+ * ends the stage before the block closes, which leaves it open here.
+ *
+ * @param {Array<{word: string, start: number, end: number}>} toks
+ * @param {string} text - the text the tokens were read from
+ * @returns {Array<{word: string, start: number, end: number}>|null} null
+ *   when a block does anything else, is not closed, or a brace stands
+ *   where no block starts (@{ }, ${ }, inside a word)
+ */
+function withoutComparingBlocks(toks, text) {
+  const raw = (tok) => text.slice(tok.start, tok.end);
+  const kept = [];
+  for (let k = 0; k < toks.length; k++) {
+    if (!/[{}]/.test(toks[k].word) || PS_QUOTED_LITERAL.test(raw(toks[k]))) {
+      kept.push(toks[k]);
+      continue;
+    }
+    if (!raw(toks[k]).startsWith("{")) return null;
+    let end = k;
+    while (end < toks.length && !raw(toks[end]).endsWith("}")) end++;
+    if (end === toks.length) return null;
+    const body = toks.slice(k, end + 1).map(raw);
+    body[0] = body[0].slice(1);
+    body[body.length - 1] = body.at(-1).slice(0, -1);
+    const parts = body.filter((part) => part !== "");
+    const compares = parts.length > 0 && PS_VALUES.test(parts[0]) && parts.slice(1).every((part) => PS_VALUES.test(part) || PS_OPERATOR.test(part));
+    if (!compares) return null;
+    k = end;
+  }
+  return kept;
+}
 
 /**
  * Whether a find command only lists: every test, option and action is
@@ -2619,22 +2660,34 @@ function onlyReads(command, dialect, depth = 0, plainSink = null) {
   if (depth > MAX_SHELL_DEPTH) return false;
   const { tokens, subs, uncertain } = lexShell(command, dialect);
   if (uncertain || !subs.every((s) => onlyReads(s, dialect, depth + 1))) return false;
-  let words = [];
+  let stage = [];
   let afterGroup = false; // the stage being read follows a ")"
   /** @param {string} [closing] - the operator that ends the stage */
   const stageReads = (closing) => {
-    let w = words.filter((x) => x !== "");
-    words = [];
+    let toks = stage.filter((tok) => tok.word !== "");
+    stage = [];
     const continues = afterGroup;
     afterGroup = closing === ")";
-    if (w.length === 0) return true;
+    if (toks.length === 0) return true;
+    if (dialect === "powershell") {
+      // A script block is code. One that only compares is passed over;
+      // with any other the stage does not only read (re-probe 7, H4).
+      toks = withoutComparingBlocks(toks, command);
+      if (toks === null) return false;
+      if (toks.length === 0) return true;
+    }
+    const w = toks.map((tok) => tok.word);
     // What follows a PowerShell ( ) carries the expression on: an
     // operator and its operands (-match "x", -replace "a","b"), or a
-    // property of the value (.Count, .Length -gt 0). Both only read. A
-    // method call (.Delete(...)) is not known to (G2b).
+    // property of the value (.Count, .Length -gt 0). It only reads when
+    // every word after that is an operator on the reading list or a
+    // value: a string, a number, a variable, a type (H4). A method call
+    // (.Delete(...)) is not known to (G2b).
     if (dialect === "powershell" && continues) {
       const property = PS_PROPERTY.test(w[0]) && closing !== "(";
-      if (PS_OPERATOR.test(w[0]) || (property && (w.length === 1 || PS_OPERATOR.test(w[1])))) return true;
+      if (PS_OPERATOR.test(w[0]) || (property && (w.length === 1 || PS_OPERATOR.test(w[1])))) {
+        return toks.slice(property ? 1 : 0).every((tok) => PS_OPERATOR.test(tok.word) || PS_VALUES.test(command.slice(tok.start, tok.end)));
+      }
     }
     // A value set in front of a command can be what it runs (LESSOPEN,
     // GIT_EXTERNAL_DIFF, PAGER), so the stage is no longer known to
@@ -2667,7 +2720,7 @@ function onlyReads(command, dialect, depth = 0, plainSink = null) {
   };
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i];
-    if (tok.word !== undefined) words.push(tok.word);
+    if (tok.word !== undefined) stage.push(tok);
     else if (CONTROL_OPERATORS.has(tok.op)) {
       if (!stageReads(tok.op)) return false;
     } else if (WRITE_REDIRECTS.has(tok.op)) {

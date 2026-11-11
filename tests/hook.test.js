@@ -4765,6 +4765,57 @@ describe("PreToolUse hook - a cd with no target, to - or to a home the text sets
 });
 
 // ---------------------------------------------------------------------------
+// Re-probe 7, X4 and H4 (BUG-080): a PowerShell script block, and an
+// operator stage with anything but values
+// ---------------------------------------------------------------------------
+//
+// G2b took a stage after ( ) that starts with an operator as reading,
+// whatever came after the operator. -split and -replace run a script
+// block they are given: `(Get-Content README.md) -split { Remove-Item
+// -Recurse -Force .claude\hooks }` deleted the hooks for real.
+
+describe("PreToolUse hook - a PowerShell script block that does more than compare (re-probe 7, H4)", () => {
+  for (const command of [
+    "(Get-Content README.md) -split { Remove-Item -Recurse -Force .claude\\hooks }",
+    "(Get-Content README.md) -split { Remove-Item -Recurse -Force security\\01-injection-guard.js }",
+    "(Get-Item README.md).Name -split { Remove-Item .claude\\settings.json }",
+    "(Get-Content README.md) -replace 'x', { Remove-Item -Recurse -Force .claude\\hooks }",
+    "(Get-Content README.md) -split { Remove-Item -Recurse -Force security }",
+    "(Get-Content README.md) -split {Remove-Item -Recurse -Force security}",
+    // An operand that is no value: a bare word would be a command.
+    "(Get-Content .claude\\settings.json) -match rimraf",
+    // A block that calls a method, or pipes on.
+    "Get-ChildItem .claude | Where-Object { $_.Delete() }",
+    "Get-ChildItem .claude | Where-Object { $_ | Remove-Item }",
+    "Get-ChildItem .claude | Where-Object { $_.Name -like '*.json'; Remove-Item .claude\\hooks }",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command, { tool: "PowerShell" });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // A block that only compares runs no command.
+    "Get-ChildItem .claude | Where-Object { $_.Name -like '*.json' }",
+    "Get-ChildItem .claude | Where-Object {$_.Length -gt 0}",
+    "Get-ChildItem .claude | Where-Object { $_.Name -match '\\d{3}' -and $_.Length -gt 1kb }",
+    "Get-ChildItem .claude | Where-Object -FilterScript { $_.PSIsContainer -eq $false }",
+    // Held from G2b: an operator with values, a property.
+    '(Get-Content README.md) -match "security"',
+    "(Get-ChildItem security).Count",
+    "(Get-Content .claude\\settings.json) -replace 'a','b'",
+    "(Get-Content .claude\\settings.json) -match '\\d{4}'",
+    '(Get-Content .claude\\settings.json -Raw) -split "`n" | Select-Object -First 3',
+    "(Get-Content .claude\\settings.json | ConvertFrom-Json).hooks -is [object]",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions", tool: "PowerShell" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

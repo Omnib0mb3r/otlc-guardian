@@ -1463,6 +1463,18 @@ Tests: `tests/hook.test.js`, "a cd with no target, to - or to a home the text se
 
 Smoke test after applying: at the root of a scratch project with a `src` folder ask Claude to run `cd src && HOME=.. cd && npx rimraf security`; see a Guardian prompt naming security; decline. In bypass mode `cd src && rm -rf security` gets no Guardian prompt.
 
+**Re-probe 7, X4 and Lex decision H4 (2026-11-11): a PowerShell script block, and an operator stage with anything but values. Fixed in staging, not yet live.** A regression in 2cbfe7c (G2b). After a `)` a stage whose first word is an operator on `PS_OPERATOR` returned true at once, whatever its operands were, and `-split` and `-replace` run a script block they are given. Silent in both modes through the PowerShell tool: `(Get-Content README.md) -split { Remove-Item -Recurse -Force .claude\hooks }`, the same with the scanner and with `security`, `(Get-Item README.md).Name -split { Remove-Item .claude\settings.json }`, `(Get-Content README.md) -replace 'x', { Remove-Item -Recurse -Force .claude\hooks }`. Real effect in the re-probe (`realps\split1`, `split2`, Windows PowerShell 5.1): `.claude\hooks` and the scanner deleted.
+
+Lex's decision: a PowerShell statement after `( )` that holds a script block or any operator not on a known reading list is not read-only.
+
+Change in `staging/hooks/injection-guard-hook.mjs`: `onlyReads()` keeps each stage's tokens. In the PowerShell dialect `withoutComparingBlocks()` takes out a script block that only compares: values (`PS_VALUES`: a variable with properties or an index, a quoted string with nothing to expand, a number, a type) and operators on `PS_OPERATOR`, and nothing else. With any other block, a block left open (a pipe or a semicolon inside it ends the stage first), or a brace where no block starts (`@{ }`), the stage does not only read. A stage after `( )` that starts with an operator or a property reads only when every word after it is such an operator or a value, so a bare word, which would be a command, is not one. This replaces H1's rule that any brace in a PowerShell stage makes it not read-only: `Get-ChildItem .claude | Where-Object { $_.Name -like '*.json' }` is silent again.
+
+Not closed here, for the wrapper fallback (cost c): the content form `(Get-Content README.md) -split { Copy-Item notes\x.md CLAUDE.md }` is still silent, because the content reader does not read a script block handed to an operator or to `ForEach-Object`, `Where-Object` and `try`. Found by the worker on the same probe, silent in the live hook too: in Bash `if true; then cp notes/x.md CLAUDE.md; fi` and `for f in 1; do cp notes/x.md CLAUDE.md; done` (the keyword is read as the program). Both go with the fallback, which reads a stage again from the first known copier.
+
+Tests: `tests/hook.test.js`, "a PowerShell script block that does more than compare (re-probe 7, H4)": 10 ask (7 failed before the fix; the three `Where-Object` blocks asked since H1), 10 stay silent in bypass mode (4 were denied before the fix, the comparing blocks). Staged hook suite before: 1419 passed, 11 failed. After: 1430 passed, 0 failed. Lex's regress harness: no line changed. Re-probe 7's lists (640 commands): 5 verdicts changed, the X4 forms, from silent to deny/ask.
+
+Smoke test after applying: through the PowerShell tool ask Claude to run `(Get-Content README.md) -split { Remove-Item -Recurse -Force .claude\hooks }`; see a Guardian prompt; decline. In bypass mode `Get-ChildItem .claude | Where-Object { $_.Name -like '*.json' }` gets no Guardian prompt.
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10
