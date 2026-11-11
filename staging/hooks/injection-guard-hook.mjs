@@ -1678,6 +1678,110 @@ function guardedNameIn(texts, dialect, cwd, root, watches = () => false) {
   return null;
 }
 
+// A word that is not a folder a program is given: one with a variable, a
+// substitution, a glob or an assignment in it, which the text does not
+// spell out; a lone "/", which in a command is a division (expr 10 / 2,
+// $size / 1MB) or the root of a site (ng build --base-href /) far more
+// often than the root of the disk; and a single letter after a slash
+// (/c, /s), which is a switch.
+const NOT_A_FOLDER = /[$`*?[\]{}=]|^\/+$|^[\\/][A-Za-z]$/;
+
+/** The dialect of the script that follows `option` in a stage run by `shell` (bash -c, cmd /c, pwsh -Command), or null. */
+function scriptDialect(shell, option) {
+  if (SHELLS.has(shell)) return option === "-c" ? "bash" : null;
+  if (CMD_SHELLS.has(shell)) return /^\/\/?[ck]$/i.test(option) ? "cmd" : null;
+  if (shell !== "powershell" && shell !== "pwsh") return null;
+  return /^[-/]c/i.test(option) && "command".startsWith(option.slice(1).toLowerCase()) ? "powershell" : null;
+}
+
+/**
+ * The first word of a command that is a folder strictly above the
+ * project root, as spelled, or null (F3b).
+ *
+ * Such a folder holds the project and every one of Guardian's files with
+ * it, so a program the readers do not parse that is given one
+ * (`npx rimraf ..` at the root, `npx rimraf ../..` from src/) is
+ * confirmed by a person, as a command that names a guarded file is. The
+ * project root itself is not counted: `npx rimraf .` cannot be told from
+ * `npx prettier --write .`, `pip install -e .` or `docker build .` by
+ * its text, and those are everyday work.
+ *
+ * A word counts when it resolves to an ancestor of the root from the
+ * directory the command is in when it reaches the word. That directory
+ * is followed in order (cd, pushd and popd, cd -, a subshell's end), as
+ * if every move succeeds, so `cd build && cmake ..` names the project
+ * and `cd .. && npx rimraf .` names the folder above it. The value of
+ * --name=value is a word of its own, and a script handed to a shell
+ * (bash -c, cmd /c, pwsh -Command) is followed from where the shell
+ * starts. Not counted: the directory a command moves to or is told to
+ * run in (cd .., git -C .., npm --prefix ..), which is where it runs
+ * and not what it acts on; a word that is not a folder (NOT_A_FOLDER);
+ * and any word when the command moves somewhere the text does not spell
+ * out (commandBases(), `certain`).
+ */
+function wordAboveProject(texts, dialect, cwd, root) {
+  const rootKey = watchKey(root);
+  const home = (p) => drivePath(p.replace(/^~(?=$|[\\/])/, os.homedir()));
+  const isAbove = (dir, word) => rootKey.startsWith(`${watchKey(path.resolve(dir, home(word))).replace(/\/+$/, "")}/`);
+  /** Follows one command text from `start`; returns the word found and the directory it ends in. */
+  const walk = (text, start, inDialect, depth) => {
+    const { tokens, subs } = lexShell(text, inDialect);
+    let dir = start;
+    let previous = start;
+    const pushed = [];
+    const outer = [];
+    let stage = [];
+    for (let k = 0; k < tokens.length; k++) {
+      const { word, op } = tokens[k];
+      if (op === "(") outer.push(dir);
+      else if (op === ")") dir = outer.pop() ?? dir;
+      if (word === undefined) {
+        if (CONTROL_OPERATORS.has(op)) stage = [];
+        continue;
+      }
+      stage.push(word);
+      const name = commandName(word);
+      const script = stage.length > 2 ? scriptDialect(commandName(stage[0]), stage.at(-2)) : null;
+      if (script) {
+        if (depth < MAX_SHELL_DEPTH) {
+          const inner = walk(word, dir, script, depth + 1);
+          if (inner.found) return { found: inner.found, dir };
+        }
+      } else if (DIRECTORY_MOVERS.has(name)) {
+        do k++; while (tokens[k]?.word !== undefined && /^(?:-.|\/d$)/i.test(tokens[k].word));
+        const target = tokens[k]?.word;
+        if (target === undefined) k--;
+        if (name === "pushd" || name === "push-location") pushed.push(dir);
+        const next = target === "-" ? previous : path.resolve(dir, home(target ?? "~"));
+        previous = dir;
+        dir = next;
+      } else if (name === "popd" || name === "pop-location") dir = pushed.pop() ?? dir;
+      else if (word === "-C" || DIRECTORY_OPTION.test(word)) k++;
+      else if (!DIRECTORY_OPTION_VALUE.test(word)) {
+        const value = word.replace(/^--?[A-Za-z][\w-]*=/, "");
+        if (value !== "" && !value.startsWith("-") && !NOT_A_FOLDER.test(value) && isAbove(dir, value)) return { found: value, dir };
+      }
+    }
+    // A substitution runs where its command does; the start and the end
+    // of this text bound that.
+    if (depth < MAX_SHELL_DEPTH) {
+      for (const sub of subs) {
+        for (const from of new Set([start, dir])) {
+          const inner = walk(sub, from, inDialect, depth + 1);
+          if (inner.found) return { found: inner.found, dir };
+        }
+      }
+    }
+    return { found: null, dir };
+  };
+  for (const text of texts) {
+    if (!commandBases(nameViews(text), cwd, shellWords(text, dialect)).certain) continue;
+    const { found } = walk(text, cwd, dialect, 0);
+    if (found) return found;
+  }
+  return null;
+}
+
 // Commands that only read (and cd, which only moves). A command with a
 // redirect to a file, or with any other stage, is not read-only.
 const READ_ONLY_COMMANDS = new Set([
@@ -3244,6 +3348,15 @@ process.stdin.on("end", () => {
           `and is not a known read-only command. Guardian does not read every shell, interpreter and script ` +
           `form, so any command that names its files is confirmed by a person. To read them use the Read tool, ` +
           `cat or Get-Content. Approve only if you asked for it.${bypassNote}`);
+      }
+      // A folder above the project holds all of them at once (F3b).
+      const above = named ? null : wordAboveProject([write.content, ...shellRead.decoded], write.dialect, sessionCwd, projectRoot);
+      if (above && !onlyReads(write.content, write.dialect)) {
+        record(confirmOrDeny,
+          `${TAG} This command names ${safeEchoPath(above, 60)}, a folder above this project, which holds the project ` +
+          `and Guardian's own enforcement and settings with it, and is not a known read-only command. Guardian ` +
+          `cannot tell what a program it does not read does there, so a person confirms it. ` +
+          `Approve only if you asked for it.${bypassNote}`);
       }
     }
 

@@ -233,6 +233,17 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A folder above the project asks (BUG-075, F3b).** A program the
+  readers do not parse could be handed a folder that holds the whole
+  project without naming one of Guardian's files: `npx rimraf ..` at the
+  project root, `npx rimraf ../..` from `src/`. A word that resolves
+  strictly above the project root now asks unless the command only
+  reads. The working directory is followed in order, so
+  `cd build && cmake ..` is silent and `cd .. && npx rimraf .` asks. The
+  project root itself is not judged: `npx rimraf .` reads the same as
+  `npx prettier --write .`. A lone `/` is not counted either, since it
+  is a division or a site root far more often than the disk.
+
 - **The bare word `security` is judged by what it is (BUG-080, F1b).**
   After F1 the word asked at a project root wherever it stood, and an ask
   is a deny in bypass mode: `echo "## Security notes" >> README.md`,

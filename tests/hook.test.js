@@ -3617,6 +3617,96 @@ describe("PreToolUse hook - the bare word security as text, not a file (F1b)", (
 });
 
 // ---------------------------------------------------------------------------
+// F3b (BUG-075): a folder above the project
+// ---------------------------------------------------------------------------
+//
+// F3 found a guarded folder behind /. and /x/.. but a program the readers
+// do not parse could still be given a folder that holds the whole project
+// without naming one of Guardian's files: `npx rimraf ..` at the root,
+// `npx rimraf ../..` from src/. Lex's ruling: a target that resolves
+// strictly above the project root asks; a target equal to the root stays
+// silent, because `npx rimraf .` cannot be told from `npx prettier --write .`
+// or `pip install -e .` by its text. Real effect, confirmed in scratch
+// projects: `npx -y rimraf ..` from src/ and `npx -y rimraf ../..` from
+// src/a/ deleted every Guardian file. Those two resolve to the root, so
+// they are among the silent cases; a target above the root deletes more.
+
+describe("PreToolUse hook - a folder above the project (F3b)", () => {
+  const FILES = [".claude/settings.json", ".claude/hooks/injection-guard-hook.mjs", "security/01-injection-guard.js",
+    "src/a/x.txt", "src/a.js"];
+  // The project sits one level inside the temp folder, in a folder with a space in its name.
+  const run = (command, { sub = "", mode, tool = "Bash" } = {}) => withTempProject((dir) => {
+    const root = path.join(dir, "my proj");
+    for (const rel of FILES) {
+      mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      writeFileSync(path.join(root, rel), rel.endsWith(".json") ? "{}" : "x\n");
+    }
+    const text = typeof command === "function" ? command(root.replace(/\\/g, "/")) : command;
+    return runHook(PRE_HOOK, { tool_name: tool, cwd: path.join(root, sub), tool_input: { command: text }, ...(mode ? { permission_mode: mode } : {}) },
+      { CLAUDE_PROJECT_DIR: root });
+  });
+  const asks = (label, command, options) => stagedOnly(`asks: ${label}`, () => {
+    const out = run(command, options);
+    assert.equal(decisionOf(out), "ask", `${label} -> ${out.slice(0, 200) || "(silent)"}`);
+  });
+  const silent = (label, command, options) => stagedOnly(`silent: ${label}`, () => {
+    expectSilent(run(command, { mode: "bypassPermissions", ...options }));
+  });
+
+  // At the project root: the folder above it, however it is spelled or reached.
+  for (const command of [
+    "npx rimraf ..",
+    "npx rimraf ../",
+    "node scripts/clean.js ./..",
+    "node scripts/clean.js --dir=..",
+    "cd .. && npx rimraf .",
+    "(cd src; ls); npx rimraf ..",
+    "pushd src && npm test && popd && npx rimraf ..",
+    "cd src && cd - && npx rimraf ..",
+    "echo $(npx rimraf ..)",
+    "bash -c \"npx rimraf ..\"",
+    "echo .. | xargs npx rimraf",
+  ]) asks(command, command);
+  asks("npx rimraf .. (PowerShell)", "npx rimraf ..", { tool: "PowerShell" });
+  asks("npx rimraf \"<root>/..\"", (root) => `npx rimraf "${root}/.."`);
+  if (process.platform === "win32") {
+    asks("npx rimraf '/c/.../..' (Git Bash spelling)", (root) => `npx rimraf '${root.replace(/^([A-Za-z]):/, (m, d) => `/${d.toLowerCase()}`)}/..'`);
+    asks("npx rimraf '<root>\\..' (PowerShell)", (root) => `npx rimraf '${root.replace(/\//g, "\\")}\\..'`, { tool: "PowerShell" });
+  }
+
+  // From src/: the folder above the root, not the root.
+  asks("npx rimraf ../.. from src/", "npx rimraf ../..", { sub: "src" });
+  asks("cd .. && npx rimraf .. from src/", "cd .. && npx rimraf ..", { sub: "src" });
+
+  // The project root itself, a folder inside it, and a folder beside it.
+  for (const command of [
+    "npx rimraf .",
+    "npx rimraf src/..",
+    "npx prettier --write .",
+    "pip install -e .",
+    "cd src && cmake ..",
+    "cp src/a.js ../other/a.js",
+    "tar -czf ../backup.tgz src",
+    "node build.js --out ../dist",
+    // Where a command runs is not what it acts on; reading is reading.
+    "cd .. && ls",
+    "ls ..",
+    "npm --prefix .. test",
+    "git -C .. status",
+    // Not a folder: a revision range, a switch, a division, the root of a site.
+    "git log main..feature",
+    "cmd /c echo hi",
+    "expr 10 / 2",
+    "ng build --base-href /",
+    "npx vite build --base=/",
+  ]) silent(command, command);
+  silent("$mb = (Get-Item src/a.js).Length / 1MB (PowerShell)", "$mb = (Get-Item src/a.js).Length / 1MB", { tool: "PowerShell" });
+  silent("npx rimraf .. from src/", "npx rimraf ..", { sub: "src" });
+  silent("pip install -e .. from src/", "pip install -e ..", { sub: "src" });
+  silent("cd a && npx rimraf ../.. from src/", "cd a && npx rimraf ../..", { sub: "src" });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 
