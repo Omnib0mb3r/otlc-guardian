@@ -3008,8 +3008,9 @@ describe("PreToolUse hook - the settings reader module is imported and guarded (
   });
 
   // Like a missing scanner: the hook cannot judge a settings change without
-  // it, so it stops with an error Claude Code shows, and says how to fix it.
-  stagedOnly("without security/claude-settings.js the hook reports a hook error naming the file", () => {
+  // it, so it blocks the call (re-probe 7, H10), names the file and says
+  // how to fix it.
+  stagedOnly("without security/claude-settings.js the hook blocks, naming the file", () => {
     const install = mkdtempSync(path.join(os.tmpdir(), "guardian-hook-nomodule-"));
     try {
       for (const rel of [".claude/hooks/injection-guard-hook.mjs", "security/01-injection-guard.js", "security/package.json"]) {
@@ -3020,7 +3021,7 @@ describe("PreToolUse hook - the settings reader module is imported and guarded (
         input: JSON.stringify({ tool_name: "Write", cwd: install, tool_input: { file_path: path.join(install, "x.md"), content: "x" } }),
         encoding: "utf8", timeout: HOOK_SPAWN_TIMEOUT_MS, cwd: install, env: HOOK_ENV,
       });
-      assert.equal(result.status, 1, result.stderr.slice(0, 300));
+      assert.equal(result.status, 2, result.stderr.slice(0, 300));
       assert.match(result.stderr, /claude-settings\.js/);
       assert.match(result.stderr, /guardian update/);
     } finally {
@@ -5038,6 +5039,119 @@ describe("PreToolUse hook - a typographic quote, dash or space in PowerShell (re
       expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
     });
   }
+});
+
+describe("PreToolUse hook - without its scanner the hook blocks, and a repair gets through (re-probe 7, H10)", () => {
+  const FILES = [".claude/hooks/injection-guard-hook.mjs", "security/01-injection-guard.js", "security/package.json", "security/claude-settings.js"];
+  /**
+   * Runs one tool call against a copy of the install in which `damage`
+   * has broken a file, and returns the hook's exit code and stderr.
+   * @param {(install: string) => void} damage
+   */
+  const runBroken = (damage, payload) => {
+    const install = mkdtempSync(path.join(os.tmpdir(), "guardian-hook-broken-"));
+    try {
+      for (const rel of FILES) {
+        mkdirSync(path.dirname(path.join(install, rel)), { recursive: true });
+        writeFileSync(path.join(install, rel), readFileSync(path.join(ENFORCEMENT_ROOT, rel)));
+      }
+      mkdirSync(path.join(install, "src"), { recursive: true });
+      damage(install);
+      const result = spawnSync("node", [path.join(install, ".claude", "hooks", "injection-guard-hook.mjs")], {
+        input: JSON.stringify({ cwd: install, ...payload(install) }),
+        encoding: "utf8", timeout: HOOK_SPAWN_TIMEOUT_MS, cwd: install, env: { ...HOOK_ENV, CLAUDE_PROJECT_DIR: install },
+      });
+      if (result.status === null) throw new Error(`The test harness stopped the hook after ${HOOK_SPAWN_TIMEOUT_MS} ms (BUG-077).`);
+      return result;
+    } finally {
+      rmSync(install, { recursive: true, force: true });
+    }
+  };
+  const SCANNER = "security/01-injection-guard.js";
+  const noScanner = (install) => rmSync(path.join(install, SCANNER));
+  const bash = (command, tool = "Bash") => () => ({ tool_name: tool, tool_input: { command } });
+  const write = (install) => ({ tool_name: "Write", tool_input: { file_path: path.join(install, "src", "a.js"), content: "x" } });
+
+  for (const [name, damage, file] of [
+    ["the scanner is missing", noScanner, /01-injection-guard\.js/],
+    ["the scanner is empty", (install) => writeFileSync(path.join(install, SCANNER), ""), /01-injection-guard\.js/],
+    ["the scanner does not parse", (install) => writeFileSync(path.join(install, SCANNER), "export const scan = (;\n"), /01-injection-guard\.js/],
+    ["the scanner exports nothing the hook needs", (install) => writeFileSync(path.join(install, SCANNER), "export const x = 1;\n"), /01-injection-guard\.js/],
+    ["the scanner cannot load as a module", (install) => writeFileSync(path.join(install, "security/package.json"), '{"type":"commonjs"}'), /01-injection-guard\.js/],
+    ["the settings reader is empty", (install) => writeFileSync(path.join(install, "security/claude-settings.js"), ""), /claude-settings\.js/],
+  ]) {
+    stagedOnly(`blocks a Write when ${name}`, () => {
+      const result = runBroken(damage, write);
+      assert.equal(result.status, 2, result.stderr.slice(0, 300));
+      assert.match(result.stderr, file);
+      assert.match(result.stderr, /guardian update/);
+      assert.equal(result.stdout, "");
+    });
+  }
+
+  for (const [command, tool] of [
+    ["ls"],
+    ["npm test"],
+    // Not a repair: more than one stage, a redirect, a program spelled with a path, another runner.
+    ["guardian update && rm -rf security"],
+    ["guardian update; rm -rf .claude"],
+    ["guardian update > security/01-injection-guard.js"],
+    ["guardian update $(rm -rf security)"],
+    ["guardian audit ."],
+    ["guardian update ../other"],
+    ["./guardian update"],
+    ["npx guardian update"],
+    // Not a repair: git writing anything but Guardian's own files.
+    ["git checkout -- README.md"],
+    ["git checkout -- security/01-injection-guard.js src/a.js"],
+    ["git checkout -- ."],
+    ["git checkout -- security/*"],
+    ["git checkout -b x"],
+    ["git checkout main"],
+    ["git restore --source=HEAD -- ."],
+    ["git restore -p security/01-injection-guard.js"],
+    ["git reset --hard"],
+    ["git -c core.hooksPath=x checkout -- security/01-injection-guard.js"],
+    ["Remove-Item -Recurse -Force security", "PowerShell"],
+  ]) {
+    stagedOnly(`blocks${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      const result = runBroken(noScanner, bash(command, tool));
+      assert.equal(result.status, 2, `${command} -> exit ${result.status} ${result.stderr.slice(0, 200)}`);
+    });
+  }
+
+  for (const [command, tool] of [
+    ["guardian update"],
+    ["guardian init"],
+    ["guardian update --no-color"],
+    ["git checkout -- security/01-injection-guard.js"],
+    ["git checkout security/01-injection-guard.js"],
+    ["git checkout HEAD -- security/01-injection-guard.js security/package.json"],
+    ["git checkout origin/main -- security"],
+    ["git restore security/01-injection-guard.js"],
+    ["git restore --source=HEAD --staged --worktree -- security/claude-settings.js .claude/hooks/injection-guard-hook.mjs"],
+    ["git restore -s HEAD security/01-injection-guard.js"],
+    ["guardian update", "PowerShell"],
+    ["git checkout -- security\\01-injection-guard.js", "PowerShell"],
+  ]) {
+    stagedOnly(`lets the repair through${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      const result = runBroken(noScanner, bash(command, tool));
+      assert.equal(result.status, 1, `${command} -> exit ${result.status} ${result.stderr.slice(0, 200)}`);
+      assert.match(result.stderr, /let through/);
+      assert.equal(result.stdout, "");
+    });
+  }
+
+  stagedOnly("a tool the hook does not judge is not blocked", () => {
+    const result = runBroken(noScanner, () => ({ tool_name: "Read", tool_input: { file_path: "README.md" } }));
+    assert.equal(result.status, 0, result.stderr.slice(0, 200));
+  });
+
+  stagedOnly("with every file in place the same Write is silent", () => {
+    const result = runBroken(() => {}, write);
+    assert.equal(result.status, 0, result.stderr.slice(0, 200));
+    assert.equal(result.stdout, "");
+  });
 });
 
 // ---------------------------------------------------------------------------

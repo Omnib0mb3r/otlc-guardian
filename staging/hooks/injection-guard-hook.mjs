@@ -34,10 +34,17 @@
 //
 // Before 1.5.0 this hook was advisory only and could not stop a write.
 //
-// Failure behavior: a broken hook must not brick every edit in every
-// project, so internal failures do not block. They are also never
-// silent: the reason goes to stderr and the hook exits 1, which Claude
-// Code reports as a non-blocking hook error.
+// Failure behavior: an internal failure (no input, an error the hook
+// throws) does not block, and is never silent: the reason goes to
+// stderr and the hook exits 1, which Claude Code reports as a
+// non-blocking hook error.
+// One failure blocks (re-probe 7, H10): when the scanner or the
+// settings reader is missing, empty or does not load, nothing can be
+// judged, and deleting one of them was the way to switch the hook off.
+// Every file write and shell command is then refused with exit 2 and a
+// message that names the file, except the commands that repair it:
+// `guardian update`, `guardian init`, and `git checkout` or `git
+// restore` of Guardian's own files.
 //
 // Pattern source: imports scan() and scanChange() from
 // security/01-injection-guard.js, so the hook cannot drift from the
@@ -88,17 +95,37 @@ const guardModulePath = path.resolve(__dirname, "..", "..", "security", "01-inje
 let scan = null;
 let scanChange = null;
 
-if (!existsSync(guardModulePath)) {
-  failOpenLoudly(`scanner missing at ${guardModulePath} (run: guardian update)`);
+// Why the hook cannot judge anything, when a module it needs is missing,
+// empty or does not load (H10). The main handler then blocks the call,
+// or lets a repair through; it has to read the call first to tell.
+let cannotJudge = null;
+
+/**
+ * Loads one of the modules the hook judges with.
+ * @param {string} what - the module, as the message names it
+ * @param {string} file - its absolute path
+ * @param {(mod: object) => boolean} take - keeps what the hook needs of
+ *   the module and says whether all of it was there
+ * @param {string} needs - the exports `take` looks for
+ */
+async function loadModule(what, file, take, needs) {
+  if (cannotJudge) return;
+  if (!existsSync(file)) {
+    cannotJudge = `the ${what} is missing at ${file}`;
+    return;
+  }
+  try {
+    if (!take(await import(pathToFileURL(file).href))) cannotJudge = `the ${what} at ${file} is empty or does not export ${needs}`;
+  } catch (err) {
+    cannotJudge = `the ${what} at ${file} failed to load (${err?.message ?? "unknown error"})`;
+  }
 }
-try {
-  const mod = await import(pathToFileURL(guardModulePath).href);
+
+await loadModule("scanner", guardModulePath, (mod) => {
   scan       = typeof mod.scan === "function" ? mod.scan : null;
   scanChange = typeof mod.scanChange === "function" ? mod.scanChange : null;
-} catch (err) {
-  failOpenLoudly(`scanner failed to load (${err?.message ?? "unknown error"})`);
-}
-if (!scan || !scanChange) failOpenLoudly("scanner module does not export scan() and scanChange() (run: guardian update)");
+  return Boolean(scan && scanChange);
+}, "scan() and scanChange()");
 
 // ---------------------------------------------------------------------------
 // SETTINGS READER IMPORT: one reading of Claude Code's settings
@@ -116,20 +143,12 @@ let settingsTypeProblems = null;
 let matcherCovers = null;
 let EXACT_MATCHER = null;
 
-if (!existsSync(settingsModulePath)) {
-  failOpenLoudly(`settings reader missing at ${settingsModulePath} (run: guardian update)`);
-}
-try {
-  const mod = await import(pathToFileURL(settingsModulePath).href);
+await loadModule("settings reader", settingsModulePath, (mod) => {
   settingsTypeProblems = typeof mod.settingsTypeProblems === "function" ? mod.settingsTypeProblems : null;
   matcherCovers        = typeof mod.matcherCovers === "function" ? mod.matcherCovers : null;
   EXACT_MATCHER        = mod.EXACT_MATCHER instanceof RegExp ? mod.EXACT_MATCHER : null;
-} catch (err) {
-  failOpenLoudly(`settings reader failed to load (${err?.message ?? "unknown error"})`);
-}
-if (!settingsTypeProblems || !matcherCovers || !EXACT_MATCHER) {
-  failOpenLoudly("settings reader module does not export settingsTypeProblems(), matcherCovers() and EXACT_MATCHER (run: guardian update)");
-}
+  return Boolean(settingsTypeProblems && matcherCovers && EXACT_MATCHER);
+}, "settingsTypeProblems(), matcherCovers() and EXACT_MATCHER");
 
 // ---------------------------------------------------------------------------
 // DEFAULT WATCH LIST
@@ -4387,6 +4406,53 @@ function emitVerdict(findings) {
 }
 
 // ---------------------------------------------------------------------------
+// REPAIR COMMANDS (re-probe 7, H10)
+// ---------------------------------------------------------------------------
+
+// What `git checkout` and `git restore` may name while the hook cannot
+// judge: the files it runs from and loads, and the folder of the scanner.
+const REPAIRABLE = [...GUARDIAN_HOOK_FILES.map((f) => path.join(".claude", "hooks", f)), GUARDIAN_SCANNER_FILE, GUARDIAN_SCANNER_PACKAGE,
+  GUARDIAN_SETTINGS_READER, "security"];
+const GIT_REF = /^[A-Za-z0-9][\w./@^-]*$/;
+
+/**
+ * Whether a shell command is one of the repairs that stay open while the
+ * hook cannot judge: `guardian update` or `guardian init` with flags
+ * only, or `git checkout` or `git restore` of nothing but Guardian's own
+ * files. The command is one stage of plain words: no operator, redirect,
+ * substitution, variable or glob, and the program is spelled by name.
+ * Anything else is not known to be a repair.
+ */
+function repairsGuardian(command, dialect, cwd, root) {
+  const { tokens, subs, heredocs, uncertain } = lexShell(command, dialect);
+  if (uncertain || subs.length > 0 || heredocs.length > 0 || tokens.length < 2) return false;
+  if (tokens.some((tok) => tok.word === undefined || /[$\x60*?[\]{}%~!]/.test(command.slice(tok.start, tok.end)))) return false;
+  const [program, verb, ...rest] = tokens.map((tok) => tok.word);
+  if (program === "guardian") return (verb === "update" || verb === "init") && rest.every((a) => /^--?[a-z][a-z-]*$/.test(a));
+  if (program !== "git") return false;
+  let paths = null;
+  if (verb === "checkout") {
+    // git checkout [REF] [--] FILE...
+    const dashes = rest.indexOf("--");
+    const before = dashes < 0 ? [] : rest.slice(0, dashes);
+    if (before.length <= 1 && before.every((ref) => GIT_REF.test(ref))) paths = dashes < 0 ? rest : rest.slice(dashes + 1);
+  } else if (verb === "restore") {
+    // git restore [--source=REF | -s REF] [--staged] [--worktree] [--] FILE...
+    paths = [];
+    for (let k = 0; k < rest.length; k++) {
+      const a = rest[k];
+      if (paths.length > 0 || !a.startsWith("-")) paths.push(a);
+      else if (a === "-s" || a === "--source") {
+        if (!GIT_REF.test(rest[++k] ?? "")) return false;
+      } else if (!/^(?:--|--staged|--worktree|-S|-W|-SW|-WS)$/.test(a) && !(a.startsWith("--source=") && GIT_REF.test(a.slice(9)))) return false;
+    }
+  }
+  if (!paths || paths.length === 0) return false;
+  const repairable = new Set(REPAIRABLE.map((rel) => watchKey(path.join(root, rel))));
+  return paths.every((p) => !p.startsWith("-") && repairable.has(watchKey(path.resolve(cwd, drivePath(p)))));
+}
+
+// ---------------------------------------------------------------------------
 // STDIN READER + MAIN
 // ---------------------------------------------------------------------------
 
@@ -4417,6 +4483,22 @@ process.stdin.on("end", () => {
     // F6). process.cwd() is the last resort; it is wrong whenever the
     // session has changed directory.
     const projectRoot = process.env.CLAUDE_PROJECT_DIR || projectRootAbove((typeof data.cwd === "string" && data.cwd) || process.cwd());
+
+    // ── Nothing can be judged (re-probe 7, H10) ───────────────────────
+    // Without the scanner or the settings reader this call would run
+    // unread, and removing one of them was how to get there. So the
+    // call is refused, unless it is one of the repairs.
+    if (cannotJudge) {
+      const repair = write.kind === "bash" &&
+        repairsGuardian(write.content, write.dialect, (typeof data.cwd === "string" && data.cwd) || projectRoot, projectRoot);
+      if (repair) failOpenLoudly(`${cannotJudge}. This command repairs Guardian's files, so it is let through`);
+      process.stderr.write(`${TAG} injection-guard-hook cannot run: ${cannotJudge}. Guardian cannot scan this tool call, ` +
+        `so it is blocked. Repair Guardian first: run "guardian update" (or "guardian init") in the project, or restore the ` +
+        `file with git checkout or git restore. Those commands are let through. Everything else stays blocked until the ` +
+        `file loads again.\n`);
+      process.exit(2);
+    }
+
     const settings    = loadSettings(projectRoot);
     const resolve     = (p) => {
       const file = canonicalPath(p);

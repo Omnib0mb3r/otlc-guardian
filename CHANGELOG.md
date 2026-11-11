@@ -233,6 +233,14 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Without its scanner the hook blocks (BUG-027, re-probe 7 H10).** With
+  `security/01-injection-guard.js` or `security/claude-settings.js`
+  missing, empty or failing to load, the PreToolUse hook reported an
+  error and let the call run, so deleting the scanner switched it off.
+  It now refuses every file write and shell command with exit 2 and a
+  message naming the file. `guardian update`, `guardian init`, and `git
+  checkout` or `git restore` of Guardian's own files still run.
+
 - **PowerShell's typographic quotes, dashes and spaces (BUG-085, re-probe 7
   H7).** PowerShell ends a string at a typographic quote (U+2018 to
   U+201E), starts a parameter at a typographic dash (U+2013 to U+2015)

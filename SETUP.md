@@ -282,7 +282,10 @@ on lower severities. It compares the write with the file on disk, so
 patterns a file already quotes (Guardian's own CLAUDE.md section does)
 do not block a rewrite; a new copy of one does. The PostToolUse hook runs after the fetch, so
 it can only warn. If a hook itself fails, the tool call is not blocked,
-but the failure is printed and reported as a hook error. Both are wired up
+but the failure is printed and reported as a hook error. Staged, not yet live
+(re-probe 7, H10): without its scanner (`security/01-injection-guard.js`) or its
+settings reader (`security/claude-settings.js`) the PreToolUse hook blocks file
+writes and shell commands until `guardian update` has put the file back. Both are wired up
 automatically by `guardian init` and registered in `.claude/settings.json`.
 
 ### Hook 1: `injection-guard-hook.mjs` (PreToolUse on Write, Edit, MultiEdit, NotebookEdit, Bash, PowerShell)

@@ -557,6 +557,20 @@ IN-PROGRESS: writes the hook cannot see (a variable or glob target, `node -e` co
 script that writes the file, `guardian update` run by the agent). Those belong to the
 hard-no hook (Lane 5, hosted by DevNeural).
 
+**Re-probe 7, Held note and Lex decision H10 (2026-11-11): the hook failed open without its scanner. Fixed in staging, not yet live.** The hook loaded `security/01-injection-guard.js` and `security/claude-settings.js` before it read the tool call, and with either missing, empty or failing to load it wrote a line to stderr and exited 1, which Claude Code reports and does not block. Every one of re-probe 7's HIGH findings ended there: a command that deleted or emptied the scanner switched the hook off for every call after it.
+
+Lex's decision: when the scanner is missing, empty or fails to load, the hook blocks (exit 2, a message naming the missing file and the repair command). The repair path stays open: `guardian update`, `guardian init`, and `git checkout` or `git restore` of Guardian's own files are not blocked.
+
+Change in `staging/hooks/injection-guard-hook.mjs`: `loadModule()` records in `cannotJudge` why the scanner or the settings reader cannot be used and no longer exits. The main handler reads the call first. A tool the hook does not judge (anything but Write, Edit, MultiEdit, NotebookEdit, Bash and PowerShell) passes as before. For the others, `repairsGuardian()` decides: a shell command that is one stage of plain words (no operator, redirect, substitution, variable or glob; the program spelled by name) and is `guardian update` or `guardian init` with flags only, or `git checkout [REF] [--] FILE...` or `git restore [--source=REF] [--staged] [--worktree] [--] FILE...` where every file is one of the two hook scripts, the scanner, `security/package.json`, `security/claude-settings.js` or the `security` folder. A repair is let through with a stderr line and exit 1. Everything else gets exit 2 and a message that names the file and the repairs. The settings reader is treated like the scanner, as it was before (BUG-073). No input on stdin and an error thrown in the handler still exit 1.
+
+Not changed, for Lex: `web-content-guard.mjs` runs after the fetch and cannot block, so without the scanner it still reports and exits 1. An error the handler throws still fails open; a command built to make the reader throw would run unread. The worker has no such command, so this is a note and not a finding.
+
+Cost: in a project whose scanner is broken, Claude can do nothing with files or the shell until `guardian update` runs. That is the decision. BUG-063 was this state on the live hook in every CommonJS project. The staged install carries `security/package.json`, which lets the scanner load there; one test of this group breaks that file and expects the block.
+
+Tests: `tests/hook.test.js`, "without its scanner the hook blocks, and a repair gets through (re-probe 7, H10)": 6 kinds of damage block a Write, 21 commands that are not repairs are blocked, 12 repairs get through, a Read passes, an undamaged install is silent. The BUG-073 test of a missing settings reader now expects exit 2. Against the hook at ba469e5, 41 failed (40 of the 41 new tests and the changed one). Staged hook suite before: 1534 passed, 41 failed. After: 1575 passed, 0 failed. Lex's regress harness: no line changed.
+
+Smoke test after applying, in a scratch project made with `guardian init`: rename `security/01-injection-guard.js`, then ask Claude to write any file; see the call blocked with a message naming the scanner. Ask Claude to run `guardian update`; it runs, the scanner is back, and the next write goes through.
+
 ### BUG-028 - Hook command path is cwd-relative
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10
