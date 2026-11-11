@@ -1661,6 +1661,17 @@ const NOT_PLAIN_COMMANDS = new Set(["case", "eval", "source", ".", "read", "mapf
 const quotesOut = (raw) => raw.replace(/'[^']*'|"(?:\\[\s\S]|[^"\\])*"/g, "");
 const singleQuotesOut = (raw) => raw.replace(/'[^']*'/g, "");
 const isRedirect = (op) => op !== undefined && /[<>]/.test(op) && op !== "<<" && op !== "<<-";
+// The variables a word names, as $name, ${name}, ${#name} or ${!name},
+// with the positional parameters, $@ and $*.
+const VARIABLE_REFERENCE = /\$\{?[#!]?([A-Za-z_]\w*|[\d@*])/g;
+// A brace list or range, which the shell expands to several words.
+const BRACE_LIST = /\{[^{}\s]*(?:,|\.\.)[^{}\s]*\}/;
+const STATEMENT_ENDS = new Set([";", "\n", "&&", "||"]);
+// PowerShell variables a command fills as it runs, and the common
+// parameters that name a variable to fill (-OutVariable x, -ov x, -pv x,
+// in any prefix PowerShell accepts).
+const PS_FILLED_VARIABLES = ["matches", "psitem", "input", "args", "error", "this", "foreach", "switch"];
+const PS_VARIABLE_OPTION = /^-(?:ov|pv|ev|wv|iv|outv\w*|pi\w*|errorv\w*|warningv\w*|informationv\w*)$/i;
 
 /**
  * Whether a command is plain: stages of a command and its arguments,
@@ -1670,48 +1681,102 @@ const isRedirect = (op) => op !== undefined && /[<>]/.test(op) && op !== "<<" &&
  * the command into stages, and the shell splits these differently:
  *   - a ( ) subshell, a { } group, a case arm, a process substitution:
  *     what a stage inside prints is piped or redirected on after the
- *     closing bracket; in PowerShell ( ) is an expression whose value is
- *     an argument or the object of a member call;
+ *     closing bracket;
+ *   - a PowerShell ( ) expression, whose value is an argument or the
+ *     object of a member call, unless the statement it stands in only
+ *     reads (G2b): `(Get-Content README.md) -match "security"` is plain,
+ *     `Remove-Item (Get-Item security)` and `rimraf (gi security)` are not;
  *   - a function or alias definition, which replaces the program a later
  *     stage names (git() { rm -rf "$3"; }; git commit -m security);
  *   - eval, source, read, mapfile and `printf -v`, which run text or put
  *     it in a variable;
  *   - a command word that is a variable or a substitution ($c security);
- *   - a glob, a variable or a substitution in a redirect target.
+ *   - an argument or redirect target that holds a variable the same
+ *     command can set (c=security; rm -rf $c, and $_ after any command).
+ *     A variable the command does not set ($BRANCH, $HOME) carries
+ *     nothing over from an exempt stage (G2b);
+ *   - a glob, a brace list or a substitution in a redirect target.
  * Brackets inside quotes are text (git commit -m "fix(security): x").
  *
- * @returns {{ lastOpen: number }|null} null when the command is not plain;
- *   else the place of its last argument that holds a glob, a variable or a
- *   substitution (-1 when none). Such an argument can name a file again or
- *   carry a word on, so a stage is exempt only when none comes after it.
+ * A later command joined by `&&` or `;` is not downstream of an exempt
+ * stage: only a stage that receives its output is, and the pipeline rule
+ * of bareWordText() covers that (G2b). What a later command can still do
+ * is name again a file an exempt stage wrote, so the arguments that could
+ * are returned.
+ *
+ * @returns {{ opens: Array<{ start: number, word: string, sub: boolean }>, reads: Array<[number, number]> }|null}
+ *   null when the command is not plain; else `opens`, the arguments that
+ *   hold a glob, a brace list or a substitution, and `reads`, the place of
+ *   each PowerShell statement with a ( ) that only reads
  */
-function plainCommand(text, tokens) {
+function plainCommand(text, tokens, dialect) {
+  // A PowerShell ( ) is an expression. It is no hazard when the statement
+  // it stands in only reads, and that statement is then text as a whole.
+  const reads = [];
+  if (dialect === "powershell") {
+    let statement = [];
+    const close = () => {
+      const parens = statement.some((tok) => tok.op === "(" || tok.op === ")");
+      const place = [statement[0]?.start, statement.at(-1)?.end];
+      statement = [];
+      if (!parens) return true;
+      if (!onlyReads(text.slice(...place), dialect)) return false;
+      reads.push(place);
+      return true;
+    };
+    for (const tok of tokens) {
+      if (!STATEMENT_ENDS.has(tok.op)) statement.push(tok);
+      else if (!close()) return null;
+    }
+    if (!close()) return null;
+  }
+  // The variables the command can set: NAME=value anywhere (alone, before
+  // a command, after export or declare), ${NAME:=value}, the name of a
+  // for loop, and $_, which every command sets. `set` gives the
+  // positional ones a value.
+  // PowerShell names are without case; its own variables that a
+  // command fills are set too ($Matches after -match), and so is the
+  // one named after -OutVariable, -PipelineVariable and their like.
+  const sets = new Set(["_", ...(dialect === "powershell" ? PS_FILLED_VARIABLES : [])]);
+  let positional = false;
+  tokens.forEach((tok, i) => {
+    if (tok.word === undefined) return;
+    if (dialect === "powershell" && PS_VARIABLE_OPTION.test(tok.word)) sets.add((tokens[i + 1]?.word ?? "").toLowerCase());
+    const assigned = /^([A-Za-z_]\w*)\+?=/.exec(tok.word);
+    if (assigned) sets.add(assigned[1]);
+    for (const m of singleQuotesOut(text.slice(tok.start, tok.end)).matchAll(/\$\{([A-Za-z_]\w*):?=/g)) sets.add(m[1]);
+    if (tok.word === "for" || tok.word === "select") sets.add(tokens[i + 1]?.word ?? "");
+    if (tok.word === "set") positional = true;
+  });
+  const setsOneOf = (raw) => [...singleQuotesOut(raw).matchAll(VARIABLE_REFERENCE)]
+    .some((m) => sets.has(dialect === "powershell" ? m[1].toLowerCase() : m[1]) || (positional && /^[\d@*]/.test(m[1])));
+  const substitution = DIALECTS[dialect].backticks ? /\$\(|`/ : /\$\(/;
+
   let first = true;
   let stageName = "";
-  let lastOpen = -1;
+  const opens = [];
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i];
     if (tok.word === undefined) {
-      if (tok.op === "(" || tok.op === ")") return null;
+      if ((tok.op === "(" || tok.op === ")") && dialect !== "powershell") return null;
       if (CONTROL_OPERATORS.has(tok.op)) first = true;
       continue;
     }
     const raw = text.slice(tok.start, tok.end);
     const bare = quotesOut(raw);
     if (bare === "{" || bare === "}" || /[()]/.test(bare)) return null;
-    const open = (/[*?[]/.test(bare) && bare !== "[" && bare !== "[[") || /[$`]/.test(singleQuotesOut(raw));
+    const pattern = (/[*?[]/.test(bare) && bare !== "[" && bare !== "[[") || BRACE_LIST.test(bare);
+    const sub = substitution.test(singleQuotesOut(raw));
     const redirected = isRedirect(tokens[i - 1]?.op);
     if (first && !redirected) {
       first = false;
       stageName = commandName(tok.word);
-      if (open || NOT_PLAIN_COMMANDS.has(stageName)) return null;
+      if (pattern || /[$`]/.test(singleQuotesOut(raw)) || NOT_PLAIN_COMMANDS.has(stageName)) return null;
     } else if (stageName === "printf" && tok.word === "-v") return null;
-    else if (open) {
-      if (redirected) return null;
-      lastOpen = tok.start;
-    }
+    else if (setsOneOf(raw) || (redirected && (pattern || sub))) return null;
+    else if (pattern || sub) opens.push({ start: tok.start, word: tok.word, sub });
   }
-  return { lastOpen };
+  return { opens, reads };
 }
 
 /**
@@ -1735,9 +1800,10 @@ function plainCommand(text, tokens) {
  * that does not only read all run.
  *
  * None of this is earned unless the whole command is plain
- * (plainCommand(); re-probe 6, G2), and a stage is exempt only when no
- * argument after it holds a glob, a variable or a substitution. A comment
- * is blanked either way: it is not part of the command.
+ * (plainCommand(); re-probe 6, G2). A file a reading stage writes counts
+ * as named again when a later argument holds a glob or a brace list that
+ * expands to its name, or a substitution (G2b). A comment is blanked
+ * either way: it is not part of the command.
  *
  * @param {((word: string) => boolean)|null} plainSink - whether a redirect
  *   target, as spelled, is a file that is neither Guardian's nor watched
@@ -1751,14 +1817,23 @@ function bareWordText(text, dialect, plainSink = null) {
     for (const [a, b] of blank) out = `${out.slice(0, a)}${" ".repeat(b - a)}${out.slice(b)}`;
     return out;
   };
-  const plain = plainCommand(text, tokens);
+  const plain = plainCommand(text, tokens, dialect);
   if (!plain) return blanked();
-  /** Whether nothing after `end` can name a file again or carry a word on. */
-  const earned = (end) => plain.lastOpen < end;
-  // Without case: on Windows and macOS L.TXT and l.txt are one file.
+  blank.push(...plain.reads);
+  /** Whether a word with a glob or a brace list in it can expand to a file of this name. */
+  const expandsTo = (word, base) => expandBraces(word).split(/\s+/).some((spelled) => {
+    const last = spelled.replace(/\\/g, "/").split("/").pop().toLowerCase();
+    return last === base || Boolean(globRegex(last)?.test(base));
+  });
+  // A file is named once when one word holds its name and no argument
+  // after that word can name it again: a glob or brace list that expands
+  // to it, or a substitution, whose result is not known. Without case:
+  // on Windows and macOS L.TXT and l.txt are one file.
   const namedOnce = (file) => {
     const base = file.replace(/\\/g, "/").split("/").pop().toLowerCase();
-    return base !== "" && tokens.filter((tok) => tok.word?.toLowerCase().includes(base)).length === 1;
+    const holding = tokens.filter((tok) => tok.word?.toLowerCase().includes(base));
+    return base !== "" && holding.length === 1 &&
+      !plain.opens.some((arg) => arg.start > holding[0].start && (arg.sub || expandsTo(arg.word, base)));
   };
   const sink = plainSink && ((word) => namedOnce(word) && plainSink(word));
   const inert = (body) => !body.expands || !/[$`]/.test(body.text);
@@ -1785,14 +1860,19 @@ function bareWordText(text, dialect, plainSink = null) {
     const moves = (s) => DIRECTORY_MOVERS.has(commandName(s[0].word));
     let reading = pipeline.length;
     while (reading > 0 && !moves(pipeline[reading - 1]) && onlyReads(text.slice(pipeline[reading - 1][0].start, to), dialect, 0, sink)) reading--;
-    if (reading < pipeline.length && earned(to)) {
+    if (reading < pipeline.length) {
       const from = pipeline[reading][0].start;
       blank.push([from, to]);
       for (const { at, body } of bodies) if (at >= from && inert(body)) blank.push([body.start, body.end]);
     }
-    for (const s of pipeline.slice(0, reading)) {
+    // The stage before those, when it is not one of them, prints into
+    // stages that only read, or into nothing: it can be a test run, or
+    // hold a message or a script name. A stage further up feeds one that
+    // does something else with what it prints (git commit -m security |
+    // xargs rm -rf), so it earns nothing (G2b).
+    const s = pipeline[reading - 1];
+    if (s) {
       const whole = [s[0].start, s.at(-1).end];
-      if (!earned(whole[1])) continue;
       if (isTestRun(s.map((tok) => tok.word)) && lexShell(text.slice(...whole), dialect).subs.length === 0) blank.push(whole);
       else blank.push(...[...messageSpans(s), ...scriptNameSpans(s)].filter(substitutionsRead));
     }
@@ -2172,6 +2252,10 @@ const READ_ONLY_COMMANDS = new Set([
 ]);
 const READ_ONLY_GIT = new Set(["diff", "log", "show", "status", "blame", "ls-files", "rev-parse", "cat-file", "grep"]);
 const NULL_SINK = /^(?:\/dev\/null|nul|\$null)$/i;
+// PowerShell's comparison, pattern, type, logical and string operators,
+// and a property or index of a value (.Count, .Directory.Name, [0]).
+const PS_OPERATOR = /^-(?:[ci]?(?:eq|ne|gt|ge|lt|le|like|notlike|match|notmatch|contains|notcontains|in|notin|replace|split)|is|isnot|as|and|or|xor|not|band|bor|bxor|join|f)$/i;
+const PS_PROPERTY = /^(?:\.[A-Za-z_]\w*|\[-?\d+\])+$/;
 
 /**
  * Whether a find command only lists: no -delete, -ok or file-writing
@@ -2203,10 +2287,22 @@ function onlyReads(command, dialect, depth = 0, plainSink = null) {
   const { tokens, subs, uncertain } = lexShell(command, dialect);
   if (uncertain || !subs.every((s) => onlyReads(s, dialect, depth + 1))) return false;
   let words = [];
-  const stageReads = () => {
+  let afterGroup = false; // the stage being read follows a ")"
+  /** @param {string} [closing] - the operator that ends the stage */
+  const stageReads = (closing) => {
     let w = words.filter((x) => x !== "");
     words = [];
+    const continues = afterGroup;
+    afterGroup = closing === ")";
     if (w.length === 0) return true;
+    // What follows a PowerShell ( ) carries the expression on: an
+    // operator and its operands (-match "x", -replace "a","b"), or a
+    // property of the value (.Count, .Length -gt 0). Both only read. A
+    // method call (.Delete(...)) is not known to (G2b).
+    if (dialect === "powershell" && continues) {
+      const property = PS_PROPERTY.test(w[0]) && closing !== "(";
+      if (PS_OPERATOR.test(w[0]) || (property && (w.length === 1 || PS_OPERATOR.test(w[1])))) return true;
+    }
     // A value set in front of a command can be what it runs (LESSOPEN,
     // GIT_EXTERNAL_DIFF, PAGER), so the stage is no longer known to
     // only read (re-probe 4, E2).
@@ -2242,7 +2338,7 @@ function onlyReads(command, dialect, depth = 0, plainSink = null) {
     const tok = tokens[i];
     if (tok.word !== undefined) words.push(tok.word);
     else if (CONTROL_OPERATORS.has(tok.op)) {
-      if (!stageReads()) return false;
+      if (!stageReads(tok.op)) return false;
     } else if (WRITE_REDIRECTS.has(tok.op)) {
       const next = tokens[i + 1]?.word;
       const sink = next !== undefined &&

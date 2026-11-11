@@ -233,6 +233,17 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A later command no longer takes an exemption away (BUG-080, G2b).**
+  `git commit -m security && git push origin $BRANCH`, the same with
+  `"$(git branch --show-current)"`, and PowerShell `(Get-Content
+  README.md) -match "security"` were denied in bypass mode. A variable
+  now counts only when the same command can set it (`c=security; rm -rf
+  $c`, `$_`), a PowerShell `( )` only in a statement that does not only
+  read, and a glob only when it can expand to the file a reading stage
+  wrote. Three forms that were silent ask: `git commit -m security |
+  xargs rm -rf`, `npm run security | xargs npx rimraf` and `echo "rm -rf
+  security" > x.sh; sh x.{sh,}`.
+
 - **A command behind a wrapper option that takes a value is read
   (BUG-066).** In `nice -n 5 cp notes/x.md CLAUDE.md` the reader took
   `5` for the program, so the copy was not judged; the same held for

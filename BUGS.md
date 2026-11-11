@@ -1395,6 +1395,26 @@ Limit, stated: the folder-above check of F3b still follows every move as if it s
 
 Smoke test after applying: in bypass mode at the root of a scratch project with a `src/security` folder, `cd src && rm -rf security` gets no prompt; `cd src; npx rimraf security` is denied with Guardian's message.
 
+**G2b, Lex's ruling on the G2 cost (2026-11-11): what makes a command not plain, narrowed. Fixed in staging, not yet live.** G2 withheld every exemption when any later argument held a glob, a variable or a substitution, and for any PowerShell `( )`. Denied in bypass mode at a project root because of that: `git commit -m security && git push origin $BRANCH`, `git commit -m "security" && git push origin "$(git branch --show-current)"` and PowerShell `(Get-Content README.md) -match "security"`. Lex's ruling: that is ordinary work. "Downstream" means a stage that receives the exempt stage's output (a pipe, xargs, a process or command substitution that captures it), not a later command joined by `&&` or `;`. A variable in an argument makes the command not plain only when the same command can set it. A PowerShell parenthesised expression or member call makes it not plain only when the command also holds something that deletes, moves or writes.
+
+Change in `staging/hooks/injection-guard-hook.mjs`:
+- `earned()` is gone. A later command no longer takes an exemption away.
+- `plainCommand(text, tokens, dialect)` collects the variables the command can set: `NAME=value` anywhere (alone, before a command, after `export` or `declare`), `${NAME:=value}`, the name of a `for` loop, `$_` (every command sets it), the positional parameters when the command runs `set`; in PowerShell also `$Matches`, `$PSItem`, `$input`, `$args`, `$Error` and the name after `-OutVariable`, `-PipelineVariable` and their like. An argument or redirect target that refers to one of them makes the command not plain. `$BRANCH` and `$HOME`, which the command does not set, do not. `printf -v`, `read` and `mapfile` were not plain already.
+- PowerShell: a `( )` no longer makes the command not plain when the statement it stands in only reads, and that statement is then blanked as a whole. `onlyReads()` learned what follows a `( )`: an operator with its operands (`-match`, `-replace`, `-eq`, `-like`, `-split`, `-join`, `-f` and the rest: `PS_OPERATOR`) and a property or index of the value (`.Count`, `.Directory.Name`, `[0]`: `PS_PROPERTY`). A method call is not known to read. This is the fail-closed reading of the ruling: the expression counts beside anything that is not known to only read, which covers the cmdlets that delete, move and write and also an external program (`rimraf (gi security)`).
+- The file a reading stage writes is named again when a later argument holds a glob or a brace list that expands to its name, or any substitution (`namedOnce()` with `plainCommand().opens`). A glob that cannot match it no longer counts: `echo "## Security" >> README.md && git add src/*.js` is silent, `... && git add *.md` asks.
+- A test-run stage, a message and a script name are exempt only in the last stage of their pipeline that does not only read, so what the stage prints goes to readers or nowhere.
+
+Three forms were silent before this change and ask now. `echo "rm -rf security" > x.sh; sh x.{sh,}`: a brace list named the file again and was not seen as a glob is. `git commit -m security | xargs rm -rf` and `npm run security | xargs npx rimraf`: git prints the subject line, which xargs hands to rm.
+
+Tests: `tests/hook.test.js`, "a later command is not downstream (G2b)": 14 stay silent in bypass mode, 26 ask; the 37 asks of the G2 group (every W2, W4 and W7 case) still ask. Staged hook suite before: 1287 passed, 15 failed (12 of the silent cases, among them the three of the ruling, and the three forms above). After: 1302 passed, 0 failed. Lex's regress harness: no line changed.
+
+Limits, stated, for Lex to confirm:
+- A later command that reads the word back from where an exempt command stored it is silent: `git commit -m security; rm -rf "$(git log -1 --format=%s)"`. It follows from the ruling (the substitution does not capture the exempt stage's output) and is no more than two separate commands do: `rm -rf "$(git log -1 --format=%s)"` alone names nothing and has always been silent.
+- A reader that walks a folder names the file a reading stage wrote without spelling it: `echo security > l.txt; find . -type f -exec cat {} + | xargs rm -rf` is silent, as it was before G2b. Counting a folder as naming every file in it would make `echo "## Security" >> README.md && git add .` ask.
+- A substitution after a reading stage's file always counts as naming it again, so `echo "## Security" >> README.md && git commit -m "$(cat <<'EOF' ... EOF)"` asks, as before.
+
+Smoke test after applying: in bypass mode at the root of a scratch git project, `git commit --allow-empty -m security && git push origin $BRANCH` gets no Guardian prompt (the push itself may fail); `git commit --allow-empty -m security | xargs rm -rf` is denied with Guardian's message.
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

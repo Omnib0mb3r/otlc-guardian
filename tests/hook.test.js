@@ -4387,6 +4387,95 @@ describe("PreToolUse hook - a wrapper's option that takes a value (BUG-066)", ()
 });
 
 // ---------------------------------------------------------------------------
+// G2b (BUG-080): what makes a command not plain, narrowed
+// ---------------------------------------------------------------------------
+//
+// G2 took every exemption away when any later argument held a variable, a
+// glob or a substitution, and for any PowerShell ( ) expression. That
+// denied ordinary work in bypass mode: `git commit -m security && git
+// push origin $BRANCH`, the same with "$(git branch --show-current)", and
+// `(Get-Content README.md) -match "security"`. Lex's ruling: downstream
+// means a stage that receives the exempt stage's output, not a later
+// command; a variable counts only when the same command can set it; a
+// PowerShell expression counts only beside something that deletes, moves
+// or writes. Every W2, W4 and W7 case of the G2 group above still asks.
+
+describe("PreToolUse hook - a later command is not downstream (G2b)", () => {
+  const run = (command, { mode, tool = "Bash" } = {}) => withTempProject((dir) => {
+    for (const rel of [".claude/settings.json", "security/01-injection-guard.js", "src/a.js", "docs/a.md", "README.md", "CLAUDE.md"]) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), rel.endsWith(".json") ? "{}" : "x\n");
+    }
+    return runHook(PRE_HOOK, { tool_name: tool, cwd: dir, tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) },
+      { CLAUDE_PROJECT_DIR: dir });
+  });
+  const show = (command) => JSON.stringify(command).slice(1, -1);
+
+  for (const [command, tool] of [
+    // The three cases of Lex's ruling.
+    ["git commit -m security && git push origin $BRANCH"],
+    ["git commit -m \"security\" && git push origin \"$(git branch --show-current)\""],
+    ["(Get-Content README.md) -match \"security\"", "PowerShell"],
+    // A variable the command does not set, a substitution or a glob in a later command.
+    ["git add -A && git commit -m \"security fixes\" && git push -u origin \"$(git rev-parse --abbrev-ref HEAD)\""],
+    ["npm run security && echo \"done: $?\""],
+    ["pytest -k security; echo $HOME"],
+    ["git log > $TMPDIR/x.log && git commit -m security"],
+    ["echo \"## Security\" >> README.md && git add src/*.js"],
+    ["git commit -m \"security\"; git push origin $branch", "PowerShell"],
+    // What an exempt stage prints goes to stages that only read.
+    ["pytest -k security | tee out.log"],
+    ["npm run security 2>&1 | grep -i fail"],
+    // A PowerShell expression that only reads.
+    ["(Get-Content README.md) -replace \"security\",\"x\"", "PowerShell"],
+    ["(Get-ChildItem security).Count", "PowerShell"],
+    ["(Get-ChildItem src).Count; git commit -m \"security\"", "PowerShell"],
+  ]) {
+    stagedOnly(`silent${tool ? ` (${tool})` : ""}: ${show(command)}`, () => {
+      expectSilent(run(command, { mode: "bypassPermissions", tool }));
+    });
+  }
+
+  for (const [command, tool] of [
+    // A variable the same command sets.
+    ["echo security; rm -rf $_"],
+    ["c=security; rm -rf $c"],
+    ["export c=security; rm -rf $c"],
+    ["for c in security; do rm -rf $c; done"],
+    ["set -- security; rm -rf $1"],
+    ["echo ${c:=security}; rm -rf $c"],
+    ["echo security; bash -c 'rm -rf \"$1\"' x \"$_\""],
+    ["echo security > l.txt; F=l; xargs rm -rf < $F.txt"],
+    ["(Get-Content README.md) -match \"security\"; Remove-Item -Recurse $Matches[0]", "PowerShell"],
+    ["Write-Output security -OutVariable c; Remove-Item -Recurse $c", "PowerShell"],
+    // A stage that receives what a message or a script-name stage prints.
+    ["git commit -m security | xargs rm -rf"],
+    ["npm run security | xargs npx rimraf"],
+    // The file written is named again: a glob or a brace that matches it, a substitution.
+    ["echo \"## Security\" >> README.md && git add *.md"],
+    ["echo \"rm -rf security\" > x.sh; sh ./x.s?"],
+    ["echo \"rm -rf security\" > x.sh; sh x.{sh,}"],
+    ["echo security > l.txt; rm -rf \"$(cat l.*)\""],
+    ["echo security > l.txt; rm -rf `cat l.*`"],
+    // A PowerShell expression beside something that is not known to only read.
+    ["rimraf (gi security)", "PowerShell"],
+    ["npx rimraf (Get-Item security)", "PowerShell"],
+    ["(Get-Item security) | Remove-Item -Recurse", "PowerShell"],
+    ["(Get-Item security).Delete()", "PowerShell"],
+    ["(Get-Item security).FullName | Remove-Item -Recurse", "PowerShell"],
+    ["cmd /c rd /s /q (gi security)", "PowerShell"],
+    ["(echo security) -replace \"x\",\"y\" | Remove-Item -Recurse", "PowerShell"],
+    ["(echo security) -replace \"x\",\"y\" | % { Remove-Item -Recurse $_ }", "PowerShell"],
+    ["$c = \"security\"; Remove-Item -Recurse $c", "PowerShell"],
+  ]) {
+    stagedOnly(`asks${tool ? ` (${tool})` : ""}: ${show(command)}`, () => {
+      const out = run(command, { tool });
+      assert.equal(decisionOf(out), "ask", `${show(command)} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 
