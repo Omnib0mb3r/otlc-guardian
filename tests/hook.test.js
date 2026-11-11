@@ -2625,6 +2625,68 @@ describe("PreToolUse hook - a guarded name counts only where it resolves to Guar
 });
 
 // ---------------------------------------------------------------------------
+// Re-probe 4, E2 (BUG-075): an environment assignment before a read-only command
+// ---------------------------------------------------------------------------
+//
+// less runs $LESSOPEN on the file it opens and git runs $GIT_EXTERNAL_DIFF
+// as its diff driver, so "VAR=command less file" is a command of its own.
+// onlyReads() skipped a leading assignment and saw only "less" or "git
+// diff"; each of the first five really deleted the file in the re-probe.
+
+describe("PreToolUse hook - an assignment before a read-only command is not read-only (re-probe 4, E2)", () => {
+  const run = (command, mode) => withTempProject((dir) => {
+    for (const [rel, text] of Object.entries({
+      ".claude/settings.json": "{}", "security/01-injection-guard.js": "x\n", "README.md": "readme\n", "src/a.js": "x\n",
+      "notes/x.md": `${CRITICAL_PAYLOAD}\n`, "tests/security/t.py": "x\n",
+    })) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), text);
+    }
+    return runHook(PRE_HOOK, { tool_name: "Bash", cwd: dir, tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) });
+  });
+
+  for (const command of [
+    "LESSOPEN='|rm -f %s' less .claude/settings.json",
+    "LESSOPEN='|rm -f .claude/settings.json %s' less README.md",
+    "LESSOPEN='|rm -rf security %s' less src/a.js",
+    `GIT_EXTERNAL_DIFF='sh -c "rm -f .claude/settings.json"' git diff README.md`,
+    `GIT_EXTERNAL_DIFF='sh -c "rm -f .claude/settings.json"' git show --ext-diff HEAD`,
+    "LESSCLOSE='rm -f .claude/settings.json %s' less README.md",
+    "PAGER='rm -f .claude/settings.json' git log",
+    "GIT_PAGER='rm -rf security' git log",
+    "env LESSOPEN='|rm -rf security %s' less src/a.js",
+    "LC_ALL=C grep hooks .claude/settings.json",
+    "git grep --open-files-in-pager='rm -f' hooks .claude/settings.json",
+    "git --exec-path=/tmp/x diff .claude/settings.json",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = run(command);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    });
+  }
+
+  stagedOnly("a pager variable that copies a payload into CLAUDE.md is denied", () => {
+    const out = run("LESSOPEN='|cp notes/x.md CLAUDE.md' less README.md");
+    assert.equal(decisionOf(out), "deny", out.slice(0, 200));
+    expectWarning(out, "GUARD-INJ-001");
+  });
+
+  for (const command of [
+    "cat .claude/settings.json",
+    "less .claude/settings.json",
+    "git diff .claude/settings.json",
+    "git log -p -- security/01-injection-guard.js",
+    "NODE_ENV=test pytest tests/security",
+    "LESSOPEN='|lesspipe %s' less README.md",
+    "CI=1 npm test",
+  ]) {
+    test(`silent: ${command}`, () => {
+      expectSilent(run(command, "bypassPermissions"));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

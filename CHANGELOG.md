@@ -227,6 +227,15 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **An assignment in front of a read-only command is not read-only
+  (BUG-075, re-probe 4 E2).** `LESSOPEN='|rm -f %s' less
+  .claude/settings.json` and `GIT_EXTERNAL_DIFF='sh -c "rm -f ..."' git
+  diff README.md` deleted Guardian's files silently: the read-only check
+  skipped the assignment and saw `less` or `git diff`. A stage that
+  starts with `VAR=value` now never counts as read-only, nor does git
+  with a pager-exec or exec-path option, and the value is read as a
+  command of its own, so what it deletes or copies is judged.
+
 - **A guarded name counts only where it reaches Guardian's file (BUG-080,
   re-probe 4 E8).** The staged D1 check matched `security` and `.claude`
   anywhere in a command, so `pytest tests/security`, `rm -rf src/security`,

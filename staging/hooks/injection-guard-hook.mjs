@@ -1184,12 +1184,18 @@ function onlyReads(command, dialect, depth = 0) {
   const stageReads = () => {
     let w = words.filter((x) => x !== "");
     words = [];
-    while (w.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(w[0])) w = w.slice(1);
     if (w.length === 0) return true;
+    // A value set in front of a command can be what it runs (LESSOPEN,
+    // GIT_EXTERNAL_DIFF, PAGER), so the stage is no longer known to
+    // only read (re-probe 4, E2).
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w[0])) return false;
     const name = commandName(w[0]);
     if (name === "git") {
       const sub = w.slice(1).find((x) => !x.startsWith("-"));
-      return READ_ONLY_GIT.has(sub) && !w.some((x) => /^--(?:output|ext-diff|textconv)(?:=|$)/i.test(x));
+      // Options that write a file or run a program: a diff driver, a
+      // textconv filter, a pager for matches, another git exec path.
+      return READ_ONLY_GIT.has(sub) &&
+        !w.some((x) => /^--(?:output|ext-diff|textconv|open-files-in-pager|exec-path|config-env)(?:=|$)/i.test(x) || /^-O/.test(x));
     }
     if (name === "rg" && w.some((x) => /^--pre(?:=|$)/.test(x))) return false;
     // A nested shell reads when the script it runs does.
@@ -1463,11 +1469,27 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   const { add, abs, recurse } = ctx;
   const stdin = [...input.pipeIn, ...input.reads];
   let words = allWords.filter((w) => w !== "");
-  while (words.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) words = words.slice(1);
+  // An environment value may be a command the program runs: less runs
+  // $LESSOPEN and $LESSCLOSE on the file it opens, git runs
+  // $GIT_EXTERNAL_DIFF and the pager variables. The list of such
+  // variables is open-ended, so every value set in front of a command
+  // is read as a command too (re-probe 4, E2). A leading "|" is less's
+  // pipe marker.
+  const readValue = (assignment) => {
+    const value = assignment.slice(assignment.indexOf("=") + 1).replace(/^\|+\s*-?/, "");
+    if (value.trim()) recurse(value, dir, "bash");
+  };
+  while (words.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) {
+    readValue(words[0]);
+    words = words.slice(1);
+  }
   while (words.length > 0 && COMMAND_WRAPPERS.has(commandName(words[0]))) {
     const wrapper = commandName(words[0]);
     words = words.slice(1);
-    while (words.length > 0 && (words[0].startsWith("-") || (wrapper === "env" && words[0].includes("=")))) words = words.slice(1);
+    while (words.length > 0 && (words[0].startsWith("-") || (wrapper === "env" && words[0].includes("=")))) {
+      if (wrapper === "env" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) readValue(words[0]);
+      words = words.slice(1);
+    }
     if (wrapper === "timeout" && words.length > 1) words = words.slice(1); // the duration
   }
   if (words.length === 0) return { dir, out: stdin };
