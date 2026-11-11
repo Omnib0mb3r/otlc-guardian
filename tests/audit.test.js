@@ -3409,6 +3409,44 @@ describe("BUG-002: AGT-001, a Base44 agent may create, update or delete a high-r
 });
 
 // ---------------------------------------------------------------------------
+// BUG-076: SEC-005 and SEC-006 see a quoted key (JSON, a Python dict)
+// ---------------------------------------------------------------------------
+//
+// Both rules wanted ":" or "=" straight after the key word, so a committed
+// config.json holding "password": "..." passed the audit, though .json is
+// one of the file types the secret rules read.
+
+describe("BUG-076: SEC-005 and SEC-006 fire on a quoted key", () => {
+  for (const [file, text, id] of [
+    ["config.json", '{\n  "password": "hunter2hunter2"\n}\n', "SEC-005"],
+    ["config.json", '{\n  "api_key": "abcd1234efgh"\n}\n', "SEC-006"],
+    ["settings.py", "DATABASE = {'password': 'hunter2hunter2'}\n", "SEC-005"],
+    ["settings.py", "CLIENT = {'api-key': 'abcd1234efgh'}\n", "SEC-006"],
+    ["src/config.js", 'export const c = { "password": "hunter2hunter2" };\n', "SEC-005"],
+    ["src/config.js", 'export const c = { "apiKey": "abcd1234efgh" };\n', "SEC-006"],
+    ["deploy.yaml", 'db:\n  "password": "hunter2hunter2"\n', "SEC-005"],
+    ["config.json", '{ "password": "password123" }\n', "SEC-005"],
+  ]) {
+    test(`${id} fires in ${file}: ${text.trim().split("\n").slice(-2)[0].trim()}`, () => {
+      assert.ok(auditFires({ [file]: text }, id));
+    });
+  }
+
+  for (const [file, text, id] of [
+    ["schema.json", '{ "password": { "type": "string", "minLength": 12 } }\n', "SEC-005"],
+    ["locales/en.json", '{\n  "password": "Password",\n  "confirmPassword": "Confirm password",\n  "passwordHint": "Enter your password"\n}\n', "SEC-005"],
+    ["src/labels.js", 'export const labels = { password: "Password", newPassword: "New password" };\n', "SEC-005"],
+    ["config.json", '{ "password": "" }\n', "SEC-005"],
+    ["config.json", '{ "password": null, "api_key": null }\n', "SEC-006"],
+    ["schema.json", '{ "api_key": { "type": "string" } }\n', "SEC-006"],
+  ]) {
+    test(`${id} silent in ${file}: ${text.trim().slice(0, 60)}`, () => {
+      assert.ok(!auditFires({ [file]: text }, id));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Gate plan step 0: docs/coverage.md maps every rule
 // ---------------------------------------------------------------------------
 //

@@ -445,8 +445,11 @@ function firstMatch({ pattern, match }, views) {
 // (`z.string()`, `Joi.string()`, `constr(...)`, `Array<string>`) or a
 // TypeScript primitive type (`string|undefined`). A quoted value always
 // counts, and so does any other unquoted one (`.env`, YAML).
+// The key may be quoted itself (JSON, a Python dict): "password": "..."
+// (BUG-076). A quoted value that is only the word "password" is the
+// field's label or a placeholder, as in a locale file, not a secret.
 const CODE_VALUE = String.raw`(?:[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*[(<]|(?:string|number|boolean|bigint|symbol|object|unknown|any|never|null|undefined|void)(?![A-Za-z0-9_$]))`;
-const inlineValue = (key) => new RegExp(String.raw`${key}\s*[:=]\s*(?:["'][^\s"']{8,}|(?!${CODE_VALUE})[^\s"']{8,})`, "i");
+const inlineValue = (key) => new RegExp(String.raw`${key}["']?\s*[:=]\s*(?:["'](?!password["'])[^\s"']{8,}|(?!${CODE_VALUE})[^\s"']{8,})`, "i");
 
 const SECRET_PATTERNS = [
   { pattern: /sk-proj-[a-zA-Z0-9_-]{20,}/,               label: "OpenAI Project API Key",    id: "GUARD-SEC-001" },

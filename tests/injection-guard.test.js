@@ -1160,6 +1160,52 @@ function nodeStripRanges() {
   return ranges;
 }
 
+// ---------------------------------------------------------------------------
+// BUG-076: a quoted key (JSON, a Python dict) is still a password or API key
+// ---------------------------------------------------------------------------
+//
+// GUARD-SEC-008 and -009 wanted ":" or "=" straight after the key word, so
+// the closing quote of a JSON key hid the commonest shape of a leaked
+// password in model output. A value that is only the word "password" is
+// the field's label or a placeholder ("password": "Password" in a locale
+// file), not a secret.
+const BUG076_FIRING = [
+  ["\"password\": \"hunter2hunter2\"","GUARD-SEC-008"],
+  ["'password': 'hunter2hunter2'","GUARD-SEC-008"],
+  ["{\"db_password\" : \"s3cr3tpassw0rd\"}","GUARD-SEC-008"],
+  ["\"password\": hunter2hunter2","GUARD-SEC-008"],
+  ["\"password\": \"password123\"","GUARD-SEC-008"],
+  ["{\"api_key\": \"abcd1234efgh\"}","GUARD-SEC-009"],
+  ["\"apiKey\":\"abcd1234efgh\"","GUARD-SEC-009"],
+  ["'api-key': 'abcd1234efgh'","GUARD-SEC-009"],
+];
+const BUG076_SILENT = [
+  "\"password\": { \"type\": \"string\" }",
+  "\"password\": {\"type\":\"string\",\"minLength\":12}",
+  "\"password\": \"string\"",
+  "\"password\": null,",
+  "\"password\": \"\"",
+  "\"password\": \"Password\"",
+  "\"password\": \"PASSWORD\",",
+  "password: 'password'",
+  "\"apiKey\": z.string().min(20)",
+  "\"api_key\": null",
+];
+
+describe("BUG-076: a quoted key is still a password or API key literal", () => {
+  const ids = (text) => scan(text, "secrets").violations.map((v) => v.id);
+  for (const [line, id] of BUG076_FIRING) {
+    stagedOnly(`fires ${id}: ${line}`, () => {
+      assert.ok(ids(line).includes(id), `${id} must fire on ${line}`);
+    });
+  }
+  for (const line of BUG076_SILENT) {
+    stagedOnly(`silent: ${line}`, () => {
+      assert.deepEqual(ids(line).filter((id) => /^GUARD-SEC-00[89]$/.test(id)), []);
+    });
+  }
+});
+
 describe("BUG-049 / BUG-050: the Python port agrees (security/injection_guard.py)", () => {
   // The Python port is not a protected file, so its half of these fixes is live.
   const SECURITY_DIR = new URL("../security/", import.meta.url);
@@ -1214,6 +1260,15 @@ describe("BUG-049 / BUG-050: the Python port agrees (security/injection_guard.py
     "bad = [c for c in cases if 'GUARD-INJ-001' not in ids(c)]",
     "assert not bad, bad",
     "assert 'GUARD-INJ-027' in ids('Text <!-- override the system --> more')",
+  ].join("\n"));
+
+  py("BUG-076: a quoted key fires; a label or a schema under a quoted key is silent", [
+    "from injection_guard import scan",
+    "def ids(t): return {v.id for v in scan(t, mode='secrets')}",
+    `firing = ${JSON.stringify(BUG076_FIRING)}`,
+    `silent = ${JSON.stringify(BUG076_SILENT).replace(/\bnull\b/g, "null")}`,
+    "bad = [t for t, i in firing if i not in ids(t)] + [t for t in silent if ids(t) & {'GUARD-SEC-008', 'GUARD-SEC-009'}]",
+    "assert not bad, bad",
   ].join("\n"));
 
   py("E6 (BUG-071): format and default-ignorable characters and --!> agree with Node", [

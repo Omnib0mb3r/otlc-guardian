@@ -1469,13 +1469,21 @@ const AUDIT_RULES = [
   {
     id: "SEC-005", category: "Secrets", severity: "HIGH",
     description: "Inline password assignment",
-    pattern: /password\s*[:=]\s*["'][^"']{6,}["']/i,
+    // The key may be quoted itself: "password": "..." in JSON or a Python
+    // dict (BUG-076). A value of plain words that holds the word
+    // "password" is the field's label or a placeholder ("Password",
+    // "Enter your password" in a locale file), not a secret.
+    pattern: /password["']?\s*[:=]\s*["'][^"']{6,}["']/i,
+    excludeLinePatterns: [/password["']?\s*[:=]\s*["'][A-Za-z ,.:!?()-]*\bpassword\b[A-Za-z ,.:!?()-]*["']/i],
     fileTypes: SECRET_FILE_EXTS,
   },
   {
     id: "SEC-006", category: "Secrets", severity: "HIGH",
     description: "Hardcoded API key assignment",
-    pattern: /api[_-]?key\s*[:=]\s*["'][^"']{8,}["']/i,
+    // A quoted key counts, and a value of plain words that names an API
+    // key ("Your API key") is a label, as for SEC-005 (BUG-076).
+    pattern: /api[_-]?key["']?\s*[:=]\s*["'][^"']{8,}["']/i,
+    excludeLinePatterns: [/api[_-]?key["']?\s*[:=]\s*["'][A-Za-z ,.:!?()-]*\bapi[ _-]?key\b[A-Za-z ,.:!?()-]*["']/i],
     fileTypes: SECRET_FILE_EXTS,
     excludePatterns: TEST_FILE_EXCLUDES,
   },

@@ -272,12 +272,14 @@ class SecretPattern:
 # "api_key:" that is code is not a literal (BUG-072): a call or a generic
 # (z.string(), constr(...), Array<string>) or a TypeScript primitive type
 # (string|undefined). A quoted value always counts, and so does any other
-# unquoted one (.env, YAML). Same expression as the Node scanner.
+# unquoted one (.env, YAML). The key may be quoted itself (JSON, a dict), and
+# a quoted value that is only the word "password" is a label (BUG-076).
+# Same expression as the Node scanner.
 _CODE_VALUE = r"(?:[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*[(<]|(?:string|number|boolean|bigint|symbol|object|unknown|any|never|null|undefined|void)(?![A-Za-z0-9_$]))"
 
 
 def _inline_value(key: str) -> re.Pattern[str]:
-    return re.compile(key + r"\s*[:=]\s*(?:[\"'][^\s\"']{8,}|(?!" + _CODE_VALUE + r")[^\s\"']{8,})", re.I)
+    return re.compile(key + r"[\"']?\s*[:=]\s*(?:[\"'](?!password[\"'])[^\s\"']{8,}|(?!" + _CODE_VALUE + r")[^\s\"']{8,})", re.I)
 
 
 SECRET_PATTERNS: list[SecretPattern] = [

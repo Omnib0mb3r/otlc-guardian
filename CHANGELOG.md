@@ -227,6 +227,13 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A quoted key is still a password or API key (BUG-076).**
+  `GUARD-SEC-008` and `-009` wanted `:` or `=` straight after the key
+  word, so `"password": "hunter2hunter2"` and `{"api_key": "..."}`, the
+  commonest shape of a leaked secret in model output, scanned clean. The
+  key may now be quoted. A quoted value that is only the word "password"
+  is a label and stays silent. The Python port matches (live).
+
 - **The hook reads settings types from `security/claude-settings.js`
   (BUG-073).** The staged hook carried its own copy of the Claude Code
   settings type tables, kept in step with `guardian check` by a parity
@@ -666,6 +673,14 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
 ### Fixed
 
+- **Audit rules SEC-005 and SEC-006 see a quoted key (BUG-076).** A
+  committed `config.json` holding `"password": "hunter2hunter2"` or
+  `"api_key": "..."`, or a Python dict with the same keys, passed the
+  audit: both rules wanted `:` or `=` straight after the key word. The
+  key may now be quoted. A value of plain words that names the field
+  (`"Password"`, `"Enter your password"`, `"Your API key"`) is a label
+  and is skipped, which also stops SEC-005 firing on label objects in
+  JavaScript.
 - **The hook test suites no longer fail at random on a loaded machine
   (BUG-077).** The test harness gave each hook process 10 seconds and
   reported a kill as "status null"; under load a different test failed
