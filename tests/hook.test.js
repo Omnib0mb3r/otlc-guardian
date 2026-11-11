@@ -2793,6 +2793,31 @@ describe("PreToolUse hook - find -exec copies are judged by content (re-probe 4,
     assert.equal(decisionOf(out), "ask", out.slice(0, 200));
   });
 
+  // Re-probe 5, F4: past the cap the files are not all read, so what the
+  // clause prints is not all judged either. Redirected or piped into a
+  // watched file it asks; real effect in the re-probe: CLAUDE.md held the
+  // payload line of the 1,006th file.
+  for (const command of [
+    "find big -name '*.md' -exec cat {} + >> CLAUDE.md",
+    "find big -name '*.md' -exec cat {} \\; > CLAUDE.md",
+    "find big -name '*.md' -exec cat {} + | tee -a AGENTS.md",
+    "find big -type f -exec head -n 5 {} \\; > .claude/agents/all.md",
+  ]) {
+    stagedOnly(`find output past the cap into a watched file asks: ${command}`, () => {
+      const many = Object.fromEntries(Array.from({ length: 1005 }, (_, k) => [`big/f${k}.md`, "clean\n"]));
+      const out = run(command, undefined, { ...many, "big/zz.md": `${CRITICAL_PAYLOAD}\n` });
+      assert.match(decisionOf(out) ?? "", /^(?:ask|deny)$/, out.slice(0, 200));
+      const bypass = run(command, "bypassPermissions", { ...many, "big/zz.md": `${CRITICAL_PAYLOAD}\n` });
+      assert.equal(decisionOf(bypass), "deny", bypass.slice(0, 200));
+    });
+  }
+  test("find output past the cap into an unwatched file, or a pipe that only reads, stays silent", () => {
+    const many = Object.fromEntries(Array.from({ length: 1005 }, (_, k) => [`big/f${k}.md`, "clean\n"]));
+    for (const command of ["find big -name '*.md' -exec cat {} + > all.txt", "find big -name '*.md' -exec cat {} + | grep -c clean"]) {
+      expectSilent(run(command, "bypassPermissions", many));
+    }
+  });
+
   // S10 must hold on a tree larger than Guardian reads.
   test("a cleanup find over more than 1,000 files stays silent", () => {
     const many = Object.fromEntries(Array.from({ length: 1005 }, (_, k) => [`big/f${k}.md`, "clean\n"]));

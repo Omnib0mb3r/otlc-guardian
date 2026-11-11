@@ -617,7 +617,10 @@ function findWrites(args, dir, ctx) {
       // for the starting point, which "rm {}" would then seem to remove.
       const marker = `${UNJUDGED}${ctx.abs(dir, roots[0])}`;
       const marked = { ...ctx, add: (d, p, sources = [], append = false) => ctx.add(d, p, [...sources, marker], append) };
-      commandWrites(e.clause, dir, marked);
+      // What the clause prints from those files is unjudged too, so find's
+      // output redirected or piped into a watched file asks (re-probe 5, F4).
+      if (commandWrites(e.clause, dir, marked).out.length > 0) out.push(marker);
+
     }
   });
   return out;

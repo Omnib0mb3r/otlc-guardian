@@ -233,6 +233,13 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **find output past 1,000 files into a watched file asks (BUG-066,
+  re-probe 5 F4).** Past the cap E5 marked only what the `-exec` clause
+  itself wrote, so `find docs -name '*.md' -exec cat {} + >> CLAUDE.md`
+  was judged by the first 1,000 files and a payload in a later one was
+  written. What the clause prints is now marked too, and the redirect or
+  `tee` asks.
+
 - **A guarded folder followed by `/.` or `/x/..` is found (BUG-075,
   re-probe 5 F3).** `npx rimraf .claude/agents/..` is `.claude` and
   `npx rimraf security/.` is `security`, but the name check read a name
