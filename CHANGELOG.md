@@ -233,6 +233,13 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **An exempt stage's own redirect is judged like `echo`'s (BUG-080,
+  re-probe 7 H8).** `git commit -m security > l.txt; xargs rm -rf <
+  l.txt` was silent: git prints the subject, and the file handed it to
+  `rm`. A test run, a message or a script name is now exempt only when
+  the stage's own output goes to nothing, to a file descriptor, or to an
+  ordinary file the command names once.
+
 - **Without its scanner the hook blocks (BUG-027, re-probe 7 H10).** With
   `security/01-injection-guard.js` or `security/claude-settings.js`
   missing, empty or failing to load, the PreToolUse hook reported an

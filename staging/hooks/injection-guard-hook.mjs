@@ -2122,6 +2122,21 @@ function bareWordText(text, dialect, plainSink = null, outside = null) {
     }
     return true;
   };
+  /**
+   * Whether every file a stage sends its output to is one a redirect may
+   * write: nothing, a file descriptor, or a plain file the command names
+   * once. An exempt stage prints the word (git prints the commit's
+   * subject), so a file it writes and a later command reads back hands
+   * the word on, as it does for `echo` (re-probe 7, H8).
+   */
+  const redirectsToSinks = (s) => {
+    const [from, to] = place(s);
+    return tokens.every((tok, i) => {
+      if (tok.word !== undefined || !WRITE_REDIRECTS.has(tok.op) || tok.start < from || tok.start >= to) return true;
+      const next = tokens[i + 1]?.word;
+      return next !== undefined && (NULL_SINK.test(next) || (tok.op === ">&" && /^\d+$/.test(next)) || Boolean(sink?.(next)));
+    });
+  };
   for (const { stages: line, bodies } of pipelines) {
     const to = line.at(-1).at(-1).end;
     // The first stage from which the rest of the pipeline only reads.
@@ -2144,7 +2159,7 @@ function bareWordText(text, dialect, plainSink = null, outside = null) {
       const whole = place(s);
       const spans = isTestRun(words) ? (lexShell(text.slice(...whole), dialect).subs.length === 0 ? [whole] : [])
         : [...messageSpans(s), ...scriptNameSpans(s)].filter(substitutionsRead);
-      if (spans.length > 0 && trusted(s, programNames(words))) blank.push(...spans);
+      if (spans.length > 0 && redirectsToSinks(s) && trusted(s, programNames(words))) blank.push(...spans);
     }
   }
   return blanked();

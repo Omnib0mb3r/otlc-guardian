@@ -1530,6 +1530,22 @@ Tests: `tests/hook.test.js`, "a program the command can have replaced earns no e
 
 Smoke test after applying: at the root of a scratch project ask Claude to run `printf '#!/bin/sh\nrm -rf "$3"\n' > g.sh; chmod +x g.sh; hash -p ./g.sh git; git commit -m security`; see a Guardian prompt naming security; decline. In bypass mode `source .venv/bin/activate && pytest -k security` and `git add -A && git commit -m "security fix"` get no Guardian prompt.
 
+**Re-probe 7, X8 and Lex decision H8 (2026-11-11): an exempt stage's own redirect. Fixed in staging, not yet live.** Old. Silent in both modes: `git commit -am security > l.txt; xargs rm -rf < l.txt`, the same with `>>` and `2>`, and with `npm run security`, `pytest -k security` and `gh pr create --title security` in front. Real effect in the re-probe (`real\gitout`, `gitout2`): git prints `[master 1e9b792] security`, xargs hands `security` to rm, `security/` deleted. The test-run, message and script-name exemptions blanked their place with no look at the stage's own redirect; the named-once test applied only to stages that only read, so `echo security > l.txt; xargs rm -rf < l.txt` asked and the git form did not.
+
+Lex's decision: an exempt stage's own redirect into a file the command names again is judged as for `echo`.
+
+Change in `staging/hooks/injection-guard-hook.mjs`: `redirectsToSinks()` in `bareWordText()`. An exempt stage earns its exemption only when every write redirect inside it (`WRITE_REDIRECTS`) goes to nothing (`/dev/null`, `nul`, `$null`), to a file descriptor (`2>&1`), or to a file that passes `sink`: plain (neither Guardian's nor watched nor under `.git/` or `.husky/`, spelled out) and named once in the command.
+
+Also asking now, silent at 3631df6: `git commit -m security > .git/hooks/post-commit`, `git commit -m security > CLAUDE.md`, `git commit -m security > $OUT`, `yarn security > l.txt; sh l.txt`, and through the PowerShell tool `git commit -m security > l.txt; Get-Content l.txt | Remove-Item -Recurse`.
+
+Not covered, by Lex's ruling on limit 1 (cost b): `git tag -a v1 -m security; git tag -n1 > t.txt; awk '{print $2}' t.txt | xargs rm -rf` stays silent. The word is read back from git's own store by a later command, which two separate commands do as well.
+
+Cost: none found. `pytest -k security > out.txt`, `pytest -k security > out.txt 2>&1`, `npm run security > /dev/null 2>&1`, `npm test -- security 2>&1 | tee test.log` and `npm run build > build.log 2>&1 && npm test -- security` are silent. An exempt stage that redirects into a variable asks (`git commit -m security > $OUT`).
+
+Tests: `tests/hook.test.js`, "an exempt stage's own redirect is judged like echo's (re-probe 7, H8)": 14 ask in Bash and 1 through the PowerShell tool, 6 stay silent in bypass mode. Against the hook at 3631df6, 14 of the 21 failed. Staged hook suite before: 1582 passed, 14 failed. After: 1596 passed, 0 failed. Lex's regress harness: no line changed. Re-probe 7's lists (640 commands): 8 verdicts changed, all X8 forms from silent to deny/ask. The 75 everyday commands: 0 changed.
+
+Smoke test after applying: at the root of a scratch project ask Claude to run `git commit --allow-empty -m security > l.txt; xargs rm -rf < l.txt`; see a Guardian prompt naming security; decline. In bypass mode `pytest -k security > out.txt` gets no Guardian prompt.
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

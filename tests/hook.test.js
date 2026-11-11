@@ -5154,6 +5154,54 @@ describe("PreToolUse hook - without its scanner the hook blocks, and a repair ge
   });
 });
 
+describe("PreToolUse hook - an exempt stage's own redirect is judged like echo's (re-probe 7, H8)", () => {
+  for (const command of [
+    // The re-probe's forms: the file the exempt stage writes is read back.
+    "git commit -am security > l.txt; xargs rm -rf < l.txt",
+    "git commit -m security >> l.txt && xargs rm -rf < l.txt",
+    "git commit -m security 2> l.txt; xargs rm -rf < l.txt",
+    "npm run security > l.txt; xargs rm -rf < l.txt",
+    "pytest -k security > l.txt; xargs rm -rf < l.txt",
+    "gh pr create --title security > l.txt; xargs rm -rf < l.txt",
+    // Other redirects, and a file named again through a glob.
+    "git commit -m security &> l.txt; xargs rm -rf < l.txt",
+    "git commit -m security >| l.txt; xargs rm -rf < l.txt",
+    "git commit -m security > l.txt; cat l.* | xargs rm -rf",
+    "yarn security > l.txt; sh l.txt",
+    // A target that is not an ordinary file, or is not spelled out.
+    "git commit -m security > .git/hooks/post-commit",
+    "git commit -m security > CLAUDE.md",
+    "git commit -m security > $OUT",
+    // Held: the same flow from a stage that only reads.
+    "echo security > l.txt; xargs rm -rf < l.txt",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  stagedOnly("asks, PowerShell tool: git commit -m security > l.txt; Get-Content l.txt | Remove-Item -Recurse", () => {
+    const out = runGuarded("git commit -m security > l.txt; Get-Content l.txt | Remove-Item -Recurse", { tool: "PowerShell" });
+    assert.equal(decisionOf(out), "ask", out.slice(0, 200) || "(silent)");
+  });
+
+  for (const command of [
+    // A plain file the command names once, nothing, or a file descriptor.
+    "pytest -k security > out.txt",
+    "pytest -k security > out.txt 2>&1",
+    "npm run security > /dev/null 2>&1",
+    "git commit -m security > /dev/null && git push",
+    "npm test -- security 2>&1 | tee test.log",
+    // Another stage's redirect is not the exempt stage's.
+    "npm run build > build.log 2>&1 && npm test -- security",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
