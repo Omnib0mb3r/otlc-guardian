@@ -1668,6 +1668,28 @@ Tests: `tests/hook.test.js`, "a substitution names what it could expand to (re-p
 
 Smoke test after applying: at the root of a scratch project ask Claude to run `echo 'rm -rf security' > 2026.sh; sh $(date +%Y).sh`; see a Guardian prompt naming security; decline. In bypass mode `git commit --allow-empty -m security && git push origin "$(git branch --show-current)"` gets no Guardian prompt (the push itself may fail).
 
+**Re-probe 8, Y1 and Lex decision J1 (2026-11-11): git ran a hook the same command wrote, with the exempt message as its input. Fixed in staging, not yet live.** Old, of H6's class. Silent at 0621d0b and in re-probe 7's hook: `printf '#!/bin/sh\nxargs rm -rf < "$1"\n' > .git/hooks/commit-msg; chmod +x .git/hooks/commit-msg; git commit --allow-empty -m security`; `cp g.sh .git/hooks/commit-msg && git commit --allow-empty -m security`, the same with `prepare-commit-msg` and `post-commit`, and with `ln -s`; `printf '%s\n' '#!/bin/sh' 'rm -rf security' > .githooks/pre-commit && git -c core.hooksPath=.githooks commit --allow-empty -m x`; the same through `git config core.hooksPath hooks`; `git config core.hooksPath .h && git commit --allow-empty -m security`. Real in the re-probe (real\commitmsg, real\githooks3): `security/` was deleted. The clean filter the worker left unruled under cost (b) (`git config filter.x.clean sh; echo '*.sh filter=x' > .gitattributes; echo 'rm -rf security' > x.sh; git add x.sh`) is the same class. The worker did not run any of them again.
+
+Cause: `trusted()` asked whether the command could have put another program under the exempt program's name. git also runs the hooks in its folders and whatever its configuration names, and a file under `.git/hooks/` is not a file named `git`. For the second shape the sink test kept only `.git/` and `.husky/` out of the ordinary files, so `rm -rf security` written to `.githooks/pre-commit` was text.
+
+Lex's decision: git is not trusted in a command that also writes anywhere under `.git/`, `.githooks/` or any folder named by `core.hooksPath`, or that runs `git config` or `git -c` with any key. The clean-filter case is closed with it.
+
+Change in `staging/hooks/injection-guard-hook.mjs`:
+
+- `hasGitRunFolder(spelled)`: a path with `.git`, `.husky` or `.githooks` as one of its folders, wherever it stands (`src/.git/hooks/x`), a glob segment included when it can match (`.g*`, `.gi[t]`; `*` does not match a leading dot).
+- `setsGitConfig(words)`: `git config`, or `-c` or `--config-env` in front of the subcommand. Any key counts, as ruled.
+- `configuredHooksFolders(root)`: the folders `core.hooksPath` names in the project's `.git/config` and in `~/.gitconfig`. This covers the form in two calls, where an earlier command set the path. A config that cannot be read is reported on stderr and names no folder.
+- `trusted()`: a stage that runs git or gh earns nothing when the command sets git configuration, or when another stage that can write holds a word, in any spelling `spellings()` gives, that is a file git runs. `passive()` goes through `trusted()`, so `git add` and `git commit` then name a file again.
+- The sink test: a file in one of those folders is never an ordinary file, and no file is one in a command that sets git configuration, because the configuration can make git run it (`printf x > hk/pre-commit && echo 'rm -rf security' > hk/commit-msg && git -c core.hooksPath=hk commit -m x`).
+
+Found by the worker and closed with it, silent at 0621d0b: the folder spelled `.gi[t]`, `.g*`, `.git$U`, `./src/../.git`; `.husky/commit-msg`; a hook for gh (`cp g.sh .git/hooks/pre-push && gh pr create --title security --body x`); `git tag -a v1 -m security` after the copy; `git config alias.ci '!rm -rf' && git commit -m security`. Hook verdicts only. Already asking: `git -c`, `--config-env`, `--exec-path`, `--git-dir` and `-p` in front of `commit`, because `messageSpans()` wants the subcommand as the second word.
+
+Cost. Asking now, silent at 0621d0b: an exempt git stage in a command that runs `git config` with a harmless key (`git config --get remote.origin.url && git commit -m security`), and an append of the word to a file in such a command (`echo "## Security" >> README.md && git -c user.name=ci commit -am docs`). Not closed, stated limits: a hook or an alias put in place by an earlier call under a path this reader does not know (a `core.hooksPath` in a system or an included config; `alias.*`, `filter.*`, `core.pager` set earlier), and a hook that is already installed and reads a file the command writes (a lint-staged or pre-commit configuration); the cost ruling on runner configuration files takes the second up.
+
+Tests: `tests/hook.test.js`, "git is not trusted beside a hook or a configuration change (re-probe 8, J1)": 31 ask (4 of them with `core.hooksPath` set in `.git/config`), 11 silent in bypass mode. Against the hook at acb4a68, 27 failed. Staged hook suite before: 1907 passed, 27 failed. After: 1934 passed, 0 failed. Re-probe 7's 640 commands: 0 verdicts changed. Re-probe 8's 851: 14 changed, all Y1 forms, silent to deny. Everyday commands: 0 changed in the 75 and in the 197. Lex's regress harness: no line changed.
+
+Smoke test after applying: at the root of a scratch git project ask Claude to run `cp g.sh .git/hooks/commit-msg && git commit --allow-empty -m security` (any `g.sh`); see a Guardian prompt naming security; decline. In bypass mode `echo node_modules >> .gitignore && git add .gitignore && git commit -m "security"` gets no Guardian prompt.
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

@@ -1710,6 +1710,63 @@ function messageSpans(stage) {
   return spans;
 }
 
+// The folders whose files git runs as hooks, by name, wherever they
+// stand in a path: .git (hooks, config), .husky, and .githooks, the usual
+// value of core.hooksPath.
+const GIT_RUN_FOLDERS = [".git", ".husky", ".githooks"];
+
+/**
+ * Whether a path, as spelled, has a folder of GIT_RUN_FOLDERS in it
+ * (re-probe 8, J1). A segment that is a glob counts when it can match
+ * one: bash matches a leading dot only with a dot, so `.g*` and `.gi[t]`
+ * do and `*` does not.
+ */
+function hasGitRunFolder(spelled) {
+  return spelled.replace(/\\/g, "/").toLowerCase().split("/").some((segment) => GIT_RUN_FOLDERS.some((folder) =>
+    segment === folder || (segment.startsWith(".") && /[*?[]/.test(segment) && Boolean(globRegex(segment)?.test(folder)))));
+}
+
+/**
+ * Whether a stage's words set git configuration: `git config`, or `-c`
+ * or `--config-env` in front of the subcommand (re-probe 8, J1). A value
+ * there can name the folder git takes its hooks from (core.hooksPath), a
+ * command an alias, a filter, the pager or the editor runs, and no list
+ * of such keys is complete, so any key counts.
+ */
+function setsGitConfig(words) {
+  const at = words.findIndex((word) => programStem(commandName(word)) === "git");
+  if (at < 0) return false;
+  let k = at + 1;
+  for (; k < words.length && words[k].startsWith("-"); k++) {
+    if (/^-c/.test(words[k]) || words[k].startsWith("--config-env")) return true;
+    if (words[k] === "-C") k++;
+  }
+  return words[k] === "config";
+}
+
+/**
+ * The folders git is configured to take its hooks from (core.hooksPath in
+ * the project's .git/config or the user's .gitconfig), as watch keys. A
+ * file there is run by `git commit` as one under .git/hooks is. A config
+ * that is absent or cannot be read names no folder: git then uses
+ * .git/hooks, which GIT_RUN_FOLDERS covers.
+ */
+function configuredHooksFolders(root) {
+  const folders = [];
+  for (const file of [path.join(root, ".git", "config"), path.join(os.homedir(), ".gitconfig")]) {
+    let text = "";
+    try {
+      if (existsSync(file) && statSync(file).isFile()) text = readFileSync(file, "utf8");
+    } catch (err) {
+      process.stderr.write(`${TAG} could not read ${file} (${err?.message ?? "unknown"}); core.hooksPath is taken as not set there.\n`);
+    }
+    for (const m of text.matchAll(/^[ \t]*hookspath[ \t]*=[ \t]*"?([^"\r\n]+?)"?[ \t]*$/gim)) {
+      folders.push(watchKey(path.resolve(root, drivePath(m[1].replace(/^~(?=$|[\\/])/, os.homedir())))));
+    }
+  }
+  return folders;
+}
+
 // The commands of yarn (1 and 2+) and pnpm themselves. Any other first
 // word is a script of package.json, or a program in node_modules/.bin,
 // which the manager runs by that name.
@@ -2244,10 +2301,14 @@ function substitutionText(sub, dialect) {
  *   target, as spelled, is a file that is neither Guardian's nor watched
  * @param {((spelled: string) => boolean)|null} outside - whether a path,
  *   as spelled, is absolute and outside the project
+ * @param {((spelled: string) => boolean)|null} hooksFolder - whether a
+ *   path, as spelled, is in a folder git is configured to take hooks from
  */
-function bareWordText(text, dialect, plainSink = null, outside = null) {
+function bareWordText(text, dialect, plainSink = null, outside = null, hooksFolder = null) {
   const { tokens, heredocs, comments, uncertain } = lexShell(text, dialect);
   if (uncertain) return text;
+  /** Whether a path, as spelled, is a file git runs: in .git, .husky or .githooks, or in the configured hooks folder (J1). */
+  const gitRuns = (spelled) => hasGitRunFolder(spelled) || Boolean(hooksFolder?.(spelled));
   const blank = [...comments];
   const blanked = () => {
     let out = text;
@@ -2306,7 +2367,11 @@ function bareWordText(text, dialect, plainSink = null, outside = null) {
     return holding.length === 1 && !plain.opens.some((arg) => (background || arg.start > holding[0].start) && active(arg.start) &&
       ((arg.sub && !namesNothing(arg, (said) => said.toLowerCase().includes(base))) || expandsTo(arg, base)));
   };
-  const sink = plainSink && ((word) => namedOnce(word) && plainSink(word));
+  // Set once the stages are gathered: whether any of them sets git
+  // configuration. A file written by a command that does is no ordinary
+  // file, since the configuration can make git run it (J1).
+  let gitConfigured = false;
+  const sink = plainSink && ((word) => !gitConfigured && namedOnce(word) && plainSink(word));
   const inert = (body) => !body.expands || !/[$`]/.test(body.text);
   /** Whether every substitution in a place of the text only reads. */
   const substitutionsRead = ([a, b]) => {
@@ -2346,6 +2411,7 @@ function bareWordText(text, dialect, plainSink = null, outside = null) {
   }
   endPipeline();
   const all = pipelines.flatMap((line) => line.stages);
+  gitConfigured = all.some((s) => setsGitConfig(s.map((tok) => tok.word)));
   const place = (s) => [s[0].start, s.at(-1).end];
   const holder = (at) => all.find((s) => at >= s[0].start && at < s.at(-1).end);
   const moves = (s) => DIRECTORY_MOVERS.has(commandName(s[0].word));
@@ -2399,6 +2465,17 @@ function bareWordText(text, dialect, plainSink = null, outside = null) {
     if (spelled && !(outside?.(program) || PROGRAM_FOLDER.test(program) || commandName(program) === "manage.py")) return false;
     if ((plain.redirects || spelled) && !all.every((other) => other === s || kind(other).settled)) return false;
     const stems = names.map(programStem);
+    // git runs the hooks of its folders and what its configuration
+    // names, and gh runs git. Neither is the program its name says in a
+    // command that sets git configuration, or in which another stage that
+    // can write names a file in a folder git takes hooks from (J1).
+    if (stems.includes("git") || stems.includes("gh")) {
+      if (gitConfigured) return false;
+      for (const other of all) {
+        if (other === s || kind(other).quiet) continue;
+        if (other.some((tok) => spellings(tok).some((one) => gitRuns(one)))) return false;
+      }
+    }
     for (const other of all) {
       if (other === s || kind(other).quiet) continue;
       if (other.slice(1).some((tok) => spellings(tok).some((one) => stems.some((stem) => holdsProgram(one, stem))))) return false;
@@ -2495,6 +2572,7 @@ function guardedNameIn(texts, dialect, cwd, root, watches = () => false) {
   const guardedKey = new Map(GUARDED_NAMES.map((name) => [name, watchKey(path.join(root, name))]));
   const guardedFolders = [".claude", ...WORD_FOLDERS].map((name) => guardedKey.get(name));
   const outside = outsideProject(root);
+  const hooksFolders = configuredHooksFolders(root);
   // For globs, which are matched as text: the path as the command would spell it.
   const guardedAbs = GUARDED_NAMES.map((name) => ({ name, abs: path.join(root, name).replace(/\\/g, "/").toLowerCase() }));
   for (const text of texts) {
@@ -2549,8 +2627,19 @@ function guardedNameIn(texts, dialect, cwd, root, watches = () => false) {
     // EXIT), a literal in inline code (rmSync('security')).
     // A redirect target that is spelled out, from every folder the
     // command can be in, and is neither in Guardian's folders nor watched,
-    // nor under .git or .husky, whose files git runs (hooks, config).
-    const plainSink = (word) => certain && !/[$`*?[\]{}]/.test(word) && bases.every((base) => {
+    // nor under .git, .husky or .githooks, nor in the folder
+    // core.hooksPath names, whose files git runs (hooks, config).
+    // A path in a folder git is configured to take its hooks from, read
+    // from every folder the command can be in. A segment that is a glob
+    // counts when it can match the folder's.
+    const hooksFolder = (word) => hooksFolders.length > 0 && !/[$\x60]/.test(word) && bases.some((base) => {
+      const segments = watchKey(path.resolve(base, drivePath(word.replace(/^~(?=$|\/)/, os.homedir())))).split("/");
+      return hooksFolders.some((folder) => {
+        const among = folder.split("/");
+        return segments.length >= among.length && among.every((part, k) => segments[k] === part || Boolean(globRegex(segments[k])?.test(part)));
+      });
+    });
+    const plainSink = (word) => certain && !/[$`*?[\]{}]/.test(word) && !hasGitRunFolder(word) && !hooksFolder(word) && bases.every((base) => {
       const file = path.resolve(base, drivePath(word.replace(/^~(?=$|\/)/, os.homedir())));
       const key = watchKey(file);
       return !guardedFolders.some((folder) => key === folder || key.startsWith(`${folder}/`)) && !watches(file) &&
@@ -2561,7 +2650,7 @@ function guardedNameIn(texts, dialect, cwd, root, watches = () => false) {
     // `cd src &&` the word is src/security (re-probe 6, G6). A base the
     // in-order reading never visits (a chdir() in inline code) counts for
     // every word.
-    const left = bareWordText(text, dialect, plainSink, outside);
+    const left = bareWordText(text, dialect, plainSink, outside, hooksFolder);
     const places = (certain && textByDirectory(left, dialect, cwd)) || [{ from: bases, text: left }];
     const visited = new Set(places.flatMap((place) => place.from.map(watchKey)));
     const unwalked = bases.filter((base) => !visited.has(watchKey(base)));

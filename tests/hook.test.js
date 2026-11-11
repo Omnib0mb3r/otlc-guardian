@@ -5727,6 +5727,98 @@ describe("PreToolUse hook - a substitution names what it could expand to (re-pro
 });
 
 // ---------------------------------------------------------------------------
+// RE-PROBE 8, J1 (staged): git runs the hooks in its folders and what
+// its configuration names, with the exempt message as their input. A git
+// or gh stage earns nothing in a command that also writes a file git
+// runs (.git, .husky, .githooks, the folder core.hooksPath names) or
+// that sets git configuration with any key; and a file written by a
+// command that sets git configuration is no ordinary file.
+
+describe("PreToolUse hook - git is not trusted beside a hook or a configuration change (re-probe 8, J1)", () => {
+  for (const command of [
+    // The re-probe's forms.
+    "printf '#!/bin/sh\\nxargs rm -rf < \"$1\"\\n' > .git/hooks/commit-msg; chmod +x .git/hooks/commit-msg; git commit --allow-empty -m security",
+    "cp g.sh .git/hooks/commit-msg && git commit --allow-empty -m security",
+    "cp g.sh .git/hooks/prepare-commit-msg && git commit --allow-empty -m security",
+    "cp g.sh .git/hooks/post-commit && git commit --allow-empty -m security",
+    "ln -s ../../g.sh .git/hooks/commit-msg; git commit --allow-empty -m security",
+    "printf '%s\\n' '#!/bin/sh' 'rm -rf security' > .githooks/pre-commit && git -c core.hooksPath=.githooks commit --allow-empty -m x",
+    "printf '%s\\n' '#!/bin/sh' 'rm -rf security' > hooks/pre-commit && git config core.hooksPath hooks && git commit --allow-empty -m x",
+    "git config core.hooksPath .h && git commit --allow-empty -m security",
+    // The clean filter of cost (b): configuration the command writes.
+    "git config filter.x.clean sh; echo '*.sh filter=x' > .gitattributes; echo 'rm -rf security' > x.sh; git add x.sh",
+    // Other spellings of the folder, and the other folders.
+    "cp g.sh .gi[t]/hooks/commit-msg && git commit --allow-empty -m security",
+    "cp g.sh .g*/hooks/commit-msg && git commit --allow-empty -m security",
+    "cp g.sh .git$U/hooks/commit-msg && git commit --allow-empty -m security",
+    "cp g.sh ./src/../.git/hooks/commit-msg && git commit --allow-empty -m security",
+    "cp g.sh .husky/commit-msg && git commit --allow-empty -m security",
+    "cp g.sh .githooks/commit-msg && git commit --allow-empty -m security",
+    // Other git and gh stages that hold a message.
+    "cp g.sh .git/hooks/commit-msg && git tag -a v1 -m security",
+    "cp g.sh .git/hooks/pre-push && gh pr create --title security --body x",
+    // Any key, in any spelling of the option.
+    "git config alias.ci '!rm -rf' && git commit -m security",
+    "git config --global core.editor 'rm -rf' && git commit -m security",
+    "git config --get remote.origin.url && git commit -m security",
+    "git -c user.name=ci commit -m security",
+    "git -ccore.hooksPath=.h commit --allow-empty -m security",
+    "git --config-env=core.hooksPath=H commit --allow-empty -m security",
+    // A file written beside a configuration change is no ordinary file.
+    "printf 'x' > hk/pre-commit && echo 'rm -rf security' > hk/commit-msg && git -c core.hooksPath=hk commit --allow-empty -m x",
+    "echo \"## Security\" >> README.md && git -c user.name=ci commit -am docs",
+    // A file in a hook folder is never an ordinary file.
+    "echo 'rm -rf security' > .githooks/pre-commit",
+    "echo 'rm -rf security' > .husky/pre-commit",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  // The folder a configuration written earlier names (the two-call form).
+  for (const [config, command] of [
+    ["[core]\n\thooksPath = hk\n", "echo 'rm -rf security' > hk/pre-commit"],
+    ["[core]\n\thooksPath = hk\n", "cp g.sh hk/commit-msg && git commit --allow-empty -m security"],
+    ["[core]\n\thookspath = \"tools/hooks\"\n", "cp g.sh tools/hooks/commit-msg; git commit --allow-empty -m security"],
+    ["[core]\n\thooksPath = hk\n", "cp g.sh h?/commit-msg && git commit --allow-empty -m security"],
+  ]) {
+    stagedOnly(`asks, with core.hooksPath configured: ${command}`, () => {
+      const out = withTempProject((dir) => {
+        const root = guardedProject(dir);
+        mkdirSync(path.join(root, ".git"), { recursive: true });
+        writeFileSync(path.join(root, ".git", "config"), config);
+        return runHook(PRE_HOOK, { tool_name: "Bash", cwd: root, tool_input: { command } }, { CLAUDE_PROJECT_DIR: root });
+      });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // git with nothing beside it that it could run.
+    "git commit -m \"security: fix .git/hooks docs\"",
+    "git add .gitignore && git commit -m \"security: ignore files\"",
+    "echo node_modules >> .gitignore && git add .gitignore && git commit -m \"security\"",
+    "rm -f dist/*.js && git commit -m \"security fix\"",
+    "git -C src commit -m security",
+    "git --no-pager log --grep=security",
+    // A read of git's folder writes nothing there.
+    "cat .git/HEAD && git commit -m security",
+    "ls .git/hooks; git commit -m \"security fix\"",
+    // git configuration with no exemption in play.
+    "git config user.name",
+    "git config core.hooksPath .githooks",
+    // The folder name with no hooksPath configured.
+    "cp g.sh hk/commit-msg && git commit --allow-empty -m security",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

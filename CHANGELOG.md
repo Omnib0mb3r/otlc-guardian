@@ -233,6 +233,17 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **git is not trusted beside a hook or a configuration change
+  (BUG-080, re-probe 8 J1).** `cp g.sh .git/hooks/commit-msg && git
+  commit -m security` was silent: git handed the hook the message, and
+  the hook deleted the folder. A git or gh stage now earns no
+  exemption in a command that also writes under `.git/`, `.husky/`,
+  `.githooks/` or the folder `core.hooksPath` names, or that runs `git
+  config` or `git -c` with any key. A file written by a command that
+  sets git configuration, or into one of those folders, is no ordinary
+  file. The folder is read from `.git/config` and `~/.gitconfig`, so a
+  hooks path set by an earlier command counts.
+
 - **A substitution names what it could expand to (BUG-080, re-probe 8
   J6).** Cost (b) took `$(date +%Y)`, `$(whoami)` and `$(git branch
   --show-current)` as naming no file, so `echo 'rm -rf security' >
