@@ -5043,35 +5043,40 @@ describe("PreToolUse hook - a typographic quote, dash or space in PowerShell (re
   }
 });
 
-describe("PreToolUse hook - without its scanner the hook blocks, and a repair gets through (re-probe 7, H10)", () => {
-  const FILES = [".claude/hooks/injection-guard-hook.mjs", "security/01-injection-guard.js", "security/package.json", "security/claude-settings.js"];
-  /**
-   * Runs one tool call against a copy of the install in which `damage`
-   * has broken a file, and returns the hook's exit code and stderr.
-   * @param {(install: string) => void} damage
-   */
-  const runBroken = (damage, payload) => {
-    const install = mkdtempSync(path.join(os.tmpdir(), "guardian-hook-broken-"));
-    try {
-      for (const rel of FILES) {
-        mkdirSync(path.dirname(path.join(install, rel)), { recursive: true });
-        writeFileSync(path.join(install, rel), readFileSync(path.join(ENFORCEMENT_ROOT, rel)));
-      }
-      mkdirSync(path.join(install, "src"), { recursive: true });
-      damage(install);
-      const result = spawnSync("node", [path.join(install, ".claude", "hooks", "injection-guard-hook.mjs")], {
-        input: JSON.stringify({ cwd: install, ...payload(install) }),
-        encoding: "utf8", timeout: HOOK_SPAWN_TIMEOUT_MS, cwd: install, env: { ...HOOK_ENV, CLAUDE_PROJECT_DIR: install },
-      });
-      if (result.status === null) throw new Error(`The test harness stopped the hook after ${HOOK_SPAWN_TIMEOUT_MS} ms (BUG-077).`);
-      return result;
-    } finally {
-      rmSync(install, { recursive: true, force: true });
+const BROKEN_INSTALL_FILES = [".claude/hooks/injection-guard-hook.mjs", "security/01-injection-guard.js", "security/package.json", "security/claude-settings.js"];
+const SCANNER = "security/01-injection-guard.js";
+
+/**
+ * Runs one tool call against a copy of the install in which `damage`
+ * has broken a file, and returns the hook's exit code and stderr.
+ * @param {(install: string) => void} damage
+ * @param {(install: string) => object} payload - the tool call
+ */
+function runBroken(damage, payload) {
+  const install = mkdtempSync(path.join(os.tmpdir(), "guardian-hook-broken-"));
+  try {
+    for (const rel of BROKEN_INSTALL_FILES) {
+      mkdirSync(path.dirname(path.join(install, rel)), { recursive: true });
+      writeFileSync(path.join(install, rel), readFileSync(path.join(ENFORCEMENT_ROOT, rel)));
     }
-  };
-  const SCANNER = "security/01-injection-guard.js";
-  const noScanner = (install) => rmSync(path.join(install, SCANNER));
-  const bash = (command, tool = "Bash") => () => ({ tool_name: tool, tool_input: { command } });
+    mkdirSync(path.join(install, "src"), { recursive: true });
+    damage(install);
+    const result = spawnSync("node", [path.join(install, ".claude", "hooks", "injection-guard-hook.mjs")], {
+      input: JSON.stringify({ cwd: install, ...payload(install) }),
+      encoding: "utf8", timeout: HOOK_SPAWN_TIMEOUT_MS, cwd: install, env: { ...HOOK_ENV, CLAUDE_PROJECT_DIR: install },
+    });
+    if (result.status === null) throw new Error(`The test harness stopped the hook after ${HOOK_SPAWN_TIMEOUT_MS} ms (BUG-077).`);
+    return result;
+  } finally {
+    rmSync(install, { recursive: true, force: true });
+  }
+}
+const noScanner = (install) => rmSync(path.join(install, SCANNER));
+/** The payload of a shell tool call. */
+const shellCall = (command, tool = "Bash") => () => ({ tool_name: tool, tool_input: { command } });
+
+describe("PreToolUse hook - without its scanner the hook blocks, and a repair gets through (re-probe 7, H10)", () => {
+  const bash = shellCall;
   const write = (install) => ({ tool_name: "Write", tool_input: { file_path: path.join(install, "src", "a.js"), content: "x" } });
 
   for (const [name, damage, file] of [
@@ -5127,12 +5132,10 @@ describe("PreToolUse hook - without its scanner the hook blocks, and a repair ge
     ["guardian init"],
     ["guardian update --no-color"],
     ["git checkout -- security/01-injection-guard.js"],
-    ["git checkout security/01-injection-guard.js"],
     ["git checkout HEAD -- security/01-injection-guard.js security/package.json"],
-    ["git checkout origin/main -- security"],
-    ["git restore security/01-injection-guard.js"],
     ["git restore --source=HEAD --staged --worktree -- security/claude-settings.js .claude/hooks/injection-guard-hook.mjs"],
-    ["git restore -s HEAD security/01-injection-guard.js"],
+    // Four forms that were let through here until re-probe 8 (no "--", or
+    // a source other than HEAD) are blocked now and stand in the J9 group.
     ["guardian update", "PowerShell"],
     ["git checkout -- security\\01-injection-guard.js", "PowerShell"],
   ]) {
@@ -6347,6 +6350,76 @@ describe("PreToolUse hook - a PowerShell module or script makes the command not 
   ]) {
     stagedOnly(`silent: ${command}`, () => {
       expectSilent(runGuarded(command, { mode: "bypassPermissions", tool: "PowerShell" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// RE-PROBE 8, J9 (staged): the repair path let git restore any version of
+// Guardian's files, or switch branch. `git checkout evil -- security`
+// brings in whatever the ref holds, and `git checkout security` with no
+// "--" switches to a branch of that name. A repair restores from the
+// index or from HEAD, with "--" in front of the files.
+
+describe("PreToolUse hook - a repair restores from the index or HEAD only (re-probe 8, J9)", () => {
+  for (const [command, tool] of [
+    // The re-probe's forms.
+    ["git checkout HEAD^ -- security"],
+    ["git checkout evil -- .claude/hooks/injection-guard-hook.mjs security"],
+    ["git checkout origin/attacker -- security"],
+    ["git restore --staged --worktree --source=evil -- security"],
+    ["git checkout security"],
+    ["git checkout security/01-injection-guard.js"],
+    ["git checkout security/package.json"],
+    // Any other source, in any spelling.
+    ["git checkout origin/main -- security"],
+    ["git checkout HEAD~5 -- security"],
+    ["git checkout @ -- security"],
+    ["git checkout head -- security"],
+    ["git checkout HEAD HEAD -- security"],
+    ["git restore -s evil -- security"],
+    ["git restore --source evil -- security"],
+    ["git restore --source=HEAD^ -- security"],
+    ["git restore -s HEAD -s evil -- security"],
+    // No "--" in front of the files.
+    ["git restore security/01-injection-guard.js"],
+    ["git restore -s HEAD security/01-injection-guard.js"],
+    ["git restore --staged security"],
+    ["git checkout HEAD security"],
+    // An option that is not a source or a place to restore to.
+    ["git checkout -f -- security"],
+    ["git restore --overlay -- security"],
+    ["git restore --ours -- security"],
+    // Another verb.
+    ["git switch -- security"],
+    ["git reset -- security"],
+    ["git checkout -- security\\01-injection-guard.js README.md", "PowerShell"],
+  ]) {
+    stagedOnly(`blocks${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      const result = runBroken(noScanner, shellCall(command, tool));
+      assert.equal(result.status, 2, `${command} -> exit ${result.status} ${result.stderr.slice(0, 200)}`);
+    });
+  }
+
+  for (const [command, tool] of [
+    ["git checkout -- security/01-injection-guard.js"],
+    ["git checkout -- security"],
+    ["git checkout HEAD -- security/01-injection-guard.js security/package.json"],
+    ["git checkout HEAD -- .claude/hooks/injection-guard-hook.mjs security"],
+    ["git restore -- security/01-injection-guard.js"],
+    ["git restore --staged --worktree -- security"],
+    ["git restore --source=HEAD --staged --worktree -- security/claude-settings.js .claude/hooks/injection-guard-hook.mjs"],
+    ["git restore -s HEAD -- security/01-injection-guard.js"],
+    ["git restore --source HEAD -SW -- security"],
+    ["guardian update"],
+    ["guardian init"],
+    ["git restore -- security\\01-injection-guard.js", "PowerShell"],
+  ]) {
+    stagedOnly(`lets the repair through${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      const result = runBroken(noScanner, shellCall(command, tool));
+      assert.equal(result.status, 1, `${command} -> exit ${result.status} ${result.stderr.slice(0, 200)}`);
+      assert.match(result.stderr, /let through/);
+      assert.equal(result.stdout, "");
     });
   }
 });

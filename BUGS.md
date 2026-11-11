@@ -571,6 +571,22 @@ Tests: `tests/hook.test.js`, "without its scanner the hook blocks, and a repair 
 
 Smoke test after applying, in a scratch project made with `guardian init`: rename `security/01-injection-guard.js`, then ask Claude to write any file; see the call blocked with a message naming the scanner. Ask Claude to run `guardian update`; it runs, the scanner is back, and the next write goes through.
 
+**J9 (re-probe 8, Y9), Lex's decision of 2026-11-11: a repair restores from the index or HEAD only. Fixed in staging, not yet live.** H10 left `git checkout` and `git restore` of Guardian's own files open while the scanner is missing. The staged hook took any ref as the source and did not require `--`. Let through with exit 1 at 7a5acc9: `git checkout HEAD^ -- security`, `git checkout evil -- .claude/hooks/injection-guard-hook.mjs security`, `git checkout origin/attacker -- security`, `git restore --staged --worktree --source=evil -- security`, and with no `--`, `git checkout security`, `git checkout security/01-injection-guard.js` and `git checkout security/package.json`. The re-probe ran two for real (real\br, a repository with a branch named `security`): `git checkout security` switched branch and brought in an empty settings file, an older advisory hook and a payload CLAUDE.md, and `git checkout security -- .claude/hooks/injection-guard-hook.mjs security` brought the older hook back.
+
+Cause: `GIT_REF` accepted any ref name, `git checkout WORD` with no `--` was read as a file, and `git restore --source=REF` took any ref.
+
+Change in `staging/hooks/injection-guard-hook.mjs`, `repairsGuardian()`: the files stand after `--`, which is required. In front of it `git checkout` may have `HEAD` and nothing else; `git restore` may have `--staged`, `--worktree`, `-S`, `-W`, `-SW`, `-WS`, and `--source=HEAD`, `--source HEAD` or `-s HEAD`. `GIT_REF` is gone. `guardian update` and `guardian init` are unchanged, and so is the list of files (`REPAIRABLE`).
+
+Four tests of the H10 group expected to be let through and are blocked by this decision. They are removed from that group's "lets the repair through" list and stand in the J9 group as blocks: `git checkout security/01-injection-guard.js`, `git checkout origin/main -- security`, `git restore security/01-injection-guard.js` and `git restore -s HEAD security/01-injection-guard.js`. The helpers of the H10 group (`runBroken()`, `noScanner`, `shellCall()`) moved out of it so both groups use them.
+
+Cost: with the scanner missing, a repair typed without `--` is blocked (`git restore security/01-injection-guard.js`), and so is one from another ref (`git checkout origin/main -- security`). The message names `guardian update`, which needs neither.
+
+Not ruled, for Lex: `git restore -- security/01-injection-guard.js .claude/hooks` is blocked because the `.claude/hooks` folder is not in `REPAIRABLE` while the `security` folder is. `npx otlc-guardian update` and `node bin/guardian.js update` stay blocked, as the re-probe's Held list has them.
+
+Tests: `tests/hook.test.js`, "a repair restores from the index or HEAD only (re-probe 8, J9)": 26 blocked, 12 let through. Against the hook at 7a5acc9, 16 failed. Staged hook suite before: 2320 passed, 16 failed. After: 2336 passed, 0 failed. The command lists run with a working scanner, and `repairsGuardian()` is reached only when the scanner did not load. Compared: re-probe 7's 640 and the 75 everyday commands, 0 changed. The comparison was then stopped by Claude Code for low memory. In the 197 everyday commands it had printed 3 lines as deny to silent (`bash scripts/test.sh security`, `npm version patch -m "chore: security release %s"`, `python manage.py migrate && python manage.py test security`); rerun alone, all three are deny at both commits. A hook process that is killed prints nothing, and the comparison read that as silent. Re-probe 8's 851 were not compared for this commit. Lex's regress harness: no line changed.
+
+Smoke test after applying: in a scratch `guardian init` project that is a git repository with its files committed, delete `security/01-injection-guard.js` by hand, then ask Claude to run `git checkout HEAD~1 -- security`; the call is blocked and the message names `guardian update`. Ask for `git checkout -- security/01-injection-guard.js`; it runs and the next tool call is judged again.
+
 ### BUG-028 - Hook command path is cwd-relative
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

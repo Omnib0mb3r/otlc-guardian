@@ -233,6 +233,13 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A repair restores from the index or HEAD only (BUG-027, re-probe 8
+  J9).** With the scanner missing, the staged hook let `git checkout
+  evil -- security` and `git checkout security` through, so an older
+  hook or a branch could be brought in. `git checkout` and `git
+  restore` now pass only with `--` in front of the files and no source
+  other than `HEAD`.
+
 - **A PowerShell module or script makes the command not plain
   (BUG-080, re-probe 8 J7).** `Import-Module .\m.psm1; pytest
   security` was silent, and a module can define `function pytest`

@@ -5200,13 +5200,16 @@ function emitVerdict(findings) {
 // judge: the files it runs from and loads, and the folder of the scanner.
 const REPAIRABLE = [...GUARDIAN_HOOK_FILES.map((f) => path.join(".claude", "hooks", f)), GUARDIAN_SCANNER_FILE, GUARDIAN_SCANNER_PACKAGE,
   GUARDIAN_SETTINGS_READER, "security"];
-const GIT_REF = /^[A-Za-z0-9][\w./@^-]*$/;
 
 /**
  * Whether a shell command is one of the repairs that stay open while the
  * hook cannot judge: `guardian update` or `guardian init` with flags
  * only, or `git checkout` or `git restore` of nothing but Guardian's own
- * files. The command is one stage of plain words: no operator, redirect,
+ * files, from the index or from HEAD, with "--" in front of the files
+ * (re-probe 8, J9). Any other source can hold an older or a planted
+ * Guardian (git checkout evil -- security), and without "--" a word that
+ * is also a branch name switches branch (git checkout security). The
+ * command is one stage of plain words: no operator, redirect,
  * substitution, variable or glob, and the program is spelled by name.
  * Anything else is not known to be a repair.
  */
@@ -5217,24 +5220,23 @@ function repairsGuardian(command, dialect, cwd, root) {
   const [program, verb, ...rest] = tokens.map((tok) => tok.word);
   if (program === "guardian") return (verb === "update" || verb === "init") && rest.every((a) => /^--?[a-z][a-z-]*$/.test(a));
   if (program !== "git") return false;
-  let paths = null;
+  const dashes = rest.indexOf("--");
+  if (dashes < 0) return false;
+  const before = rest.slice(0, dashes);
+  const paths = rest.slice(dashes + 1);
   if (verb === "checkout") {
-    // git checkout [REF] [--] FILE...
-    const dashes = rest.indexOf("--");
-    const before = dashes < 0 ? [] : rest.slice(0, dashes);
-    if (before.length <= 1 && before.every((ref) => GIT_REF.test(ref))) paths = dashes < 0 ? rest : rest.slice(dashes + 1);
+    // git checkout [HEAD] -- FILE...
+    if (before.length > 1 || (before.length === 1 && before[0] !== "HEAD")) return false;
   } else if (verb === "restore") {
-    // git restore [--source=REF | -s REF] [--staged] [--worktree] [--] FILE...
-    paths = [];
-    for (let k = 0; k < rest.length; k++) {
-      const a = rest[k];
-      if (paths.length > 0 || !a.startsWith("-")) paths.push(a);
-      else if (a === "-s" || a === "--source") {
-        if (!GIT_REF.test(rest[++k] ?? "")) return false;
-      } else if (!/^(?:--|--staged|--worktree|-S|-W|-SW|-WS)$/.test(a) && !(a.startsWith("--source=") && GIT_REF.test(a.slice(9)))) return false;
+    // git restore [--source=HEAD | -s HEAD] [--staged] [--worktree] -- FILE...
+    for (let k = 0; k < before.length; k++) {
+      const a = before[k];
+      if (a === "-s" || a === "--source") {
+        if (before[++k] !== "HEAD") return false;
+      } else if (!/^(?:--staged|--worktree|-S|-W|-SW|-WS|--source=HEAD)$/.test(a)) return false;
     }
-  }
-  if (!paths || paths.length === 0) return false;
+  } else return false;
+  if (paths.length === 0) return false;
   const repairable = new Set(REPAIRABLE.map((rel) => watchKey(path.join(root, rel))));
   return paths.every((p) => !p.startsWith("-") && repairable.has(watchKey(path.resolve(cwd, drivePath(p)))));
 }
