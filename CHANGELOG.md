@@ -233,6 +233,13 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **`env -C` and `env --chdir` are followed (BUG-075, re-probe 6 G5).**
+  `env -C .. npx rimraf .` at the project root emptied the folder above
+  it, silent: the words after `-C dir` were resolved from the session
+  folder, and a command with `--chdir` was skipped. An option that tells
+  a command where to run now moves the words after it in that stage, for
+  the folder-above check and for guarded names alike.
+
 - **A copy through a group, a piped subshell or a process substitution
   is judged by content (BUG-066, re-probe 6 G4).**
   `{ cat notes/x.md; } > CLAUDE.md`, `cat notes/x.md | ( cat > CLAUDE.md )`,

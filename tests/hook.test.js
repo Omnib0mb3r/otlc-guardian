@@ -4051,6 +4051,65 @@ describe("PreToolUse hook - a copy through a group, a subshell or a process subs
 });
 
 // ---------------------------------------------------------------------------
+// Re-probe 6, G5 (BUG-075): env -C and env --chdir are directory changes
+// ---------------------------------------------------------------------------
+//
+// F3b passed over `-C dir` as "where it runs" without resolving the words
+// after it from there, and skipped a command with --chdir altogether, so
+// `env -C .. npx rimraf .` was silent. Real effect in the re-probe
+// (real\envC): the folder above the project emptied, a sibling project
+// included. Lex's decision: both are directory changes the resolver
+// follows.
+
+describe("PreToolUse hook - env -C and env --chdir are followed (re-probe 6, G5)", () => {
+  const run = (command, { sub = "", mode } = {}) => withTempProject((dir) => {
+    const root = path.join(dir, "proj");
+    for (const rel of [".claude/settings.json", ".claude/hooks/injection-guard-hook.mjs", "security/01-injection-guard.js",
+      "src/security/old.js", "src/a/x.txt", "src/a.js"]) {
+      mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      writeFileSync(path.join(root, rel), rel.endsWith(".json") ? "{}" : "x\n");
+    }
+    return runHook(PRE_HOOK, { tool_name: "Bash", cwd: path.join(root, sub), tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) },
+      { CLAUDE_PROJECT_DIR: root });
+  });
+
+  for (const [command, sub] of [
+    ["env -C .. npx rimraf ."],
+    ["env --chdir=.. npx rimraf ."],
+    ["env --chdir .. npx rimraf ."],
+    ["env -C src npx rimraf ../.."],
+    ["env -C ../.. npx rimraf .", "src"],
+    // A guarded name is resolved from the folder the option names.
+    ["env -C src/a npx rimraf ../../security"],
+    ["env --chdir=src/a npx rimraf ../../security"],
+    ["env --chdir src/a npx rimraf ../../.claude/hooks"],
+  ]) {
+    stagedOnly(`asks${sub ? ` (from ${sub}/)` : ""}: ${command}`, () => {
+      const out = run(command, { sub });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const [command, sub] of [
+    // The project root, or a folder inside it.
+    ["env -C src npx rimraf .."],
+    ["env --chdir=src/a npx rimraf ../security"],
+    ["env -C .. npx rimraf .", "src"],
+    ["env -C src npm test"],
+    // The option moves this command only, not the ones after it.
+    ["env -C src npm test && npx rimraf dist"],
+    ["npm --prefix .. test"],
+    ["git -C .. status"],
+    ["make -C src test"],
+    ["make -C .. test", "src"],
+  ]) {
+    stagedOnly(`silent${sub ? ` (from ${sub}/)` : ""}: ${command}`, () => {
+      expectSilent(run(command, { sub, mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

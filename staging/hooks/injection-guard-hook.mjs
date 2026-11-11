@@ -1340,13 +1340,14 @@ function globRegex(glob) {
 // against each, so the set only has to hold the real one.
 const DIRECTORY_CHANGES = [
   /(?:^|[\s;&|(){}])(?:cd|chdir|pushd|set-location|sl|push-location)\s+(?:\/d\s+)?(\S+)/g,
-  /\s(?:-c|--prefix|--cwd|--directory|--git-dir|--work-tree|-workingdirectory|-wd)(?:=|\s+)(\S+)/g,
+  /\s(?:-c|--prefix|--cwd|--chdir|--directory|--git-dir|--work-tree|-workingdirectory|-wd)(?:=|\s+)(\S+)/g,
   /chdir\(\s*([^\s)]+)\s*\)/g,
 ];
 // Moves the resolver does not follow: find -execdir and -okdir run their
-// command in each match's folder, env --chdir in the one it names, and a
-// cwd option in inline code (execSync(..., { cwd }), subprocess.run(...,
-// cwd=...)) in a folder the code picks. With one of these in the text the
+// command in each match's folder, and a cwd option in inline code
+// (execSync(..., { cwd }), subprocess.run(..., cwd=...)) in a folder the
+// code picks. env --chdir was one of them until re-probe 6 (G5); it is
+// followed like --cwd now. With one of these in the text the
 // bases are not certain, and a guarded name counts wherever it stands
 // (re-probe 5, F2). So it is with CDPATH anywhere in the text, which
 // sends a relative cd to a folder the text does not name, and with an
@@ -1354,11 +1355,11 @@ const DIRECTORY_CHANGES = [
 // -Path): the word after the mover is then not the directory, and the
 // resolver does not parse each shell's options (re-probe 6, G3).
 const CDPATH_IN_TEXT = /cdpath/i;
-const UNFOLLOWED_MOVE = /(?:^|\s)-(?:execdir|okdir)(?=\s|$)|(?:^|\s)--chdir(?=[=\s]|$)|(?<![\w-])cwd\s*[:=]/;
+const UNFOLLOWED_MOVE = /(?:^|\s)-(?:execdir|okdir)(?=\s|$)|(?<![\w-])cwd\s*[:=]/;
 // The options and the call of DIRECTORY_CHANGES as whole shell words. A
 // word keeps its case, so -C (a directory) is not -c (python -c "code").
-const DIRECTORY_OPTION = /^(?:--prefix|--cwd|--directory|--git-dir|--work-tree|-workingdirectory|-wd)$/i;
-const DIRECTORY_OPTION_VALUE = /^(?:--prefix|--cwd|--directory|--git-dir|--work-tree)=/i;
+const DIRECTORY_OPTION = /^(?:--prefix|--cwd|--chdir|--directory|--git-dir|--work-tree|-workingdirectory|-wd)$/i;
+const DIRECTORY_OPTION_VALUE = /^(?:--prefix|--cwd|--chdir|--directory|--git-dir|--work-tree)=/i;
 const QUOTED_CHDIR = /chdir\(\s*(['"])(.*?)\1/gi;
 const MAX_COMMAND_BASES = 32;
 const UNKNOWN_DIRECTORY = /[$`%*?()]/;
@@ -1801,6 +1802,85 @@ function scriptDialect(shell, option) {
 }
 
 /**
+ * Each word of a command with the directory the shell is in when it
+ * reaches the word (re-probe 6, G5).
+ *
+ * The directory is followed in order, as if every move succeeds: cd,
+ * pushd and popd, cd -, and the end of a ( ) subshell, which puts it
+ * back. An option that tells one command where to run (env -C dir, env
+ * --chdir=dir, git -C dir, make -C dir, npm --prefix dir) moves the words
+ * after it in that stage and nothing else. A mover, a directory option
+ * and their values are marked `moves`: they say where a command runs, not
+ * what it acts on.
+ *
+ * @returns {{ placed: Array<{ tok: {word: string, start: number, end: number}, dir: string, moves: boolean, stage: string[] }>,
+ *   subs: string[], end: string, lost: boolean }} `stage` is the words of
+ *   the word's stage up to and including it; `end` is the directory after
+ *   the last word; `lost` is true when a move names a directory the text
+ *   does not spell out (a variable, a substitution, a glob)
+ */
+function wordsInPlace(text, dialect, start) {
+  const { tokens, subs } = lexShell(text, dialect);
+  const home = (p) => drivePath(p.replace(/^~(?=$|[\\/])/, os.homedir()));
+  const placed = [];
+  let dir = start;
+  let previous = start;
+  let stageDir = null; // set by a directory option, for the rest of its stage
+  let lost = false;
+  const pushed = [];
+  const outer = [];
+  let stage = [];
+  const toStage = (from, spelled) => {
+    if (UNKNOWN_DIRECTORY.test(spelled)) lost = true;
+    stageDir = path.resolve(from, home(spelled));
+  };
+  for (let k = 0; k < tokens.length; k++) {
+    const tok = tokens[k];
+    const { word, op } = tok;
+    if (op === "(") outer.push(dir);
+    else if (op === ")") dir = outer.pop() ?? dir;
+    if (word === undefined) {
+      if (CONTROL_OPERATORS.has(op)) {
+        stage = [];
+        stageDir = null;
+      }
+      continue;
+    }
+    stage.push(word);
+    const here = stageDir ?? dir;
+    const mark = (t, moves) => placed.push({ tok: t, dir: here, moves, stage: [...stage] });
+    const name = commandName(word);
+    if (DIRECTORY_MOVERS.has(name)) {
+      mark(tok, true);
+      while (tokens[k + 1]?.word !== undefined && /^(?:-.|\/d$)/i.test(tokens[k + 1].word)) mark(tokens[++k], true);
+      const target = tokens[k + 1]?.word;
+      if (target !== undefined) {
+        mark(tokens[++k], true);
+        if (UNKNOWN_DIRECTORY.test(target)) lost = true;
+      }
+      if (name === "pushd" || name === "push-location") pushed.push(dir);
+      const next = target === "-" ? previous : path.resolve(dir, home(target ?? "~"));
+      previous = dir;
+      dir = next;
+    } else if (name === "popd" || name === "pop-location") {
+      mark(tok, true);
+      dir = pushed.pop() ?? dir;
+    } else if (word === "-C" || DIRECTORY_OPTION.test(word)) {
+      mark(tok, true);
+      const value = tokens[k + 1]?.word;
+      if (value !== undefined) {
+        mark(tokens[++k], true);
+        toStage(here, value);
+      }
+    } else if (DIRECTORY_OPTION_VALUE.test(word)) {
+      mark(tok, true);
+      toStage(here, word.slice(word.indexOf("=") + 1));
+    } else mark(tok, false);
+  }
+  return { placed, subs, end: dir, lost };
+}
+
+/**
  * The first word of a command that is a folder strictly above the
  * project root, as spelled, or null (F3b).
  *
@@ -1813,10 +1893,13 @@ function scriptDialect(shell, option) {
  * its text, and those are everyday work.
  *
  * A word counts when it resolves to an ancestor of the root from the
- * directory the command is in when it reaches the word. That directory
- * is followed in order (cd, pushd and popd, cd -, a subshell's end), as
- * if every move succeeds, so `cd build && cmake ..` names the project
- * and `cd .. && npx rimraf .` names the folder above it. The value of
+ * directory the command is in when it reaches the word (wordsInPlace()).
+ * That directory is followed in order (cd, pushd and popd, cd -, a
+ * subshell's end), as if every move succeeds, so `cd build && cmake ..`
+ * names the project and `cd .. && npx rimraf .` names the folder above
+ * it; an option that tells one command where to run moves the words
+ * after it, so `env -C .. npx rimraf .` names the folder above too
+ * (re-probe 6, G5). The value of
  * --name=value is a word of its own, and a script handed to a shell
  * (bash -c, cmd /c, pwsh -Command) is followed from where the shell
  * starts. Not counted: the directory a command moves to or is told to
@@ -1836,55 +1919,32 @@ function wordAboveProject(texts, dialect, cwd, root) {
   let lost = false;
   /** Follows one command text from `start`; returns the word found and the directory it ends in. */
   const walk = (text, start, inDialect, depth) => {
-    const { tokens, subs } = lexShell(text, inDialect);
-    let dir = start;
-    let previous = start;
-    const pushed = [];
-    const outer = [];
-    let stage = [];
-    for (let k = 0; k < tokens.length; k++) {
-      const { word, op } = tokens[k];
-      if (op === "(") outer.push(dir);
-      else if (op === ")") dir = outer.pop() ?? dir;
-      if (word === undefined) {
-        if (CONTROL_OPERATORS.has(op)) stage = [];
-        continue;
-      }
-      stage.push(word);
-      const name = commandName(word);
+    const { placed, subs, end, lost: unknown } = wordsInPlace(text, inDialect, start);
+    if (unknown) lost = true;
+    for (const { tok, dir, moves, stage } of placed) {
+      if (moves) continue;
       const script = stage.length > 2 ? scriptDialect(commandName(stage[0]), stage.at(-2)) : null;
       if (script) {
         if (depth < MAX_SHELL_DEPTH) {
-          const inner = walk(word, dir, script, depth + 1);
-          if (inner.found) return { found: inner.found, dir };
+          const inner = walk(tok.word, dir, script, depth + 1);
+          if (inner.found) return { found: inner.found, dir: end };
         }
-      } else if (DIRECTORY_MOVERS.has(name)) {
-        do k++; while (tokens[k]?.word !== undefined && /^(?:-.|\/d$)/i.test(tokens[k].word));
-        const target = tokens[k]?.word;
-        if (target === undefined) k--;
-        else if (UNKNOWN_DIRECTORY.test(target)) lost = true;
-        if (name === "pushd" || name === "push-location") pushed.push(dir);
-        const next = target === "-" ? previous : path.resolve(dir, home(target ?? "~"));
-        previous = dir;
-        dir = next;
-      } else if (name === "popd" || name === "pop-location") dir = pushed.pop() ?? dir;
-      else if (word === "-C" || DIRECTORY_OPTION.test(word)) k++;
-      else if (!DIRECTORY_OPTION_VALUE.test(word)) {
-        const value = word.replace(/^--?[A-Za-z][\w-]*=/, "");
-        if (value !== "" && !value.startsWith("-") && !NOT_A_FOLDER.test(value) && isAbove(dir, value)) return { found: value, dir };
+        continue;
       }
+      const value = tok.word.replace(/^--?[A-Za-z][\w-]*=/, "");
+      if (value !== "" && !value.startsWith("-") && !NOT_A_FOLDER.test(value) && isAbove(dir, value)) return { found: value, dir: end };
     }
     // A substitution runs where its command does; the start and the end
     // of this text bound that.
     if (depth < MAX_SHELL_DEPTH) {
       for (const sub of subs) {
-        for (const from of new Set([start, dir])) {
+        for (const from of new Set([start, end])) {
           const inner = walk(sub, from, inDialect, depth + 1);
-          if (inner.found) return { found: inner.found, dir };
+          if (inner.found) return { found: inner.found, dir: end };
         }
       }
     }
-    return { found: null, dir };
+    return { found: null, dir: end };
   };
   for (const text of texts) {
     if (nameViews(text).some((view) => UNFOLLOWED_MOVE.test(view) || CDPATH_IN_TEXT.test(view))) continue;

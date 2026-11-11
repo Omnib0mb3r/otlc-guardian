@@ -1210,6 +1210,16 @@ Limit that stays, for Lex: through the PowerShell or cmd tool, a backslash escap
 
 Smoke test after applying: at the root of a scratch project ask Claude to run `printf "rm -rf security\n" | sh` (a Guardian prompt; decline).
 
+**Re-probe 6, W6 and Lex decision G5 (2026-11-11): `env -C` and `env --chdir`. Fixed in staging, not yet live.** At the project root `env -C .. npx rimraf .` and `env --chdir=.. npx rimraf .` were silent in both modes. Real effect in the re-probe (`real\envC`, GNU env 8.32 in Git Bash): the folder above the project was emptied, the project and a sibling folder with it. F3b passed over `-C dir` as "where it runs" without resolving the words after it from that folder, so `.` was read from the session folder; `--chdir` was on the list of moves the resolver does not follow, which made `wordAboveProject()` skip the whole command, while SECURITY.md said only a move the text does not spell out is skipped.
+
+Lex's decision G5: both are directory changes, and the resolver follows them. Change in `staging/hooks/injection-guard-hook.mjs`: `wordsInPlace(text, dialect, start)` gives each word of a command with the directory the shell is in when it reaches it. It follows `cd`, `pushd`, `popd`, `cd -` and the end of a subshell as F3b did, and an option that tells one command where to run (`-C dir`, `--chdir`, `--prefix`, `--cwd`, `--directory`, `--git-dir`, `--work-tree`, as a separate word or with `=`) now moves the words after it in that stage and nothing else. `wordAboveProject()` is rewritten on top of it. `--chdir` is taken off `UNFOLLOWED_MOVE` and joins the options `commandBases()` follows, so a guarded name behind it is resolved from the folder it names and no longer counts wherever it stands.
+
+Tests: `tests/hook.test.js`, "env -C and env --chdir are followed (re-probe 6, G5)": 8 ask, 9 stay silent in bypass mode. Six failed before the fix: four asks (`env -C ..`, `--chdir=..` and `--chdir ..` with `npx rimraf .`, and `env -C ../.. npx rimraf .` from `src/`) and two false asks (`env -C src npx rimraf ..`, which is the project root, and `env --chdir=src/a npx rimraf ../security`, which is `src/security`). Staged hook suite before: 1143 passed, 6 failed. After: 1149 passed, 0 failed. Lex's regress harness: no line changed.
+
+Limit that stays: a move to a variable, a substitution or a glob (`env -C "$D" npx rimraf ..`) is not counted for F3b, as SECURITY.md says. The value stuck to its option (`env -C.. npx rimraf .`) is G7.
+
+Smoke test after applying: in a scratch folder `parent/proj` with Guardian installed in `proj`, ask Claude to run `env -C .. npx rimraf .` from `proj` (a Guardian prompt that says "a folder above this project"; decline).
+
 ### BUG-076: Runtime GUARD-SEC-008 and -009 miss a quoted JSON key
 
 **Status:** IN-PROGRESS · **Found:** 2026-11-10
