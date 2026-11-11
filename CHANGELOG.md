@@ -233,6 +233,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A long option cut short, and a symbolic link's source (BUG-066,
+  re-probe 7 H9).** `cp --t=.claude/agents notes/x.md` and `ln -sf
+  ../../notes/x.md .claude/agents/a.md` put an injection payload into a
+  watched folder unseen. The copy, download, archive, sed and wrapper
+  readers now take a long option at any prefix getopt accepts
+  (`longOption()`), a directory option likewise (`directoryOption()`),
+  and a symbolic link's source is read from the link's folder as well as
+  the shell's. A link into a watched folder to a file that is not there
+  yet asks.
+
 - **An exempt stage's own redirect is judged like `echo`'s (BUG-080,
   re-probe 7 H8).** `git commit -m security > l.txt; xargs rm -rf <
   l.txt` was silent: git prints the subject, and the file handed it to

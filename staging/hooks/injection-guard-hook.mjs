@@ -747,7 +747,9 @@ const WRAPPER_COMMAND_OPTIONS   = new Set(["env -S", "env --split-string"]);
 function wrapperOption(word, valued) {
   if (word.startsWith("--")) {
     const eq = word.indexOf("=");
-    const key = eq < 0 ? word : word.slice(0, eq);
+    const typed = eq < 0 ? word : word.slice(0, eq);
+    // getopt takes a long option cut short (env --chd=.., timeout --kill 5; H9).
+    const key = (typed.length > 2 && valued.find((v) => v.startsWith("--") && v.startsWith(typed))) || typed;
     return { key, value: eq < 0 ? undefined : word.slice(eq + 1), next: eq < 0 && valued.includes(key) };
   }
   for (let j = 1; j < word.length; j++) {
@@ -866,6 +868,22 @@ function inlineCode(name, args) {
   return [stuck, ...args.slice(k + 1)].join(" ");
 }
 const POWERSHELLS       = new Set(["powershell", "pwsh"]);
+
+/**
+ * A long option as getopt_long reads it (re-probe 7, H9): the name may be
+ * cut short to any prefix no other option shares, and a value may follow
+ * "=". So --target-dir=X, --targ X and --t=X are all --target-directory.
+ * A prefix two options share is refused by the program, so any prefix of
+ * `full` is taken for it here.
+ * @param {string} word
+ * @param {string} full - the option's whole name, with its dashes
+ * @returns {{ value: string|undefined }|null} null when `word` is not the
+ *   option; else the value stuck to it, undefined when there is none
+ */
+function longOption(word, full) {
+  const m = /^(--[A-Za-z][A-Za-z-]*)(?:=([\s\S]*))?$/.exec(word);
+  return m && full.startsWith(m[1]) ? { value: m[2] } : null;
+}
 const COPY_COMMANDS     = new Set(["cp", "mv", "install", "ln", "rsync", "scp"]);
 // Options of the copy commands that take the next word as their value
 // (spelled "--opt=value" they take none), so the value is not read as a
@@ -1078,10 +1096,13 @@ function lineFilter(name, args) {
         if (scripts.length === 0) scripts.push(a);
         else files.push(a);
       } else if (a === "--") operandsOnly = true;
-      else if (a === "-e" || a === "--expression") { if (args[k + 1] === undefined) return null; scripts.push(args[++k]); }
-      else if (a.startsWith("--expression=")) scripts.push(a.slice(13));
-      else if (a === "--regexp-extended") ere = true;
-      else if (a.startsWith("--in-place")) inPlace = true;
+      else if (a === "-e" || longOption(a, "--expression")) {
+        // The script follows, or is stuck to the long option after "=" (which getopt takes cut short: --expr=; H9).
+        const stuck = a === "-e" ? undefined : longOption(a, "--expression").value;
+        if (stuck === undefined && args[k + 1] === undefined) return null;
+        scripts.push(stuck ?? args[++k]);
+      } else if (longOption(a, "--regexp-extended")) ere = true;
+      else if (longOption(a, "--in-place")) inPlace = true;
       else if (["--separate", "--unbuffered", "--posix", "--follow-symlinks"].includes(a)) continue;
       else if (a.startsWith("--")) return null;
       else {
@@ -1264,7 +1285,7 @@ function archiveDestinations(args, code) {
   const m = args.findIndex((a) => /^-m/.test(a));
   const module = m < 0 ? "" : args[m].slice(2) || (args[m + 1] ?? "");
   if (/^(?:zipfile|tarfile)$/.test(module)) {
-    const e = args.findIndex((a, k) => k > m && /^(?:-e|--extract)$/.test(a));
+    const e = args.findIndex((a, k) => k > m && (a === "-e" || longOption(a, "--extract")));
     if (e >= 0) dests.push(args[e + 2] ?? ".");
   }
   const namesModule = PY_ARCHIVE_MODULE.test(code);
@@ -1486,8 +1507,20 @@ const HOME_IN_TEXT = /\b(?:home|userprofile)\b\s*=/;
 const UNFOLLOWED_MOVE = /(?:^|\s)-(?:execdir|okdir)(?=\s|$)|(?<![\w-])cwd\s*[:=]/;
 // The options and the call of DIRECTORY_CHANGES as whole shell words. A
 // word keeps its case, so -C (a directory) is not -c (python -c "code").
-const DIRECTORY_OPTION = /^(?:--prefix|--cwd|--chdir|--directory|--git-dir|--work-tree|-workingdirectory|-wd)$/i;
-const DIRECTORY_OPTION_VALUE = /^(?:--prefix|--cwd|--chdir|--directory|--git-dir|--work-tree)=/i;
+const DIRECTORY_OPTIONS = ["--prefix", "--cwd", "--chdir", "--directory", "--git-dir", "--work-tree"];
+/**
+ * A word that is one of DIRECTORY_OPTIONS, whole or cut short the way
+ * getopt takes a long option (env --chd=.., make --dir src; re-probe 7,
+ * H9), or PowerShell's -WorkingDirectory.
+ * @returns {{ names: string[], value: string|undefined }|null} the whole
+ *   names the word can stand for and the value after "=", or null
+ */
+function directoryOption(word) {
+  if (/^-(?:workingdirectory|wd)$/i.test(word)) return { names: [word.toLowerCase()], value: undefined };
+  const m = /^(--[a-z][a-z-]*)(?:=([\s\S]*))?$/i.exec(word);
+  const names = m ? DIRECTORY_OPTIONS.filter((option) => option.startsWith(m[1].toLowerCase())) : [];
+  return names.length > 0 ? { names, value: m[2] } : null;
+}
 // -C with the directory stuck to it (env -C.., make -Csrc, tar -C.claude;
 // re-probe 6, G7). A digit after it is a count (grep -C3, diff -C3).
 const DIRECTORY_STUCK = /^-C[^\d-]/;
@@ -1516,11 +1549,11 @@ const RUNS_IN_DIRECTORY = {
   "start-process": /^-(?:workingdirectory|wd)$/i,
 };
 
-/** Whether a program named in `stage` runs in the folder `option` names (RUNS_IN_DIRECTORY). */
-function runsInDirectory(stage, option) {
+/** Whether a program named in `stage` runs in the folder an option names, for any of the names the option can stand for (RUNS_IN_DIRECTORY). */
+function runsInDirectory(stage, options) {
   return stage.some((word) => {
     const name = commandName(word);
-    return Object.hasOwn(RUNS_IN_DIRECTORY, name) && RUNS_IN_DIRECTORY[name].test(option);
+    return Object.hasOwn(RUNS_IN_DIRECTORY, name) && options.some((option) => RUNS_IN_DIRECTORY[name].test(option));
   });
 }
 const QUOTED_CHDIR = /chdir\(\s*(['"])(.*?)\1/gi;
@@ -1572,8 +1605,8 @@ function commandBases(views, cwd, words) {
       let j = k + 1;
       while (j < words.length && /^(?:-|\/d$)/i.test(words[j])) j++;
       dirs.push(words[j]);
-    } else if (word === "-C" || DIRECTORY_OPTION.test(word)) dirs.push(words[k + 1]);
-    else if (DIRECTORY_OPTION_VALUE.test(word)) dirs.push(word.slice(word.indexOf("=") + 1));
+    } else if (word === "-C") dirs.push(words[k + 1]);
+    else if (directoryOption(word)) dirs.push(directoryOption(word).value ?? words[k + 1]);
     else if (spaced(word)) for (const m of word.matchAll(QUOTED_CHDIR)) dirs.push(m[2]);
     // The views read a value after white space or "="; one stuck to -C is
     // read here, with or without a space in it.
@@ -2386,18 +2419,22 @@ function wordsInPlace(text, dialect, start) {
       mark(tok, true);
       pending.push(dir);
       dir = pushed.pop() ?? dir;
-    } else if (word === "-C" || DIRECTORY_OPTION.test(word)) {
-      mark(tok, true);
-      const value = tokens[k + 1]?.word;
+    } else if (word === "-C" || directoryOption(word)) {
+      // The folder follows as the next word, or after "=".
+      const option = directoryOption(word) ?? { names: ["-C"], value: undefined };
+      const runsThere = runsInDirectory(stage, option.names);
+      // A name cut short on a program not known to run there may be an
+      // option of its own (node clean.js --dir=..): its folder is also a
+      // word the program is given, and is not passed over as a move.
+      const whole = word === "-C" || option.names.includes(word.split("=")[0].toLowerCase());
+      const move = whole || runsThere;
+      mark(tok, move);
+      const value = option.value ?? tokens[k + 1]?.word;
       if (value !== undefined) {
-        mark(tokens[++k], true);
-        if (!runsInDirectory(stage, word)) stageAlt = [...stageAlt, here];
+        if (option.value === undefined) mark(tokens[++k], move);
+        if (!runsThere) stageAlt = [...stageAlt, here];
         toStage(here, value);
       }
-    } else if (DIRECTORY_OPTION_VALUE.test(word)) {
-      mark(tok, true);
-      if (!runsInDirectory(stage, word.slice(0, word.indexOf("=")))) stageAlt = [...stageAlt, here];
-      toStage(here, word.slice(word.indexOf("=") + 1));
     } else if (DIRECTORY_STUCK.test(word)) {
       mark(tok, true);
       stageAlt = [...stageAlt, here];
@@ -3290,7 +3327,9 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
     return sources;
   };
   const filter = (inputs, apply) => `filter:${found.filters.push({ inputs, apply }) - 1}`;
-  const ctx = { add, abs, recurse, dialect, decoded: found.decoded, quiet: [], filter, root: found.root };
+  /** Whether a file is there: on disk, or written earlier in this command. */
+  const present = (file) => existsSync(file) || targets.has(file);
+  const ctx = { add, abs, recurse, present, dialect, decoded: found.decoded, quiet: [], filter, root: found.root };
 
   const { tokens, subs, heredocs, uncertain } = lexShell(command, dialect);
   if (uncertain) found.uncertain = true;
@@ -3530,7 +3569,7 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     const files = args.filter((a, k) => !a.startsWith("-") && !/^-[fsw]$/.test(args[k - 1] ?? ""));
     if (files[1]) add(dir, files[1], files[0] && files[0] !== "-" ? [abs(dir, files[0])] : stdin);
   } else if (name === "tee") {
-    const append = args.some((a) => /^-[a-z]*a/.test(a) || a === "--append");
+    const append = args.some((a) => /^-[a-z]*a/.test(a) || longOption(a, "--append"));
     for (const p of operands) add(dir, p, stdin, append);
   } else if (DELETE_COMMANDS.has(name)) {
     for (const p of operands) add(dir, p);
@@ -3553,19 +3592,27 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     for (const dest of archiveDestinations(args, code)) add(dir, dest);
   } else if (COPY_COMMANDS.has(name)) {
     const valued = new Set(COPY_VALUE_OPTIONS[name] ?? []);
-    const paths = args.filter((a, k) => !a.startsWith("-") && !valued.has(args[k - 1]));
+    // A valued long option may be cut short (install --own root; H9).
+    // rsync and scp do not take a short form.
+    const cut = name !== "rsync" && name !== "scp";
+    const takesNext = (o = "") => valued.has(o) ||
+      (cut && !o.includes("=") && [...valued].some((v) => v.startsWith("--") && longOption(o, v)));
+    const paths = args.filter((a, k) => !a.startsWith("-") && !takesNext(args[k - 1]));
     // cp, mv, install and ln name the destination folder with -t DIR,
     // also at the end of a cluster (-rt DIR), stuck to it (-tDIR) and as
-    // --target-directory=DIR (G7). A letter that takes a value ends the
-    // cluster before a "t" is reached (cp -Stmp). For rsync -t keeps
+    // --target-directory=DIR (G7), which getopt also takes cut short
+    // (--target-dir=DIR, --t DIR; H9). A letter that takes a value ends
+    // the cluster before a "t" is reached (cp -Stmp). For rsync -t keeps
     // times and for scp it is not a user option.
     let target;
-    if (name !== "rsync" && name !== "scp") {
+    if (cut) {
       const valueLetters = [...valued].filter((o) => /^-[A-Za-z]$/.test(o)).map((o) => o[1]).join("");
       const short = new RegExp(`^-[^-t${valueLetters}]*t(.*)$`);
       for (let k = 0; k < args.length && target === undefined; k++) {
-        const m = /^--target-directory(?:=(.*))?$/.exec(args[k]) ?? short.exec(args[k]);
-        if (m) target = m[1] || args[k + 1];
+        const long = longOption(args[k], "--target-directory");
+        const m = long ? null : short.exec(args[k]);
+        if (long) target = long.value || args[k + 1];
+        else if (m) target = m[1] || args[k + 1];
       }
     }
     const dest = target ?? paths[paths.length - 1];
@@ -3573,13 +3620,31 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     // Into a directory each source keeps its name; onto a file the sources replace it.
     const intoDir = target !== undefined || sources.length > 1 || /[\\/]$/.test(dest ?? "")
       || Boolean(dest && statSync(abs(dir, dest), { throwIfNoEntry: false })?.isDirectory());
-    const recursive = name === "mv" || args.some((a) => /^-[a-zA-Z]*[rRa]/.test(a) || a === "--recursive" || a === "--archive");
+    const recursive = name === "mv" || args.some((a) => /^-[a-zA-Z]*[rRa]/.test(a) || a === "--recursive" || a === "--archive" ||
+      (cut && (longOption(a, "--recursive") || longOption(a, "--archive"))));
+    // A symbolic link keeps its source as spelled, and a relative one is
+    // resolved from the link's folder, not the shell's: `ln -s
+    // ../../notes/x.md .claude/agents/a.md` reaches notes/x.md (H9). The
+    // source is read from both folders, since -r and a cluster that
+    // only looks like -s leave it at the shell's. A link to a folder
+    // makes every file under it reachable.
+    const symbolic = name === "ln" && args.some((a) => /^-[a-zA-Z]*s/.test(a) || longOption(a, "--symbolic"));
+    const isFolder = (p) => Boolean(statSync(p, { throwIfNoEntry: false })?.isDirectory());
     if (dest) {
+      const linkFolder = abs(dir, intoDir ? dest : path.posix.dirname(dest.replace(/\\/g, "/")));
       for (const src of sources) {
-        // rsync always puts a folder under the destination, by name unless
-        // "src/"; a single file onto a path that is not a folder replaces it.
-        const folder = name === "rsync" && Boolean(statSync(abs(dir, src), { throwIfNoEntry: false })?.isDirectory());
-        addCopy(dir, ctx, src, dest, { intoDir: intoDir || folder, recursive, slashMeansContents: name === "rsync" });
+        // A link to nothing yet: what it will reach cannot be judged.
+        if (symbolic && !ctx.present(abs(dir, src)) && !ctx.present(abs(linkFolder, src))) {
+          add(dir, intoDir ? `${dest}/${path.posix.basename(src.replace(/\\/g, "/"))}` : dest, [`${UNJUDGED}${abs(linkFolder, src)}`]);
+          continue;
+        }
+        for (const from of symbolic ? [src, abs(linkFolder, src)] : [src]) {
+          // rsync always puts a folder under the destination, by name unless
+          // "src/"; a single file onto a path that is not a folder replaces it.
+          const folder = (name === "rsync" || symbolic) && isFolder(abs(dir, from));
+          addCopy(dir, ctx, from, dest, { intoDir: intoDir || (name === "rsync" && folder), recursive: recursive || (symbolic && folder),
+            slashMeansContents: name === "rsync" });
+        }
       }
     }
     if (name === "mv") for (const src of sources) add(dir, src); // a moved file is gone from its old path
@@ -3596,19 +3661,23 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     gitWrites(args, dir, ctx);
   } else if (name === "patch") {
     // -i FILE, -iFILE, --input FILE or --input=FILE; else the patch is stdin.
-    const named = args.map((a, k) => (a === "-i" || a === "--input" ? args[k + 1] : /^(?:--input=|-i)(.+)$/.exec(a)?.[1])).find(Boolean);
+    const named = args.map((a, k) => {
+      const long = longOption(a, "--input");
+      return long ? long.value || args[k + 1] : a === "-i" ? args[k + 1] : /^-i(.+)$/.exec(a)?.[1];
+    }).find(Boolean);
     const patches = named ? [abs(dir, named)] : input.reads;
     for (const p of patches) patchWrites(p, dir, ctx);
   } else if (name === "dd") {
     for (const a of args) if (a.startsWith("of=")) add(dir, a.slice(3), [...stdin, ...args.filter((x) => x.startsWith("if=")).map((x) => abs(dir, x.slice(3)))]);
   } else if (name === "curl" || name === "wget") {
     // curl -o FILE and wget -O FILE, alone or in a cluster (-sSLo FILE),
-    // with the file stuck to the letter (-oFILE; G7) or after "=".
-    const outFlag = name === "curl" ? /^(?:-[a-zA-Z]*?o(.*)|--output)$/ : /^(?:-[a-zA-Z]*?O(.*)|--output-document)$/;
+    // with the file stuck to the letter (-oFILE; G7) or after "=". The
+    // long option may be cut short (--out FILE, --output-doc=FILE; H9).
+    const short = name === "curl" ? /^-[a-zA-Z]*?o(.*)$/ : /^-[a-zA-Z]*?O(.*)$/;
     args.forEach((a, k) => {
-      const m = outFlag.exec(a);
-      if (m) add(dir, m[1] || args[k + 1]);
-      else if (/^--output(?:-document)?=/.test(a)) add(dir, a.slice(a.indexOf("=") + 1));
+      const long = longOption(a, name === "curl" ? "--output" : "--output-document");
+      const file = long ? long.value || args[k + 1] : short.exec(a) && (short.exec(a)[1] || args[k + 1]);
+      if (file) add(dir, file);
     });
   }
   return { dir, out };
@@ -3670,7 +3739,7 @@ const TAR_VALUE_LETTERS = new Set(["f", "C", "T", "X", "b", "H", "K", "N", "V", 
 // GNU tar and bsdtar (the tar.exe of Windows) under their own names.
 const TAR_COMMANDS = new Set(["tar", "bsdtar", "gtar"]);
 /** Whether sed, perl or ruby is told to rewrite the files it is given: -i in a short cluster, or --in-place. */
-const editsInPlace = (args) => args.some((a) => /^-[a-zA-Z]*i/.test(a) || a.startsWith("--in-place"));
+const editsInPlace = (args) => args.some((a) => /^-[a-zA-Z]*i/.test(a) || longOption(a, "--in-place"));
 
 /**
  * What `tar` extracts: the members it names, under -C/--directory or the
@@ -3685,9 +3754,11 @@ function tarWrites(args, dir, ctx) {
     const a = args[k];
     const long = /^--([a-z-]+)(?:=(.*))?$/.exec(a);
     if (long) {
-      if (long[1] === "extract" || long[1] === "get") extract = true;
-      const value = long[2] ?? (["file", "directory", "files-from", "exclude-from"].includes(long[1]) ? args[++k] : undefined);
-      if (long[1] === "directory" && value !== undefined) into = archiveFolder(value);
+      // A long option may be cut short (--ext, --dir=X; H9).
+      const is = (full) => full.startsWith(long[1]);
+      if (is("extract") || is("get")) extract = true;
+      const value = long[2] ?? (["file", "directory", "files-from", "exclude-from"].some(is) ? args[++k] : undefined);
+      if (is("directory") && value !== undefined) into = archiveFolder(value);
     } else if (/^-[a-zA-Z]/.test(a) || (k === 0 && /^[a-zA-Z]+$/.test(a))) {
       // Short options, or the old style "tar xzf a.tar" first word. After
       // a dash, what follows a value letter in the same word is its value
@@ -4702,9 +4773,10 @@ process.stdin.on("end", () => {
     if (unjudgedTarget) {
       const target = unjudgedTarget;
       record(confirmOrDeny,
-        `${TAG} This command copies a folder into ${safeEchoPath(target, 120)}, which agents load as instructions, ` +
-        `and Guardian could not read all of it (more than ${MAX_TREE_FILES} files, or a folder it cannot list), ` +
-        `so the files past that are not judged. Approve only if you know what the folder holds.${bypassNote}`);
+        `${TAG} This command copies or links a folder or file into ${safeEchoPath(target, 120)}, which agents load as ` +
+        `instructions, and Guardian could not read all of it (more than ${MAX_TREE_FILES} files, a folder it cannot list, ` +
+        `or a link to a file that is not there yet), so that content is not judged. ` +
+        `Approve only if you know what it holds.${bypassNote}`);
     }
 
     // A file write is judged by what it adds to the text on disk:
