@@ -4533,6 +4533,142 @@ describe("PreToolUse hook - a program that only reads a folder above the project
 });
 
 // ---------------------------------------------------------------------------
+// Re-probe 7, X3 and H1 (BUG-075, BUG-066): a read-only program reads only
+// with options known to only read
+// ---------------------------------------------------------------------------
+//
+// sort counted as reading unless it had -o or --output. getopt takes a
+// long option cut short (--o=FILE), Windows sort names its file with /O,
+// and --compress-program runs a program; each emptied the scanner or
+// deleted security/ for real. Lex's decision: every program on the
+// read-only list reads only when each option it is given is on that
+// program's list of options known to only read.
+
+/** A project with Guardian's files, a payload in notes/x.md and a clean README. */
+function guardedProject(dir) {
+  const root = path.join(dir, "proj");
+  for (const [rel, text] of [
+    [".claude/settings.json", "{}"], [".claude/hooks/injection-guard-hook.mjs", "x\n"], ["security/01-injection-guard.js", "x\n"],
+    ["security/package.json", "{}"], ["src/a.js", "x\n"], ["src/a/x.txt", "x\n"], ["README.md", "clean\n"],
+    ["notes/x.md", `${CRITICAL_PAYLOAD}\n`], ["notes/ok.md", "fine\n"],
+  ]) {
+    mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+    writeFileSync(path.join(root, rel), text);
+  }
+  return root;
+}
+
+/**
+ * Runs one command in a fresh guardedProject().
+ * @param {{ mode?: string, tool?: string, sub?: string }} [options] - the
+ *   permission mode, the tool ("Bash" by default) and a folder under the
+ *   root to run from
+ */
+function runGuarded(command, { mode, tool = "Bash", sub = "" } = {}) {
+  return withTempProject((dir) => {
+    const root = guardedProject(dir);
+    return runHook(PRE_HOOK, { tool_name: tool, cwd: path.join(root, sub), tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) },
+      { CLAUDE_PROJECT_DIR: root });
+  });
+}
+
+describe("PreToolUse hook - a read-only program reads only with options known to only read (re-probe 7, H1)", () => {
+  for (const command of [
+    // The re-probe's forms: --output cut short, Windows sort, a program run on the chunks.
+    "sort --o=security/01-injection-guard.js /dev/null",
+    "sort --out=security/01-injection-guard.js /dev/null",
+    "sort --outp security/01-injection-guard.js /dev/null",
+    "sort --o=.claude/settings.json /dev/null",
+    "sort.exe /OUTPUT .claude/settings.json /dev/null",
+    'cmd //c "sort /o security\\01-injection-guard.js < nul"',
+    "sort --compress-program=sh -S 1M .claude/settings.json",
+    "printf 'rm -rf security\\n%.0s' {1..99999} | sort -S 1M --compress-program=sh > /dev/null",
+    // The same class in other programs on the list.
+    "less -o .claude/settings.json README.md",
+    "file -C -m .claude/settings.json",
+    "rg --hostname-bin ./x.sh foo .claude/settings.json",
+    "rg -z foo .claude/settings.json",
+    "diff -l .claude/settings.json a.json",
+    "git diff --ou=.claude/settings.json",
+    "git log --ext-d -- .claude/settings.json",
+    "find .claude -frobnicate x",
+    "echo 'security' | tee --frob logs/ci.log",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    "sort.exe /o security\\01-injection-guard.js nul",
+    "cmd /c sort /o .claude\\settings.json nul",
+    "C:\\Windows\\System32\\sort.exe /o security\\01-injection-guard.js nul",
+    // A script block is code the cmdlet runs.
+    "Get-ChildItem .claude | Where-Object { Remove-Item -Recurse -Force .claude\\hooks }",
+    // A parameter that sets a variable is not one that only reads.
+    "Get-Content .claude\\settings.json -OutVariable x",
+  ]) {
+    stagedOnly(`asks, PowerShell tool: ${command}`, () => {
+      const out = runGuarded(command, { tool: "PowerShell" });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  // The content reader takes the same spellings for the file sort writes.
+  stagedOnly("denied on content: sort --ou=CLAUDE.md notes/x.md", () => {
+    assert.equal(decisionOf(runGuarded("sort --ou=CLAUDE.md notes/x.md")), "deny");
+  });
+  stagedOnly("denied on content, PowerShell tool: sort.exe /OUTPUT CLAUDE.md notes\\x.md", () => {
+    assert.equal(decisionOf(runGuarded("C:\\Windows\\System32\\sort.exe /OUTPUT CLAUDE.md notes\\x.md", { tool: "PowerShell" })), "deny");
+  });
+
+  for (const command of [
+    "cat -n .claude/settings.json",
+    "head -20 .claude/settings.json",
+    "tail -n 5 .claude/settings.json",
+    "grep --colour=never -rn foo .claude/settings.json",
+    "ls -la .claude",
+    "wc -l .claude/settings.json",
+    "jq -r .hooks .claude/settings.json",
+    "stat -c %s .claude/settings.json",
+    "sha256sum security/01-injection-guard.js",
+    "du -sh .. | sort -rn | head -5",
+    "sort -u -k2,2 -t, security/package.json",
+    "tree -L 2 -a .claude",
+    "less -R .claude/settings.json",
+    "diff -u .claude/settings.json a.json",
+    "rg -n --hidden hooks .claude",
+    "find .claude -maxdepth 2 -name '*.json' -type f",
+    "find .claude -newermt 2026-01-01 -size -5k -print",
+    "git diff --stat -- .claude/settings.json",
+    "git log -p -S'hooks' --since=2.weeks -- .claude/settings.json",
+    "git --no-pager diff HEAD~1 -- security/01-injection-guard.js",
+    "git log --format='%h %s' --grep=security",
+    "echo 'security scan done' | tee --output-error=warn -a logs/ci.log",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+
+  for (const command of [
+    "Get-Content .claude\\settings.json -Raw | ConvertFrom-Json",
+    "Get-Content .claude\\settings.json -Tail 5 -ErrorAction SilentlyContinue",
+    "Get-ChildItem -Recurse -Force .claude | Select-Object -First 5 Name",
+    "Get-ChildItem .claude | Where-Object Name -like '*.json'",
+    "Get-ChildItem .claude | sort Name -Descending",
+    "Select-String -Path .claude\\settings.json -Pattern hooks",
+    "cmd /c dir /a:h /o:-n .claude",
+    "cmd /c type .claude\\settings.json",
+  ]) {
+    stagedOnly(`silent, PowerShell tool: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions", tool: "PowerShell" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

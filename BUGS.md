@@ -1068,6 +1068,8 @@ Limit, stated: the wrappers are a list. A program that starts another and is not
 
 Smoke test after applying: with a payload in `notes/x.md`, `nice -n 5 cp notes/x.md CLAUDE.md` is denied; in bypass mode `nice -n 19 make -j8` gets no prompt.
 
+**Re-probe 7, X3 and H1 (2026-11-11), staged:** the content reader for `sort` takes `--output` cut short (`sort --ou=CLAUDE.md notes/x.md`) and Windows sort's `/O FILE` and `/OUTPUT FILE` as the file written; both were silent and put the payload in CLAUDE.md (`real\sortc`, `realps\sortcl2`). The full account is in the BUG-075 block.
+
 ### BUG-067: PowerShell parameter prefixes and encoded command payloads
 
 **Status:** IN-PROGRESS · **Found:** 2026-11-10
@@ -1265,6 +1267,20 @@ Change in `staging/hooks/injection-guard-hook.mjs`: `du` and `df` join `READ_ONL
 Tests: `tests/hook.test.js`, "a program that only reads a folder above the project (F3b read-only)": 10 stay silent in bypass mode (7 were denied before the fix), 8 ask. Staged hook suite before: 1313 passed, 7 failed. After: 1320 passed, 0 failed. Lex's regress harness: no line changed.
 
 Smoke test after applying: in bypass mode at a project root `du -sh ..` and `tree ..` get no Guardian prompt; `npx rimraf ..` is denied with "a folder above this project".
+
+**Re-probe 7, X3 and Lex decision H1 (2026-11-11): a read-only program reads only with options known to only read. Fixed in staging, not yet live.** Report: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-11-guardian-1.5.0-reprobe7.md`. A regression in 1dc67a7 (F3b read-only): `onlyReads()` took `sort` as reading unless a word matched `-o` or began `--output`. Silent in both modes: `sort --o=security/01-injection-guard.js /dev/null`, `--out=`, `--outp FILE` (getopt takes a long option cut short), `sort.exe /o FILE nul`, `cmd /c sort /o FILE nul` and `/OUTPUT` (Windows sort), and `sort --compress-program=sh` (GNU sort hands its temporary chunks to that program). Real effect in the re-probe (`real\sorto`, `sortcp`, `realps\sortexe2`): the scanner emptied to 0 bytes, `security/` deleted. The content reader had the same gap: `sort --ou=CLAUDE.md notes/x.md` and `sort.exe /OUTPUT CLAUDE.md notes\x.md` put the payload in CLAUDE.md (`real\sortc`, `realps\sortcl2`).
+
+Lex's decision: every program on the read-only list counts as only reading only when every option it is given is on that program's list of options known to only read. An unknown option, a long option cut short, a Windows `/o` style switch, `--compress-program` and any output option are not.
+
+Change in `staging/hooks/injection-guard-hook.mjs`: `READ_ONLY_OPTIONS` holds, for each program on `READ_ONLY_COMMANDS` (`tree` and `sort` now among them), its one-letter flags, its one-letter options that take a value, and its long options spelled in full; `knownReadOptions()` checks a stage against it. `echo`, `printf`, `test`, `[` and `true` take any words. `CMD_READ_SWITCHES` does the same for cmd's built-ins (`dir /s /b`, `cd /d`), and `PS_READ_PARAMS` with `knownReadParams()` for the PowerShell cmdlets and the cmdlets their bare aliases stand for (`sort` is Sort-Object, `cat` is Get-Content; with a path or `.exe` the word is a program). A PowerShell stage that holds `{` or `}` is not read-only: a script block is code the cmdlet runs. `git` reads through `gitOnlyReads()`: a read-only subcommand, only `--no-pager` and three other options before it, and options from `GIT_READ_OPTIONS`. `findOnlyReads()` turned from a list of actions that write into a list of tests and actions that only list (`FIND_VALUED`, `FIND_FLAGS`). `tee` takes `-a`, `-i`, `-p` and their long forms only. For sort a word that is one `/` segment is a Windows switch and must be `/R`, `/C`, `/UNIQUE` or `/+N`. The content reader for `sort` reads `--o`, `--ou` and the rest as `--output`, and `/O FILE` or `/OUTPUT FILE` as the file written.
+
+Found by the worker while reproducing, same class, silent before and asking now: `less -o FILE`, `file -C -m FILE`, `rg --hostname-bin PROG`, `rg -z`, `diff -l`, `git diff --ou=FILE`, `git log --ext-d`, and in PowerShell `Get-ChildItem .claude | Where-Object { Remove-Item -Recurse -Force .claude\hooks }` and `Get-Content .claude\settings.json -OutVariable x`.
+
+Cost, for Lex to confirm: an option that is safe and not on its program's list makes a command that names one of Guardian's files, a folder above the project or the bare word `security` ask (deny in bypass mode). Through the PowerShell tool the bare aliases are read as cmdlets, so `ls -la .claude` asks there, and so does `Where-Object { $_.Name -like '*.json' }` on Guardian's files until H4 reads a script block that only compares. The 113 everyday commands of re-probe 7 and the 75 of the G7 list give the same verdicts as before.
+
+Tests: `tests/hook.test.js`, "a read-only program reads only with options known to only read (re-probe 7, H1)": 22 ask, 2 are denied on content, 30 stay silent in bypass mode. All 24 asks and denies failed before the fix. Staged hook suite before: 1350 passed, 24 failed. After: 1374 passed, 0 failed. Lex's regress harness: no line changed. Re-probe 7's lists (640 commands): 24 verdicts changed, each from silent to deny/ask: the X3 forms, `tree --fromfile`, and the four X5 PowerShell forms, where `-OutVariable` is no longer a parameter that only reads.
+
+Smoke test after applying: at the root of a scratch project ask Claude to run `sort --o=security/01-injection-guard.js /dev/null`; see a Guardian prompt; decline. In bypass mode `du -sh .. | sort -rn | head -5` and `grep --colour=never -rn foo .claude/settings.json` get no prompt.
 
 ### BUG-076: Runtime GUARD-SEC-008 and -009 miss a quoted JSON key
 

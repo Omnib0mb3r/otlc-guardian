@@ -233,6 +233,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A read-only program reads only with options known to only read
+  (BUG-075, BUG-066, re-probe 7 H1).** `sort --o=FILE`, `sort /o FILE`
+  and `sort --compress-program=sh` counted as reading and emptied the
+  scanner or deleted `security/` when run. Every program on the
+  read-only list now has a list of options that only read
+  (`READ_ONLY_OPTIONS`, `PS_READ_PARAMS`, `GIT_READ_OPTIONS`); any other
+  option, a long option cut short, a Windows switch or a PowerShell
+  script block makes the command one that is asked about. The content
+  reader takes the same spellings of sort's output file.
+
 - **A program that only reads a folder above the project is silent
   (BUG-075, F3b read-only).** `du -sh ..` and `tree ..` at a project root
   were denied in bypass mode. `du`, `df`, `tree` (without `-o` or `-R`)

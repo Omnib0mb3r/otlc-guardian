@@ -2245,21 +2245,307 @@ function wordAboveProject(texts, dialect, cwd, root) {
 const READ_ONLY_COMMANDS = new Set([
   "cat", "less", "more", "head", "tail", "grep", "egrep", "fgrep", "rg", "ls", "dir", "stat", "wc", "file", "diff",
   "cmp", "jq", "md5sum", "sha1sum", "sha256sum", "cd", "pushd", "popd", "pwd", "echo", "printf", "test", "[", "true",
-  "realpath", "readlink", "basename", "dirname", "type", "du", "df",
+  "realpath", "readlink", "basename", "dirname", "type", "du", "df", "tree", "sort",
   "get-content", "gc", "get-childitem", "gci", "get-item", "gi", "test-path", "select-string", "sls",
   "get-filehash", "set-location", "sl", "resolve-path", "rvpa", "write-output", "write-host",
   "select-object", "where-object", "measure-object", "format-list", "format-table", "convertfrom-json", "out-string",
 ]);
 const READ_ONLY_GIT = new Set(["diff", "log", "show", "status", "blame", "ls-files", "rev-parse", "cat-file", "grep"]);
 const NULL_SINK = /^(?:\/dev\/null|nul|\$null)$/i;
+
+// What a read-only program may be given and still only read (re-probe 7,
+// H1). A program on the list reads only when every option in its command
+// is known here. An option that is not listed, a long option cut short
+// (getopt takes --o for --output) and a Windows switch (/o) may each name
+// a file to write or a program to run: sort -o and --compress-program,
+// less -o, tree -o, file -C, rg --pre. A value given as a word of its own
+// is read as an operand, which these programs only read.
+//   flags    one-letter options that take no value
+//   valued   one-letter options whose value is the rest of the word
+//   long     long options, spelled in full, with or without "=value"
+//   digits   -N is a count
+//   plus     what a word that starts with "+" must match (less runs +cmd)
+//   operand  a test every operand must pass
+// `null` marks a program whose words are all text or a test.
+const readOptions = (flags, valued = "", long = "", extra = {}) =>
+  ({ flags: new Set(flags), valued: new Set(valued), long: new Set(long.split(/\s+/).filter(Boolean)), ...extra });
+const GREP_READ_OPTIONS = readOptions("EFGPiyvwxcLloqsbHhnTUzZrRIa", "efmABCdD",
+  `extended-regexp fixed-strings basic-regexp perl-regexp regexp file ignore-case no-ignore-case invert-match word-regexp
+   line-regexp count color colour files-without-match files-with-matches max-count only-matching quiet silent no-messages
+   byte-offset with-filename no-filename label line-number initial-tab null after-context before-context context text
+   binary-files devices directories exclude exclude-from exclude-dir include recursive dereference-recursive
+   line-buffered binary null-data`, { digits: true });
+const HASH_READ_OPTIONS = readOptions("bctwz", "", "binary check tag text zero ignore-missing quiet status strict warn");
+// Windows sort takes /R, /C, /UNIQUE and /+N to read; /O names the file
+// it writes. A word that is one "/" segment is a switch to it.
+const SORT_READ_SWITCH = /^\/(?:r|c|uniq(?:ue)?|\+\d+)$/i;
+const READ_ONLY_OPTIONS = {
+  cat: readOptions("AbeEnstTuv", "", "show-all number-nonblank show-ends number squeeze-blank show-tabs show-nonprinting"),
+  less: readOptions("eEfFgGiIJmMnNqQrRsSuUwWX", "bhjpxyz",
+    `quit-if-one-screen RAW-CONTROL-CHARS raw-control-chars no-init chop-long-lines LINE-NUMBERS line-numbers ignore-case
+     IGNORE-CASE quit-at-eof QUIT-AT-EOF squeeze-blank-lines pattern tabs`, { plus: /^\+(?:\d+|[GgF]|\/.*)$/ }),
+  more: readOptions("dlfpcsu", "n", "silent logical no-pause print-over clean-print squeeze plain lines", { digits: true }),
+  head: readOptions("qvz", "cn", "bytes lines quiet silent verbose zero-terminated", { digits: true }),
+  tail: readOptions("fFqvzr", "cns", "bytes lines follow quiet silent verbose zero-terminated retry pid sleep-interval max-unchanged-stats", { digits: true }),
+  grep: GREP_READ_OPTIONS,
+  egrep: GREP_READ_OPTIONS,
+  fgrep: GREP_READ_OPTIONS,
+  // Not listed: --pre and --pre-glob (a program run on each file),
+  // --hostname-bin, and -z / --search-zip (a decompressor is run).
+  rg: readOptions("iSswxvclonNHIFPUuaLpq0.", "efgtTABCmMjdEr",
+    `ignore-case smart-case case-sensitive word-regexp line-regexp invert-match count count-matches files-with-matches
+     files-without-match only-matching line-number no-line-number with-filename no-filename heading no-heading
+     fixed-strings hidden no-hidden no-ignore no-ignore-vcs no-ignore-parent follow text files glob iglob type type-not
+     type-list after-context before-context context max-count max-depth max-columns max-filesize threads color colors
+     json vimgrep column no-column pretty quiet null null-data sort sortr stats trim multiline multiline-dotall pcre2
+     regexp file replace unrestricted encoding no-messages no-config passthru include-zero crlf engine line-buffered
+     one-file-system binary`),
+  ls: readOptions("aAbBcCdDfFgGhHiklLmnNopqQrRsStuUvxXZ1", "IwT",
+    `all almost-all author escape block-size ignore-backups color colour directory dired classify file-type format
+     full-time group-directories-first no-group human-readable si dereference-command-line
+     dereference-command-line-symlink-to-dir hide hyperlink indicator-style inode ignore kibibytes dereference
+     numeric-uid-gid literal show-control-chars hide-control-chars quote-name quoting-style reverse recursive size sort
+     time time-style tabsize width context zero`),
+  stat: readOptions("Lft", "c", "dereference file-system format printf terse cached"),
+  wc: readOptions("clmLw", "", "bytes chars lines max-line-length words files0-from total"),
+  // Not listed: -C / --compile, which writes a compiled magic file.
+  file: readOptions("bcdEhikLlnNprsSzZ0", "eFfmP",
+    `brief mime mime-type mime-encoding dereference no-dereference keep-going uncompress uncompress-noreport files-from
+     separator exclude exclude-quiet magic-file extension raw special-files preserve-date no-buffer no-pad print0 list
+     parameter checking-printout debug`),
+  // Not listed: -l / --paginate, which pipes the output through pr.
+  diff: readOptions("qscuyrNaBbdEeitTwZnp", "UCxXSIFLWD",
+    `normal brief report-identical-files context unified ed rcs side-by-side width left-column suppress-common-lines
+     show-c-function show-function-line label expand-tabs initial-tab tabsize suppress-blank-empty recursive
+     no-dereference new-file unidirectional-new-file ignore-file-name-case no-ignore-file-name-case exclude exclude-from
+     starting-file from-file to-file ignore-case ignore-tab-expansion ignore-trailing-space ignore-space-change
+     ignore-all-space ignore-blank-lines ignore-matching-lines text strip-trailing-cr ifdef minimal horizon-lines
+     speed-large-files color palette`, { digits: true }),
+  cmp: readOptions("bls", "in", "print-bytes ignore-initial verbose bytes quiet silent"),
+  jq: readOptions("nrjaCMSscehRV", "fL",
+    `null-input raw-input slurp compact-output raw-output raw-output0 join-output ascii-output sort-keys color-output
+     monochrome-output tab indent unbuffered stream stream-errors seq from-file exit-status arg argjson slurpfile
+     rawfile args jsonargs binary`),
+  md5sum: HASH_READ_OPTIONS,
+  sha1sum: HASH_READ_OPTIONS,
+  sha256sum: HASH_READ_OPTIONS,
+  cd: readOptions("LPe@"),
+  pushd: readOptions("n", "", "", { digits: true }),
+  popd: readOptions("n", "", "", { digits: true }),
+  pwd: readOptions("LP", "", "logical physical"),
+  echo: null,
+  printf: null,
+  test: null,
+  "[": null,
+  true: null,
+  realpath: readOptions("eLmPqsz", "", "canonicalize-existing canonicalize-missing logical physical quiet relative-to relative-base strip no-symlinks zero"),
+  readlink: readOptions("femnqsvz", "", "canonicalize canonicalize-existing canonicalize-missing no-newline quiet silent verbose zero"),
+  basename: readOptions("az", "s", "multiple suffix zero"),
+  dirname: readOptions("z", "", "zero"),
+  type: readOptions("afptP"),
+  du: readOptions("0aAbcDhHklLmPsSx", "BdtX",
+    `null all apparent-size block-size bytes total dereference-args max-depth files0-from human-readable inodes si
+     count-links dereference no-dereference separate-dirs summarize threshold time time-style exclude-from exclude
+     one-file-system`),
+  // For df --output chooses the columns; it names no file.
+  df: readOptions("ahHiklPTv", "Btx", "all block-size human-readable si inodes local no-sync output portability sync total type print-type exclude-type"),
+  // Not listed: -o (a file to write) and -R (one written in each folder).
+  tree: readOptions("adlfxqNQpugshDFvtcUrASnCXJi", "LPIHT",
+    `dirsfirst filesfirst noreport charset filelimit timefmt prune matchdirs ignore-case inodes device si du sort
+     gitignore gitfile info infofile metafirst nolinks`),
+  // Not listed: -o / --output (a file to write) and --compress-program
+  // (a program run on sort's temporary files).
+  sort: readOptions("bdfghiMnRrVsucCmz", "ktTS",
+    `ignore-leading-blanks dictionary-order ignore-case general-numeric-sort human-numeric-sort ignore-nonprinting
+     month-sort numeric-sort random-sort reverse version-sort sort stable unique check merge zero-terminated key
+     field-separator temporary-directory buffer-size parallel batch-size debug files0-from random-source`,
+    { operand: (word) => !/^\/[^\\/]+$/.test(word) || SORT_READ_SWITCH.test(word) }),
+};
+READ_ONLY_OPTIONS.dir = READ_ONLY_OPTIONS.ls;
+
+// cmd's built-ins take switches, and a word that starts with "-" is an
+// operand to them. Each built-in's switches that only read.
+const CMD_READ_SWITCHES = {
+  dir: /^\/-?(?:[bcdlnpqrswx4]|[aot]:?[\w-]*)$/i,
+  type: null,
+  cd: /^\/d$/i,
+  chdir: /^\/d$/i,
+  pushd: null,
+  popd: null,
+  more: /^\/(?:[ecps]|t\d+)$/i,
+};
+
+// The parameters of the PowerShell cmdlets on the list, and of the
+// cmdlets its bare aliases stand for (in PowerShell `sort` is
+// Sort-Object and `cat` is Get-Content; with a path or ".exe" the word
+// is a program). -OutVariable and the other parameters that set a
+// variable are not listed.
+const PS_READ_COMMON = ["verbose", "debug", "erroraction", "warningaction", "informationaction", "progressaction", "outbuffer"];
+const PS_WHERE_OPERATORS = ["eq", "ne", "gt", "ge", "lt", "le", "like", "notlike", "match", "notmatch", "contains", "notcontains", "in", "notin"];
+const PS_READ_PARAMS = {
+  "get-content": ["path", "literalpath", "readcount", "totalcount", "tail", "filter", "include", "exclude", "force", "delimiter", "wait", "raw",
+    "encoding", "asbytestream", "stream", "first", "head", "last", "lp", "pspath"],
+  "get-childitem": ["path", "literalpath", "filter", "include", "exclude", "recurse", "depth", "force", "name", "attributes", "followsymlink",
+    "directory", "file", "hidden", "readonly", "system", "s", "ad", "af", "ah", "h", "ar", "as", "lp", "pspath"],
+  "get-item": ["path", "literalpath", "filter", "include", "exclude", "force", "stream", "lp", "pspath"],
+  "test-path": ["path", "literalpath", "pathtype", "isvalid", "filter", "include", "exclude", "olderthan", "newerthan", "lp", "pspath"],
+  "select-string": ["pattern", "path", "literalpath", "inputobject", "simplematch", "casesensitive", "quiet", "list", "noemphasis", "include",
+    "exclude", "notmatch", "allmatches", "encoding", "context", "raw", "culture", "lp", "pspath"],
+  "get-filehash": ["path", "literalpath", "algorithm", "inputstream", "lp", "pspath"],
+  "set-location": ["path", "literalpath", "passthru", "stackname", "lp", "pspath"],
+  "push-location": ["path", "literalpath", "passthru", "stackname", "lp", "pspath"],
+  "pop-location": ["passthru", "stackname"],
+  "get-location": ["psprovider", "psdrive", "stack", "stackname"],
+  "resolve-path": ["path", "literalpath", "relative", "relativebasepath", "lp", "pspath"],
+  "write-output": ["inputobject", "noenumerate"],
+  "write-host": ["object", "nonewline", "separator", "foregroundcolor", "backgroundcolor"],
+  "select-object": ["property", "excludeproperty", "expandproperty", "first", "last", "skip", "skiplast", "unique", "index", "wait", "inputobject", "casesensitive"],
+  "where-object": ["property", "value", "inputobject", "is", "isnot", "not", ...PS_WHERE_OPERATORS, ...PS_WHERE_OPERATORS.flatMap((o) => [`c${o}`, `i${o}`])],
+  "measure-object": ["property", "line", "word", "character", "sum", "average", "maximum", "minimum", "allstats", "standarddeviation", "ignorewhitespace", "inputobject"],
+  "format-list": ["property", "groupby", "view", "expand", "force", "showerror", "displayerror", "inputobject"],
+  "format-table": ["property", "groupby", "view", "expand", "force", "showerror", "displayerror", "inputobject", "autosize", "hidetableheaders", "wrap", "repeatheader"],
+  "convertfrom-json": ["inputobject", "ashashtable", "depth", "noenumerate"],
+  "out-string": ["stream", "width", "nonewline", "inputobject"],
+  "sort-object": ["property", "descending", "unique", "casesensitive", "culture", "top", "bottom", "stable", "inputobject"],
+  "compare-object": ["referenceobject", "differenceobject", "syncwindow", "property", "excludedifferent", "includeequal", "passthru", "culture", "casesensitive"],
+};
+const PS_READ_ALIASES = {
+  gc: "get-content", cat: "get-content", type: "get-content", gci: "get-childitem", ls: "get-childitem", dir: "get-childitem",
+  gi: "get-item", sls: "select-string", sl: "set-location", cd: "set-location", chdir: "set-location", pushd: "push-location",
+  popd: "pop-location", pwd: "get-location", rvpa: "resolve-path", echo: "write-output", sort: "sort-object", diff: "compare-object",
+};
+
+// git's options before the subcommand that neither move it nor run a
+// program, and the options of its read-only subcommands that only read.
+// Not listed: --output, --ext-diff, --textconv, --filters,
+// --open-files-in-pager and -O, --paginate, -c and --config-env,
+// --exec-path. git takes a long option cut short, so one that is not
+// spelled in full is not known either.
+const GIT_READ_GLOBALS = new Set(["--no-pager", "-P", "--no-optional-locks", "--literal-pathspecs", "--no-replace-objects"]);
+const GIT_READ_OPTIONS = readOptions("abcdEFhHiIklLmnopPqrstuvwWxzACBMDefR0123456789", "USGX",
+  `stat numstat shortstat dirstat summary patch no-patch patch-with-stat patch-with-raw raw name-only name-status check
+   color no-color color-words word-diff word-diff-regex color-moved no-color-moved color-moved-ws unified minimal
+   patience histogram diff-algorithm anchored full-index binary abbrev no-abbrev abbrev-commit no-abbrev-commit
+   find-renames find-copies find-copies-harder break-rewrites irreversible-delete diff-filter pickaxe-all pickaxe-regex
+   relative no-relative text ignore-cr-at-eol ignore-space-at-eol ignore-space-change ignore-all-space
+   ignore-blank-lines ignore-matching-lines inter-hunk-context function-context exit-code quiet no-ext-diff no-textconv
+   ignore-submodules submodule src-prefix dst-prefix no-prefix default-prefix line-prefix cached staged merge-base
+   no-index no-renames stat-width stat-count compact-summary cc combined-all-paths indent-heuristic
+   no-indent-heuristic ws-error-highlight follow oneline pretty format graph decorate no-decorate decorate-refs
+   decorate-refs-exclude all branches tags remotes max-count skip since after until before author committer grep
+   all-match invert-grep regexp-ignore-case basic-regexp extended-regexp fixed-strings perl-regexp merges no-merges
+   first-parent min-parents max-parents reverse date date-order topo-order author-date-order source show-signature
+   no-walk ancestry-path left-right cherry cherry-pick cherry-mark boundary simplify-by-decoration full-history sparse
+   reflog walk-reflogs not glob exclude notes no-notes encoding expand-tabs no-expand-tabs children parents log-size
+   mailmap no-mailmap use-mailmap short branch show-stash porcelain long verbose untracked-files ignored column
+   no-column ahead-behind no-ahead-behind renames null root show-stats line-porcelain incremental contents progress
+   no-progress show-name show-number show-email ignore-rev ignore-revs-file color-lines color-by-age deleted modified
+   others stage directory no-empty-directory unmerged killed exclude-from exclude-per-directory exclude-standard
+   no-exclude-standard error-unmatch with-tree full-name recurse-submodules debug eol deduplicate verify abbrev-ref
+   symbolic symbolic-full-name show-toplevel show-prefix show-cdup git-dir absolute-git-dir git-common-dir
+   is-inside-work-tree is-inside-git-dir is-bare-repository show-superproject-working-tree default sq path-format
+   git-path show-object-format is-shallow-repository revs-only no-revs flags no-flags batch batch-check
+   batch-all-objects path follow-symlinks buffer unordered allow-unknown-type untracked ignore-case max-depth recursive
+   no-recursive word-regexp invert-match line-number files-with-matches files-without-match only-matching count break
+   heading show-function context after-context before-context threads and or`);
+
+// find's tests, options and actions that only list. The ones in
+// FIND_VALUED take the next word as their value. Not listed: -delete,
+// -ok, -okdir, -fprint, -fprint0, -fprintf, -fls; -exec is read apart.
+const FIND_VALUED = new Set(["-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename", "-regex", "-iregex", "-regextype", "-type",
+  "-xtype", "-maxdepth", "-mindepth", "-newer", "-anewer", "-cnewer", "-mtime", "-atime", "-ctime", "-mmin", "-amin", "-cmin", "-size",
+  "-user", "-group", "-uid", "-gid", "-perm", "-links", "-inum", "-samefile", "-lname", "-ilname", "-printf", "-used", "-fstype", "-files0-from"]);
+const FIND_FLAGS = new Set(["-depth", "-mount", "-xdev", "-empty", "-nouser", "-nogroup", "-readable", "-writable", "-executable", "-true",
+  "-false", "-daystart", "-follow", "-noleaf", "-ignore_readdir_race", "-noignore_readdir_race", "-print", "-print0", "-ls", "-prune",
+  "-quit", "-not", "-a", "-and", "-o", "-or", "-H", "-L", "-P"]);
+
+/** Whether every option in `args` is one `spec` lists (READ_ONLY_OPTIONS). */
+function knownReadOptions(spec, args) {
+  if (spec === null) return true;
+  let operands = false;
+  for (const a of args) {
+    if (operands || a === "-" || !/^[-+]/.test(a)) {
+      if (spec.operand && !spec.operand(a)) return false;
+    } else if (a === "--") operands = true;
+    else if (a.startsWith("+")) {
+      if (spec.plus && !spec.plus.test(a)) return false;
+    } else if (a.startsWith("--")) {
+      const name = a.slice(2).split("=")[0];
+      if (!spec.long.has(name) && name !== "help" && name !== "version") return false;
+    } else if (!(spec.digits && /^-\d+$/.test(a))) {
+      for (const letter of a.slice(1)) {
+        if (spec.valued.has(letter)) break;
+        if (!spec.flags.has(letter)) return false;
+      }
+    }
+  }
+  return true;
+}
+
+/**
+ * Whether every parameter in `args` binds to one of `params` or to a
+ * common parameter that sets nothing. PowerShell binds an exact name or
+ * alias first, then a prefix; a prefix that could also be a common
+ * parameter not listed (-o: OutBuffer or OutVariable) is not known.
+ */
+function knownReadParams(params, args) {
+  for (const a of args) {
+    if (!a.startsWith("-") || a === "-" || /^-\d/.test(a)) continue;
+    const typed = /^-([A-Za-z]\w*)(?::.*)?$/.exec(a)?.[1].toLowerCase();
+    if (!typed) return false;
+    const common = PS_COMMON_ALIASES[typed];
+    if (common) {
+      if (!PS_READ_COMMON.includes(common)) return false;
+    } else if (!params.includes(typed)) {
+      const known = [...params, ...PS_READ_COMMON].some((n) => n.startsWith(typed));
+      const other = PS_COMMON.some((n) => !PS_READ_COMMON.includes(n) && n.startsWith(typed));
+      if (!known || other) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Whether a program on READ_ONLY_COMMANDS only reads with the words it is
+ * given (re-probe 7, H1).
+ *
+ * @param {string} name - commandName() of the program word
+ * @param {string[]} w - the stage's words, the program first
+ */
+function readsWithOptions(name, w, dialect) {
+  const args = w.slice(1);
+  if (dialect === "powershell") {
+    // A script block is code the cmdlet runs (Where-Object { ... }, a
+    // calculated property), and its words are not read here.
+    if (w.some((x) => /[{}]/.test(x))) return false;
+    const bare = w[0].toLowerCase() === name;
+    const cmdlet = PS_READ_PARAMS[name] ? name : (bare ? PS_READ_ALIASES[name] : undefined);
+    if (cmdlet) return knownReadParams(PS_READ_PARAMS[cmdlet], args);
+  }
+  if (dialect === "cmd" && Object.hasOwn(CMD_READ_SWITCHES, name)) {
+    const switches = CMD_READ_SWITCHES[name];
+    return args.every((a) => !/^\/[^\\/]+$/.test(a) || (switches !== null && switches.test(a)));
+  }
+  return Object.hasOwn(READ_ONLY_OPTIONS, name) && knownReadOptions(READ_ONLY_OPTIONS[name], args);
+}
+
+/** Whether a git command is a read-only subcommand with options that only read. */
+function gitOnlyReads(args) {
+  const at = args.findIndex((x) => !x.startsWith("-"));
+  if (at < 0 || !READ_ONLY_GIT.has(args[at])) return false;
+  return args.slice(0, at).every((x) => GIT_READ_GLOBALS.has(x)) && knownReadOptions(GIT_READ_OPTIONS, args.slice(at + 1));
+}
 // PowerShell's comparison, pattern, type, logical and string operators,
 // and a property or index of a value (.Count, .Directory.Name, [0]).
 const PS_OPERATOR = /^-(?:[ci]?(?:eq|ne|gt|ge|lt|le|like|notlike|match|notmatch|contains|notcontains|in|notin|replace|split)|is|isnot|as|and|or|xor|not|band|bor|bxor|join|f)$/i;
 const PS_PROPERTY = /^(?:\.[A-Za-z_]\w*|\[-?\d+\])+$/;
 
 /**
- * Whether a find command only lists: no -delete, -ok or file-writing
- * action (-fprint, -fprintf, -fls), and each -exec runs a read-only command.
+ * Whether a find command only lists: every test, option and action is
+ * one known to only read (FIND_VALUED, FIND_FLAGS), and each -exec runs a
+ * read-only command. -delete, -ok and the file-writing actions (-fprint,
+ * -fprintf, -fls) are not known, and neither is a word find would take
+ * for an action this list has not heard of (re-probe 7, H1).
  */
 function findOnlyReads(args, dialect, depth) {
   for (let k = 0; k < args.length; k++) {
@@ -2269,7 +2555,8 @@ function findOnlyReads(args, dialect, depth) {
       const run = args.slice(k + 1, end < 0 ? args.length : end).map((x) => (x === "{}" ? "x" : x));
       if (run.length === 0 || !onlyReads(run.join(" "), dialect, depth + 1)) return false;
       k = end < 0 ? args.length : end;
-    } else if (/^-(?:delete|ok|okdir|fprint|fprint0|fprintf|fls)$/.test(a)) return false;
+    } else if (FIND_VALUED.has(a) || /^-newer[aBcm][aBcmt]$/.test(a)) k++;
+    else if (a.startsWith("-") && a !== "-" && !FIND_FLAGS.has(a) && !/^-O\d$/.test(a)) return false;
   }
   return true;
 }
@@ -2308,14 +2595,7 @@ function onlyReads(command, dialect, depth = 0, plainSink = null) {
     // only read (re-probe 4, E2).
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w[0])) return false;
     const name = commandName(w[0]);
-    if (name === "git") {
-      const sub = w.slice(1).find((x) => !x.startsWith("-"));
-      // Options that write a file or run a program: a diff driver, a
-      // textconv filter, a pager for matches, another git exec path.
-      return READ_ONLY_GIT.has(sub) &&
-        !w.some((x) => /^--(?:output|ext-diff|textconv|open-files-in-pager|exec-path|config-env)(?:=|$)/i.test(x) || /^-O/.test(x));
-    }
-    if (name === "rg" && w.some((x) => /^--pre(?:=|$)/.test(x))) return false;
+    if (name === "git") return gitOnlyReads(w.slice(1));
     // A nested shell reads when the script it runs does.
     if (SHELLS.has(name)) return w[1] === "-c" && w.length === 3 && onlyReads(w[2], "bash", depth + 1);
     if (name === "cmd") {
@@ -2327,16 +2607,17 @@ function onlyReads(command, dialect, depth = 0, plainSink = null) {
       return script !== null && !script.encoded && onlyReads(script.text, "powershell", depth + 1);
     }
     if (name === "find") return findOnlyReads(w.slice(1), dialect, depth);
-    // tree lists, unless -o names a file to write or -R writes one in
-    // each folder; sort prints, unless -o or --output names a file.
-    if (name === "tree") return !w.slice(1).some((x) => /^-[A-Za-z]*[oR]/.test(x));
-    if (name === "sort") return !w.slice(1).some((x) => /^-[A-Za-z]*o/.test(x) || x.startsWith("--output"));
     // tee passes its input on and writes it to its files: a read with a
-    // redirect, when each file is one a redirect may write (re-probe 6, G6).
+    // redirect, when each file is one a redirect may write (re-probe 6,
+    // G6) and its options are the ones that say how (H1).
     if (name === "tee") {
-      return w.slice(1).filter((x) => !x.startsWith("-")).every((file) => NULL_SINK.test(file) || (plainSink !== null && plainSink(file)));
+      const options = w.slice(1).filter((x) => x.startsWith("-") && x !== "-");
+      return options.every((x) => /^-[aip]+$/.test(x) || /^--(?:append|ignore-interrupts|output-error(?:=.*)?)$/.test(x)) &&
+        w.slice(1).filter((x) => !x.startsWith("-")).every((file) => NULL_SINK.test(file) || (plainSink !== null && plainSink(file)));
     }
-    return READ_ONLY_COMMANDS.has(name);
+    // Any other program reads when it is on the list and every option it
+    // is given is one known to only read (re-probe 7, H1).
+    return READ_ONLY_COMMANDS.has(name) && readsWithOptions(name, w, dialect);
   };
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i];
@@ -2876,15 +3157,18 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     for (const p of operands) add(dir, p);
   } else if (name === "sort") {
     // "sort -o FILE" (also -oFILE, --output=FILE) writes what it sorts to
-    // FILE instead of stdout (BUG-066).
+    // FILE instead of stdout (BUG-066). getopt takes --output cut short
+    // (--o=FILE, --out FILE), and Windows sort names the file with /O or
+    // /OUTPUT (re-probe 7, H1).
     let target = null;
     const inputs = [];
     for (let k = 0; k < args.length; k++) {
       const a = args[k];
-      const long = /^--output(?:=(.*))?$/.exec(a);
+      const long = /^--o[a-z]*(?:=(.*))?$/.exec(a);
       const short = /^-[a-zA-Z]*o(.*)$/.exec(a); // getopt: the rest of the cluster, else the next word
       if (long) target = long[1] ?? args[++k] ?? null;
       else if (short) target = short[1] || args[++k] || null;
+      else if (/^\/o[a-z]*$/i.test(a)) target = args[++k] ?? null;
       else if (!a.startsWith("-")) inputs.push(a);
     }
     if (target) add(dir, target, [...stdin, ...inputs.map((p) => abs(dir, p))]);
