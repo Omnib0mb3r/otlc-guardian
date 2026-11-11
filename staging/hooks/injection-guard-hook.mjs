@@ -2325,6 +2325,26 @@ function settingsCommands(settings, root, into) {
   return into;
 }
 
+/**
+ * What settings switch on for MCP (re-probe 4, E3). A stdio MCP server is
+ * a command Claude Code starts with the session. For a server in the
+ * project's .mcp.json it asks the user first, unless a settings file
+ * sets enableAllProjectMcpServers or names the server in
+ * enabledMcpjsonServers; a server under mcpServers is defined outright.
+ * @returns {{ all: boolean, enabled: Set<string>, servers: Map<string, string> }}
+ */
+function mcpPosture(...layers) {
+  const posture = { all: false, enabled: new Set(), servers: new Map() };
+  for (const settings of layers) {
+    if (!settings) continue;
+    if (settings.enableAllProjectMcpServers === true) posture.all = true;
+    for (const name of Array.isArray(settings.enabledMcpjsonServers) ? settings.enabledMcpjsonServers : []) posture.enabled.add(String(name));
+    const defined = settings.mcpServers && typeof settings.mcpServers === "object" ? settings.mcpServers : {};
+    for (const [name, server] of Object.entries(defined)) posture.servers.set(`${name}\u0000${canonicalJson(server)}`, name);
+  }
+  return posture;
+}
+
 /** Guardian's standing across settings.json and settings.local.json together. */
 function guardianPosture(projectText, localText, root, tools) {
   const project = parseSettings(projectText);
@@ -2343,6 +2363,7 @@ function guardianPosture(projectText, localText, root, tools) {
   return {
     coverage,
     commands:        settingsCommands(local, root, settingsCommands(project, root, new Map())),
+    mcp:             mcpPosture(project, local),
     disableAllHooks: project?.disableAllHooks === true || local?.disableAllHooks === true,
     // Claude Code passes env to every hook it runs: NODE_OPTIONS can preload
     // a script that exits 0, CLAUDE_PROJECT_DIR moves the root. Guardian
@@ -2423,6 +2444,17 @@ function settingsWeakening(absPath, after) {
   if (now.disableAllHooks && !was.disableAllHooks) reasons.push("disableAllHooks is turned on");
   for (const [key, what] of now.commands) {
     if (!was.commands.has(key)) reasons.push(`${safeEcho(what, 60)} is added or changed: a command Claude Code runs, which Guardian cannot judge (it can delete Guardian's files or rewrite tool input)`);
+  }
+  // MCP servers are commands too (re-probe 4, E3).
+  if (now.mcp.all && !was.mcp.all) {
+    reasons.push("enableAllProjectMcpServers is turned on: every server in .mcp.json then starts without the user being asked, and a server is a command Claude Code runs");
+  }
+  const enabled = [...now.mcp.enabled].filter((name) => !was.mcp.enabled.has(name));
+  if (enabled.length > 0) {
+    reasons.push(`enabledMcpjsonServers gains ${enabled.map((n) => `"${safeEcho(n, 40)}"`).join(", ")}: that server in .mcp.json then starts without the user being asked, and a server is a command Claude Code runs`);
+  }
+  for (const [key, name] of now.mcp.servers) {
+    if (!was.mcp.servers.has(key)) reasons.push(`mcpServers "${safeEcho(name, 40)}" is added or changed: a server is a command Claude Code runs, which Guardian cannot judge`);
   }
   if (now.env !== was.env) reasons.push("the env block changes, and every hook Claude Code runs gets those variables (NODE_OPTIONS can preload code into the hook)");
   for (const key of guarded) {
@@ -2623,6 +2655,20 @@ process.stdin.on("end", () => {
         `${TAG} ${how}, which holds ${safeEchoPath(path.basename(file), 60)}, part of Guardian's own enforcement. ` +
         `A change there can switch Guardian off, and Guardian cannot judge code, so a person confirms it. ` +
         `Approve only if you asked for it.${bypassNote}`);
+    }
+
+    // ── The project's MCP servers (re-probe 4, E3) ────────────────────
+    // .mcp.json at the project root defines servers, and a stdio server
+    // is a command Claude Code starts with the session. Guardian cannot
+    // judge a command, so a person confirms any write to the file.
+    const mcpFile = watchKey(path.join(projectRoot, ".mcp.json"));
+    for (const target of write.kind === "file" ? write.targets.map(resolve) : bashWrites) {
+      if (watchKey(target) !== mcpFile) continue;
+      const how = write.kind === "file" ? `This ${toolName} changes` : "This command writes, moves or removes";
+      record(confirmOrDeny,
+        `${TAG} ${how} ${safeEchoPath(target, 120)}, which defines the project's MCP servers (.mcp.json). ` +
+        `A server is a command Claude Code starts with the session, with the user's rights, and Guardian cannot ` +
+        `judge a command: it can delete Guardian's files. Approve only if you asked for it.${bypassNote}`);
     }
 
     // A shell command that names one of those files, or a folder holding

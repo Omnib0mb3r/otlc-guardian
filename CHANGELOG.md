@@ -227,6 +227,15 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Enabling or defining an MCP server asks (BUG-074, re-probe 4 E3).** A
+  stdio MCP server is a command Claude Code starts with the session. A
+  settings change that turns on `enableAllProjectMcpServers`, adds a name
+  to `enabledMcpjsonServers` or adds a server under `mcpServers` was
+  silent, and so was any write to `.mcp.json`; in the re-probe the server
+  ran at startup and deleted the guard. All of these now ask (deny in
+  bypass mode). Turning the keys off, and an `.mcp.json` that is not at
+  the project root, stay silent.
+
 - **An assignment in front of a read-only command is not read-only
   (BUG-075, re-probe 4 E2).** `LESSOPEN='|rm -f %s' less
   .claude/settings.json` and `GIT_EXTERNAL_DIFF='sh -c "rm -f ..."' git
