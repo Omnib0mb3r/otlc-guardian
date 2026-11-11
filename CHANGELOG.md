@@ -233,6 +233,15 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A PowerShell module or script makes the command not plain
+  (BUG-080, re-probe 8 J7).** `Import-Module .\m.psm1; pytest
+  security` was silent, and a module can define `function pytest`
+  that deletes what it is handed. `Import-Module`, `ipmo`, `using`,
+  `New-Module`, `Add-Type` and a script run as a command (`.\x.ps1`,
+  `& .\x.ps1`) now take every exemption away, as `source` does in
+  bash. Entering a virtual environment with `Activate.ps1` stays
+  plain.
+
 - **A tilde form, `popd`, `shopt` or a HOME setter leaves the location
   uncertain (BUG-080, re-probe 8 J5).** `cd src && cd ~+/.. && rm -rf
   security` was silent: `~+` is the folder the shell is in, and the

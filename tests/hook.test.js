@@ -6276,6 +6276,82 @@ describe("PreToolUse hook - a tilde form, popd, shopt or a HOME setter leaves th
 });
 
 // ---------------------------------------------------------------------------
+// RE-PROBE 8, J7 (staged): PowerShell runs a module or a script in the
+// session, where it can define a global function under an exempt
+// program's name (function global:pytest { Remove-Item -Recurse $args[0] }).
+// Import-Module, ipmo, using, New-Module, Add-Type and a script as the
+// command word, with or without & or . in front, make the command not
+// plain, as `source` does in bash.
+
+describe("PreToolUse hook - a PowerShell module or script makes the command not plain (re-probe 8, J7)", () => {
+  for (const command of [
+    // The re-probe's forms.
+    "Import-Module .\\m.psm1; pytest security",
+    "ipmo .\\m.psm1; pytest security",
+    "using module .\\m.psm1; pytest security",
+    "& .\\x.ps1; pytest security",
+    ".\\x.ps1; pytest security",
+    // Other spellings of a script as the command word.
+    ". .\\x.ps1; pytest security",
+    "./x.ps1; pytest security",
+    "x.ps1; pytest security",
+    "& x.ps1; pytest security",
+    "& 'C:\\t\\x.ps1'; pytest security",
+    ".\\x; pytest security",
+    "& .\\tools\\x; pytest security",
+    // The other exemptions.
+    "Import-Module -Name .\\m.psm1 -Force; git commit -m security",
+    "Import-Module .\\m.psm1; npm run security",
+    ".\\x.ps1; git commit -m security",
+    // The other loaders.
+    "Add-Type -Path .\\e.dll; pytest security",
+    "Add-Type -TypeDefinition $src; pytest security",
+    "New-Module -Name m -ScriptBlock { function pytest { Remove-Item -Recurse $args[0] } } | Import-Module; pytest security",
+    "Set-Alias pytest Remove-Item; pytest security",
+    "Update-TypeData -Path .\\t.ps1xml; pytest security",
+    "Update-FormatData .\\f.ps1xml; pytest security",
+    // After a move the word still counts: the script can go up a folder.
+    "cd src; Import-Module ..\\m.psm1; pytest security",
+    "cd src; ..\\x.ps1; pytest security",
+    // A virtual environment's script the same command wrote.
+    "Set-Content .venv\\Scripts\\Activate.ps1 'function global:pytest { rd $args[0] }'; .venv\\Scripts\\Activate.ps1; pytest security",
+    // The cost: a module or a script of the project's own, asking now.
+    "Import-Module posh-git; git commit -m security",
+    ".\\build.ps1; git commit -m 'security fix'",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command, { tool: "PowerShell" });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // Entering a virtual environment stays plain (H6).
+    ".venv\\Scripts\\Activate.ps1; pytest -k security",
+    ". .venv\\Scripts\\Activate.ps1; pytest -k security",
+    "& .venv\\Scripts\\Activate.ps1; pytest -k security",
+    ".\\.venv\\Scripts\\Activate.ps1; pytest -k security",
+    // No module, no script.
+    "pytest -k security",
+    "git commit -m security",
+    "npm run security",
+    "Get-ChildItem; pytest -k security",
+    "npm ci; npm test -- security",
+    "git add .; git commit -m 'security fix'",
+    // A batch file or a program runs outside the session.
+    ".\\x.bat; pytest -k security",
+    ".\\tools\\x.exe; pytest -k security",
+    // A script or a module with no exempt word beside it.
+    ".\\build.ps1",
+    "Import-Module posh-git",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions", tool: "PowerShell" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

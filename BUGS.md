@@ -1779,6 +1779,26 @@ Tests: `tests/hook.test.js`, "a tilde form, popd, shopt or a HOME setter leaves 
 
 Smoke test after applying: from the root of a scratch project with a `src` folder ask Claude to run `cd src && cd ~+/.. && rm -rf security`; see a Guardian prompt naming security; decline. In bypass mode `pushd src && npx rimraf security && popd` gets no Guardian prompt (it removes `src/security` if there is one).
 
+**J7 (re-probe 8, Y7), Lex's decision of 2026-11-11: a PowerShell module or script makes the command not plain. Fixed in staging, not yet live.** PowerShell runs a module or a script in the session, where it can define a function under any name. Silent at 924e487 through the PowerShell tool: `Import-Module .\m.psm1; pytest security`, `ipmo .\m.psm1; pytest security`, `using module .\m.psm1; pytest security`, `& .\x.ps1; pytest security` and `.\x.ps1; pytest security`. The re-probe ran two of them for real on Windows PowerShell 5.1 (realps\mod, realps\ps1), with the module or script written by an earlier call (`function pytest { Remove-Item -Recurse -Force $args[0] }`), and `security\` was deleted. The bash form, `source ./env.sh && pytest -k security`, asked already.
+
+Cause: `&` and `.` in front of a script are tokens of their own in PowerShell, so the script was an ordinary command word, and `Import-Module`, `ipmo` and `using` were on no list.
+
+Worker findings of the same class, silent at 924e487 and fixed here (hook verdicts only): `./x.ps1`, `x.ps1`, `& x.ps1` and `& 'C:\t\x.ps1'` before `pytest security`; a path with no extension, which PowerShell resolves to a script of that name (`.\x; pytest security`); `Add-Type -Path .\e.dll; pytest security` and `Add-Type -TypeDefinition $src; pytest security`; `Update-TypeData -Path .\t.ps1xml; pytest security` and `Update-FormatData .\f.ps1xml; pytest security`, whose files hold script blocks; the same loaders before `git commit -m security` and `npm run security`; and after a move (`cd src; Import-Module ..\m.psm1; pytest security`).
+
+Change in `staging/hooks/injection-guard-hook.mjs`:
+
+- `NOT_PLAIN_COMMANDS` gains `import-module`, `ipmo`, `using`, `new-module`, `nmo`, `add-type`, `update-typedata` and `update-formatdata`.
+- `plainCommand()`: in PowerShell a command word that ends in `.ps1`, `.psm1` or `.psd1` (`PS_SCRIPT`), or that is a path with no extension and is neither in a package manager's folder nor absolute and outside the project, makes the command not plain. With nothing plain, `bareWordText()` returns every other stage as unplaced, so the word counts wherever the shell is.
+- A virtual environment's `Activate.ps1` run as a command with no argument, with or without `&`, stays plain and sets `redirects`, as `source .venv/bin/activate` does (H6). `entersVenv()` knows that form, so the PUSHBACK ruling's condition holds for it too: `Set-Content .venv\Scripts\Activate.ps1 '...'; .venv\Scripts\Activate.ps1; pytest security` asks.
+
+Not changed: `.\x.bat`, `.\x.cmd` and `.\tools\x.exe` run outside the session and cannot define a function in it, so a command with one stays plain, as `./x.sh; pytest -k security` does in bash.
+
+Cost. Asking now, silent at 924e487, through the PowerShell tool: an exempt stage in a command that also loads a module or runs a script, whatever the module or script is. `Import-Module posh-git; git commit -m security` and `.\build.ps1; git commit -m 'security fix'`.
+
+Tests: `tests/hook.test.js`, "a PowerShell module or script makes the command not plain (re-probe 8, J7)": 26 ask, 14 silent, all through the PowerShell tool. Against the hook at 924e487, 22 failed. Staged hook suite before: 2280 passed, 22 failed. After: 2302 passed, 0 failed. Re-probe 7's 640 commands: 0 verdicts changed. Re-probe 8's 851: 4 changed, all Y7 forms, silent to deny. Everyday commands: 0 changed in the 75 and in the 197. Lex's regress harness: no line changed.
+
+Smoke test after applying: at the root of a scratch project ask Claude to run, with the PowerShell tool, `Import-Module .\m.psm1; pytest security` (any `m.psm1`); see a Guardian prompt naming security; decline. In bypass mode `.venv\Scripts\Activate.ps1; pytest -k security` gets no Guardian prompt.
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

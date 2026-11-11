@@ -1996,8 +1996,13 @@ const SHELL_RUNS_TEXT_COMMANDS = new Set(["trap", "history", "fc"]);
 // the output of every later command to a file (exec > l.txt).
 // `shopt` changes what a later word means: with dotglob a `*` matches
 // .git, with cdable_vars a folder name is a variable (re-probe 8, J5).
+// In PowerShell a module, a type or a type-data file brings code into
+// the session, as `source` does in bash (re-probe 8, J7).
 const NOT_PLAIN_COMMANDS = new Set(["case", "read", "mapfile", "readarray", "getopts", "let", "coproc", "function", "alias", "exec",
-  "hash", "enable", "shopt", "set-alias", "sal", "new-alias", "nal", "doskey", "path"]);
+  "hash", "enable", "shopt", "set-alias", "sal", "new-alias", "nal", "doskey", "path",
+  "import-module", "ipmo", "using", "new-module", "nmo", "add-type", "update-typedata", "update-formatdata"]);
+// What a PowerShell script, module or data file ends in.
+const PS_SCRIPT = /\.(?:ps1|psm1|psd1)$/i;
 // The name of a `for` or `select` loop that is known to be no variable
 // bash or a program reads: lowercase letters and digits. Any other name
 // is judged as an assignment to it (re-probe 8, J2): PATH, HOME, an
@@ -2353,6 +2358,18 @@ function plainCommand(text, tokens, dialect, outside = null) {
         i++;
         continue;
       }
+      // PowerShell runs a script in the session, where it can define a
+      // global function under any program's name (function global:pytest),
+      // with or without & or . in front of it (re-probe 8, J7). A command
+      // word that ends in a script's extension, or is a path with no
+      // extension (.\x runs x.ps1), is such a script, unless the path is
+      // one H6 trusts. Entering a virtual environment stays plain.
+      if (whole && (PS_SCRIPT.test(tok.word) ||
+        (/[\\/]/.test(tok.word) && !/\.\w+$/.test(tok.word) && !PROGRAM_FOLDER.test(tok.word) && !outside?.(tok.word)))) {
+        if (!VENV_ACTIVATE.test(tok.word) || next !== undefined) return null;
+        redirects = true;
+        continue;
+      }
       if (dialect === "bash" && raw === tok.word) {
         const closes = BLOCK_CLOSERS.has(raw);
         if (BLOCK_OPENERS.has(raw) || closes) {
@@ -2621,7 +2638,9 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
   const place = (s) => [s[0].start, s.at(-1).end];
   const holder = (at) => all.find((s) => at >= s[0].start && at < s.at(-1).end);
   const moves = (s) => DIRECTORY_MOVERS.has(commandName(s[0].word));
-  const entersVenv = (s) => s.length === 2 && (s[0].word === "source" || s[0].word === ".") && VENV_ACTIVATE.test(s[1].word);
+  // PowerShell enters one by running the script, with or without & in front.
+  const entersVenv = (s) => (s.length === 2 && (s[0].word === "source" || s[0].word === ".") && VENV_ACTIVATE.test(s[1].word)) ||
+    (dialect === "powershell" && s.length === 1 && VENV_ACTIVATE.test(s[0].word));
   const assigns = (s) => {
     const declared = DECLARERS.has(s[0].word);
     return s.slice(declared ? 1 : 0).every((tok) => ASSIGNMENT.test(tok.word) || (declared && tok.word.startsWith("-")));
