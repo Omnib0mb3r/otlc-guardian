@@ -1231,6 +1231,20 @@ Limits, stated: a digit after `-C` is taken for a count, so `env -C2024 ...` is 
 
 Smoke test after applying: ask Claude to run `claude mcp add -sproject e -- node -e 1` (a Guardian prompt naming .mcp.json; decline). In bypass mode `git commit --allow-empty -m"fix security"` gets no prompt.
 
+**Re-probe 7, cost (a) and Lex's ruling (2026-11-11): `STUCK_PATH_OPTION` narrowed. Fixed in staging, not yet live.** G7 made the folder-above check read a path stuck to any one-letter option, so that `npx cpx 'src/**' -t..` asks. The same pattern read a compiler's include or library folder as a folder the command acts on. Denied in bypass mode at a project root, asked in default mode, none of them a write: `gcc -I.. -c a.c`, `gcc -I../.. -c a.c`, `gcc -L.. -lfoo a.c`, `gcc -I~ -c a.c`, `clang -I.. -c a.c`, `clang++ -I.. -L.. -o app main.cpp`, `cl -I.. a.c`, `nvcc -I.. -c k.cu`, `rustc -L.. main.rs`, `ld -L.. a.o`, `cmake -S.. -Bbuild`.
+
+Lex's ruling: narrow `STUCK_PATH_OPTION` to `-[tod]` for any program.
+
+Change in `staging/hooks/injection-guard-hook.mjs`: `STUCK_PATH_OPTION` matches `-t`, `-o` or `-d` followed by `.`, `..`, a slash or `~`. Its one use is `wordAboveProject()`. The letters are the ones that name where a program writes (target, output, destination), and they are read for every program, since `cpx` and `copyfiles` are not on any list.
+
+Silent again in bypass mode: the eleven forms above, and `protoc -I.. --cpp_out=. a.proto`, `swig -I.. -python a.i`, `nasm -I../ a.asm`, `ghc -i.. Main.hs`. Still asking: `npx cpx 'src/**' -t..`, `npx cpx 'src/**' -o..`, `npx copyfiles -u 1 'src/**' -t..`, `npx some-tool -d..`, `javac -d.. A.java`, `go build -o.. ./...`, `cp -t.. src/a.js`, `unzip -o a.zip -d..`, `pip install -t.. requests`, `7z x a.7z -o..`, and `gcc -I.. -o.. a.c`. The spaced forms are unchanged (`gcc -I .. -c a.c` asks, the F3b accepted cost), and so is a folder the command runs in, which other readers follow (`tar -xf a.tar -C..`, `git -C.. clean -fdx`, `env -C.. npx rimraf .` ask).
+
+Silent now and asking at 738d5b4, for Lex to rule: a write above the project through a stuck option with another letter. `wget -P.. https://example.test/a.tgz` saves the download in the folder above, and `cmake -S. -B..` writes its build tree there. Both ask when spelled with a space (`wget -P ..`, `cmake -S . -B ..`), and both were silent before G7. Adding `P` and `B` to the pattern would close them; the worker found no everyday command that sticks a folder above the project to either letter and does not write there (`gcc -B..` names a folder the compiler reads its own programs from). Also silent again, with no known meaning: `npx tool -T..`, `-O..`, `-D..`, `-x..`, `npx rimraf -g..`.
+
+Tests: `tests/hook.test.js`, "a path stuck to an option that names no write target (re-probe 7, cost (a))": 15 silent in bypass mode, 18 ask. Against the hook at 738d5b4, 15 of the 33 failed. Staged hook suite before: 1645 passed, 15 failed. After: 1660 passed, 0 failed. Lex's regress harness: no line changed. Re-probe 7's lists (640 commands): 13 verdicts changed, all from deny to silent: the eleven forms above, `npx rimraf -g..` and `npx tool -x..`. The 75 everyday commands: 1 changed, `gcc -I.. -c a.c` from deny to silent.
+
+Smoke test after applying: at the root of a scratch project, in bypass mode, ask Claude to run `gcc -I.. -c a.c`: no Guardian prompt (the compile may fail; that is not the test). Then `npx cpx 'src/**' -t..`: a Guardian prompt naming a folder above this project; decline.
+
 ### BUG-075: Shell forms the readers do not parse change Guardian's files silently
 
 **Status:** IN-PROGRESS · **Found:** 2026-11-10

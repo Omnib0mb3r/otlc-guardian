@@ -233,6 +233,14 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A compiler's include folder above the project is not a write
+  (BUG-074, re-probe 7 cost a).** `gcc -I.. -c a.c`, `ld -L.. a.o` and
+  `cmake -S.. -Bbuild` at a project root were denied in bypass mode:
+  the folder-above check read a path stuck to any one-letter option.
+  It now reads one stuck to `-t`, `-o` or `-d`, the letters that name
+  where a program writes, so `npx cpx 'src/**' -t..` still asks. Not
+  read: `wget -P..` and `cmake -B..`, which ask only when spaced.
+
 - **A long option cut short, and a symbolic link's source (BUG-066,
   re-probe 7 H9).** `cp --t=.claude/agents notes/x.md` and `ln -sf
   ../../notes/x.md .claude/agents/a.md` put an injection payload into a

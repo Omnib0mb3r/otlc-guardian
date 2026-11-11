@@ -4242,7 +4242,8 @@ describe("PreToolUse hook - an option value stuck to its option (re-probe 6, G7)
     "curl -o.mcp.json https://example.com/x",
     "curl -so.mcp.json https://example.com/x",
     "wget -O.mcp.json https://example.com/x",
-    // Any short option with a folder above the project stuck to it.
+    // A write-target option (-t, -o, -d) with a folder above the project
+    // stuck to it.
     "npx cpx 'src/**' -t..",
   ]) {
     stagedOnly(`asks: ${command}`, () => {
@@ -5264,6 +5265,68 @@ describe("PreToolUse hook - a long option cut short, and a symbolic link's sourc
   ]) {
     stagedOnly(`silent: ${command}`, () => {
       expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// RE-PROBE 7, COST (a) (staged): the folder-above check read a path stuck
+// to any one-letter option, so a compiler's include or library folder
+// (gcc -I.. at a project root) was denied in bypass mode. Only the
+// letters that name where a program writes (-t, -o, -d) are read now.
+
+describe("PreToolUse hook - a path stuck to an option that names no write target (re-probe 7, cost (a))", () => {
+  for (const command of [
+    // The re-probe's forms: include and library folders, a source folder.
+    "gcc -I.. -c a.c",
+    "gcc -I../.. -c a.c",
+    "gcc -L.. -lfoo a.c",
+    "gcc -I~ -c a.c",
+    "clang -I.. -c a.c",
+    "clang++ -I.. -L.. -o app main.cpp",
+    "cl -I.. a.c",
+    "nvcc -I.. -c k.cu",
+    "rustc -L.. main.rs",
+    "ld -L.. a.o",
+    "cmake -S.. -Bbuild",
+    // The same letters on other programs.
+    "protoc -I.. --cpp_out=. a.proto",
+    "swig -I.. -python a.i",
+    "nasm -I../ a.asm",
+    "ghc -i.. Main.hs",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+
+  for (const command of [
+    // A write target stuck to -t, -o or -d, on a program the hook knows
+    // and on one it does not.
+    "npx cpx 'src/**' -t..",
+    "npx cpx 'src/**' -o..",
+    "npx copyfiles -u 1 'src/**' -t..",
+    "npx some-tool -d..",
+    "npx some-tool -d../",
+    "npx rimraf -t~",
+    "javac -d.. A.java",
+    "go build -o.. ./...",
+    "cp -t.. src/a.js",
+    "mv -t../.. src/a.js",
+    "unzip -o a.zip -d..",
+    "pip install -t.. requests",
+    "7z x a.7z -o..",
+    // Beside an include folder the write target still counts.
+    "gcc -I.. -o.. a.c",
+    // Held: the spaced forms, and a folder the command runs in.
+    "gcc -I .. -c a.c",
+    "tar -xf a.tar -C..",
+    "git -C.. clean -fdx",
+    "env -C.. npx rimraf .",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
     });
   }
 });

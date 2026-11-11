@@ -2325,9 +2325,12 @@ function guardedNameIn(texts, dialect, cwd, root, watches = () => false) {
 // often than the root of the disk; and a single letter after a slash
 // (/c, /s), which is a switch.
 const NOT_A_FOLDER = /[$`*?[\]{}=]|^\/+$|^[\\/][A-Za-z]$/;
-// A short option with a path stuck to it: one letter, then ".", "..", a
-// slash or "~".
-const STUCK_PATH_OPTION = /^-[A-Za-z](?=\.{1,2}(?:[\\/]|$)|[\\/~])/;
+// A short option that names where a program writes, with a path stuck to
+// it: -t (target), -o (output) or -d (destination), then ".", "..", a
+// slash or "~". Any other letter is left on its word, so an include or
+// library folder (gcc -I.., ld -L.., cmake -S..) is not read as a folder
+// the command acts on (re-probe 7, cost (a)).
+const STUCK_PATH_OPTION = /^-[tod](?=\.{1,2}(?:[\\/]|$)|[\\/~])/;
 
 /** The dialect of the script that follows `option` in a stage run by `shell` (bash -c, cmd /c, pwsh -Command), or null. */
 function scriptDialect(shell, option) {
