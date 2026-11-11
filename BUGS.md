@@ -1715,6 +1715,27 @@ Tests: `tests/hook.test.js`, the J1 group gains 13 asks (one with `core.hooksPat
 
 Smoke test after applying: at the root of a scratch git project with a `src` folder ask Claude to run `cp g.sh ~/bin/git; cd src && git commit --allow-empty -m security` (any `g.sh`); see a Guardian prompt naming security; decline. In bypass mode `cd src && git commit --allow-empty -m security` gets no Guardian prompt.
 
+**J3 (re-probe 8, Y3), Lex's decision of 2026-11-11: a starter's option can choose the program. Fixed in staging, not yet live.** `npx --package=./e jest security` installs the folder `e` and runs the `jest` that folder ships, with the word as its argument. The re-probe ran it for real (real\npxpkg) and `security/` was deleted. Silent at 4e20d7f: that form, `npx -y --package=./e jest security`, `npx --package=./e -- jest security`, `npm exec --package=./e -- jest security`, `npm exec --package=./e jest security`, `pnpm exec --package=./e jest security`, `npx -y --package=github:x/y jest security`, and the one-command form that writes `e/package.json` with the bin name spelled `jest`. The spaced forms (`npx --package ./e jest security`, `npx -p rimraf jest security`) asked only because the value was taken for the program.
+
+Cause: `isTestRun()` and `scriptNameSpans()` dropped every word that starts with `-` and read the runner or the script from what was left.
+
+Worker findings of the same class, silent at 4e20d7f and fixed here (hook verdicts only, none run for real): `npx -p=./e jest security`, `npx -p./e jest security`, `npx --call=x`, `--prefix=e`, `--registry=URL`, `--userconfig=./rc`, `--node-options=--require=./e.js` and `--script-shell=./e` in front of `jest security`; `pnpx` and `bunx` with `--package=./e`; `npm --package=./e exec jest security`, `npm --userconfig=./rc exec jest security`, `pnpm --dir=e exec jest security`; `npm --script-shell=./e test security`, `npm --userconfig=./rc test -- security`, `yarn --modules-folder=e test security`, `bun --preload=./e.js test security`; the script-name exemption with the same options (`npm --script-shell=./e run security`, `npm run --script-shell=./e security`, `yarn --use-yarnrc=./rc security`, `bun run --preload=./e.js security`); the run wrappers (`uv run --with=./e pytest security`, `uv run --with ./e python -m pytest security`, `uv run --project=e`, `--env-file=.e`, `uvx --from=./e pytest security`, `uvx --index-url=URL`, `pipx run --spec=./e pytest security`, `poetry run --directory=e`, `pdm run --project=e`, `hatch run --env=e`); and a wrapper's program spelled as a path (`uv run ./pytest security`, `uvx ./pytest security`).
+
+Change in `staging/hooks/injection-guard-hook.mjs`:
+
+- `afterKnownOptions(words, known)` gives the first word that is no option only when every option in front of it is on a list. Three lists: `RUNNER_OPTIONS` for npx, pnpx, bunx and `npm exec`, `pnpm exec` (`-y`, `--yes`, `--no-install`, `--no`, `-q`, `--quiet`, `--`); `MANAGER_OPTIONS` for npm, pnpm, yarn and bun in front of the subcommand and of the script name (`-s`, `--silent`, `--if-present`, `-ws`, `--workspaces`, `-r`, `--recursive`); `WRAPPER_OPTIONS` for uv run, uvx, poetry run, pipx run, pdm run and hatch run (`-q`, `--quiet`, `-v`, `--verbose`, `--frozen`, `--locked`, `--no-sync`, `--offline`, `--`).
+- `isTestRun()` uses it for every starter. Under a run wrapper the program may not be spelled as a path, `manage.py` excepted, as `trusted()` already has it for a stage's own program.
+- `scriptNameSpans()` uses `MANAGER_OPTIONS` in front of `run` and in front of the script name.
+- `wrapperWords()` is split out of `runWrapped()`, which the command readers still use unchanged.
+
+`x`, `dlx` and `yarn dlx` earned no exemption before and earn none now. The options a runner is given after its name are J4.
+
+Cost. Asking now, silent at 4e20d7f: a test run or a package script started with an option that is not on its list, whatever the option does. `npm --prefix=web run security`, `npm --loglevel=error test -- security`, `uv run --no-project pytest -k security`, `poetry run -vvv pytest security`, `npx --prefer-offline jest security`. Two verdicts went the other way: `yarn --cwd src security` and `pnpm -C src security` were denied in bypass mode and are silent. Before, the option's value `src` was taken for the script name and blanked, so the move was lost and the word counted at the root. Now the manager is followed into `src` (H2: a program that runs in the folder it is given) and the word is `src/security`, as it is for `cd src && yarn security`.
+
+Tests: `tests/hook.test.js`, "a starter's option can choose the program (re-probe 8, J3)": 69 ask, 44 silent. Against the hook at 4e20d7f, 59 failed. Staged hook suite before: 2007 passed, 59 failed. After: 2066 passed, 0 failed. Re-probe 7's 640 commands: 0 verdicts changed. Re-probe 8's 851: 9 changed, all Y3 forms, silent to deny. Everyday commands: 0 changed in the 75 and in the 197. Lex's regress harness: no line changed.
+
+Smoke test after applying: at the root of a scratch project ask Claude to run `npx --package=./e jest security`; see a Guardian prompt naming security; decline. In bypass mode `npx -y jest security` gets no Guardian prompt (jest itself may fail).
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

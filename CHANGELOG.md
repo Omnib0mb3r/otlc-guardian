@@ -233,6 +233,15 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A starter's option can choose the program (BUG-080, re-probe 8
+  J3).** `npx --package=./e jest security` installs the folder `e` and
+  runs its `jest` on the word, and the hook read a test run from the
+  name alone. npx, `npm exec`, `npm test`, `npm run NAME`, `uv run`,
+  `uvx` and their like now earn the test-run and script-name
+  exemptions only with the few options known to leave the program
+  alone (`-y`, `--no-install`, `-q`, `--silent`), and only when the
+  program is not spelled as a path.
+
 - **A replaced program is handed the word wherever the shell is
   (BUG-080, re-probe 8 J1).** After `cd src &&` or `git -C src` the
   bare word is `src/security`, which is not Guardian's, and that held

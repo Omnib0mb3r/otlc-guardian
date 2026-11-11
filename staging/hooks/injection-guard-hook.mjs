@@ -829,6 +829,12 @@ function writesProjectMcp(name, args) {
   return own.some((a, k) => /^(?:-s=?|--scope=)project$/i.test(a) || (/^(?:-s|--scope)$/.test(a) && own[k + 1]?.toLowerCase() === "project"));
 }
 
+/** The words after a run wrapper (`uv run`, `uvx`): its options and the command it starts; null when the words are not a wrapper's. */
+function wrapperWords(words) {
+  const name = commandName(words[0] ?? "");
+  return name === "uvx" ? words.slice(1) : RUN_WRAPPERS.has(name) && words[1] === "run" ? words.slice(2) : null;
+}
+
 /**
  * The command a run wrapper starts, as its words, or null when the words
  * are not a wrapper's. The wrapper's own options may take a value
@@ -837,8 +843,7 @@ function writesProjectMcp(name, args) {
  * an option.
  */
 function runWrapped(words) {
-  const name = commandName(words[0] ?? "");
-  const rest = name === "uvx" ? words.slice(1) : RUN_WRAPPERS.has(name) && words[1] === "run" ? words.slice(2) : null;
+  const rest = wrapperWords(words);
   if (rest === null) return null;
   const known = rest.findIndex((w) => INTERPRETERS.has(commandName(w)) || SHELLS.has(commandName(w)));
   const first = known >= 0 ? known : rest.findIndex((w) => !w.startsWith("-"));
@@ -1644,19 +1649,50 @@ const PACKAGE_RUNNERS   = new Set(["npx", "pnpx", "bunx"]);
 const TEST_SCRIPT       = /^(?:t|test)$/;
 const DIRECTORY_MOVERS  = new Set(["cd", "chdir", "pushd", "set-location", "sl", "push-location"]);
 const PIPE_OPERATORS    = new Set(["|", "|&"]);
+// The options that can stand in front of the program a starter runs and
+// leave it the program its name says (re-probe 8, J3). Any other option
+// can choose where the program comes from or what runs it (npx
+// --package=./e, npm --script-shell=./e, uv run --with=./e, uvx
+// --from=./e), and no list of those is complete.
+// For npx, pnpx, bunx and `npm exec`, `pnpm exec`:
+const RUNNER_OPTIONS    = new Set(["-y", "--yes", "--no-install", "--no", "-q", "--quiet", "--"]);
+// For npm, pnpm, yarn and bun, in front of the subcommand and of the script name:
+const MANAGER_OPTIONS   = new Set(["-s", "--silent", "--if-present", "-ws", "--workspaces", "-r", "--recursive"]);
+// For uv run, uvx, poetry run, pipx run, pdm run and hatch run:
+const WRAPPER_OPTIONS   = new Set(["-q", "--quiet", "-v", "--verbose", "--frozen", "--locked", "--no-sync", "--offline", "--"]);
+
+/**
+ * The index of the first word that is no option, when every option in
+ * front of it is on `known`; -1 when one is not, or when no word follows
+ * the options.
+ * @param {string[]} words
+ * @param {Set<string>} known
+ */
+function afterKnownOptions(words, known) {
+  const at = words.findIndex((word) => !word.startsWith("-"));
+  return at >= 0 && words.slice(0, at).every((word) => known.has(word)) ? at : -1;
+}
 
 /**
  * Whether a stage's words run a test runner: pytest, jest, vitest and
  * mocha (directly, through npx, bunx, yarn or pnpm exec, or under a run
- * wrapper such as uv run and poetry run: runWrapped()), python -m
+ * wrapper such as uv run and poetry run: wrapperWords()), python -m
  * pytest or unittest, manage.py test, the test script of npm, pnpm, yarn
  * and bun, go test and cargo test. A value set in front of the command
  * can be what it runs (re-probe 4, E2), and go test -exec names a program
- * to run, so neither is a test run here.
+ * to run, so neither is a test run here. A starter runs the program its
+ * words name only with the options known to leave that alone
+ * (afterKnownOptions()), and only when the name is not spelled as a path
+ * (re-probe 8, J3).
  */
 function isTestRun(words) {
-  const started = runWrapped(words);
-  if (started) return isTestRun(started);
+  const wrapped = wrapperWords(words);
+  if (wrapped) {
+    const at = afterKnownOptions(wrapped, WRAPPER_OPTIONS);
+    if (at < 0) return false;
+    const program = wrapped[at];
+    return (!/[\\/]/.test(program) || commandName(program) === "manage.py") && isTestRun(wrapped.slice(at));
+  }
   const name = commandName(words[0] ?? "");
   const args = words.slice(1);
   const plain = args.filter((a) => !a.startsWith("-"));
@@ -1666,10 +1702,14 @@ function isTestRun(words) {
     if (/^-m/.test(args[0] ?? "")) return PYTHON_TEST_MODULES.has(args[0].slice(2) || args[1]);
     return commandName(plain[0] ?? "") === "manage.py" && plain[1] === "test";
   }
-  if (PACKAGE_RUNNERS.has(name)) return TEST_RUNNERS.has(plain[0]);
+  if (PACKAGE_RUNNERS.has(name)) return TEST_RUNNERS.has(args[afterKnownOptions(args, RUNNER_OPTIONS)]);
   if (PACKAGE_MANAGERS.has(name)) {
-    if (TEST_SCRIPT.test(plain[0]) || TEST_RUNNERS.has(plain[0])) return true;
-    return (plain[0] === "run" && plain[1] === "test") || (plain[0] === "exec" && TEST_RUNNERS.has(plain[1]));
+    const at = afterKnownOptions(args, MANAGER_OPTIONS);
+    if (at < 0) return false;
+    const rest = args.slice(at + 1);
+    if (TEST_SCRIPT.test(args[at]) || TEST_RUNNERS.has(args[at])) return true;
+    if (args[at] === "run") return rest[afterKnownOptions(rest, MANAGER_OPTIONS)] === "test";
+    return args[at] === "exec" && TEST_RUNNERS.has(rest[afterKnownOptions(rest, RUNNER_OPTIONS)]);
   }
   if (name === "go") return args[0] === "test" && !args.some((a) => /^--?exec(?:=|$)/.test(a));
   if (name === "cargo") return args[0] === "test";
@@ -1788,19 +1828,27 @@ const MANAGER_COMMANDS = {
  * The place of the script name in `npm run NAME` (also pnpm, yarn and
  * bun, and run-script), and in the shorthand `yarn NAME` and `pnpm NAME`:
  * the name of an entry in package.json, not a path (F1b). Words after it
- * are handed to the script and stay.
+ * are handed to the script and stay. An option in front of the name that
+ * is not on MANAGER_OPTIONS can choose what runs the script (npm
+ * --script-shell=./e run NAME), so the stage then has no such place
+ * (re-probe 8, J3).
  * @param {Array<{word: string, start: number, end: number}>} stage
  * @returns {Array<[number, number]>}
  */
 function scriptNameSpans(stage) {
   const manager = commandName(stage[0].word);
   if (!PACKAGE_MANAGERS.has(manager)) return [];
-  const plain = stage.slice(1).filter((tok) => !tok.word.startsWith("-"));
-  if (/^run(?:-script)?$/.test(plain[0]?.word ?? "")) return plain[1] ? [[plain[1].start, plain[1].end]] : [];
+  const after = (toks) => toks[afterKnownOptions(toks.map((tok) => tok.word), MANAGER_OPTIONS)];
+  const first = after(stage.slice(1));
+  if (!first) return [];
+  if (/^run(?:-script)?$/.test(first.word)) {
+    const name = after(stage.slice(stage.indexOf(first) + 1));
+    return name ? [[name.start, name.end]] : [];
+  }
   // yarn NAME and pnpm NAME run the script NAME when NAME is not a
   // command of the manager itself (re-probe 6, G6).
   const own = MANAGER_COMMANDS[manager];
-  return own && plain[0] && !own.has(plain[0].word) ? [[plain[0].start, plain[0].end]] : [];
+  return own && !own.has(first.word) ? [[first.start, first.end]] : [];
 }
 
 // Commands that make the whole command not plain, wherever they stand
