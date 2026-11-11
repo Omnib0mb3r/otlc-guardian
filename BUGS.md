@@ -1439,6 +1439,18 @@ Limits, stated, for Lex to confirm:
 
 Smoke test after applying: in bypass mode at the root of a scratch git project, `git commit --allow-empty -m security && git push origin $BRANCH` gets no Guardian prompt (the push itself may fail); `git commit --allow-empty -m security | xargs rm -rf` is denied with Guardian's message.
 
+**Re-probe 7, X1 and Lex decision H2 (2026-11-11): a directory option on a program not known to run there. Fixed in staging, not yet live.** A regression in 74b8ea1 (G6). `wordsInPlace()` took `-C` and every directory option (`--prefix`, `--cwd`, `--directory`, `--git-dir`, `--work-tree`) on any program as the folder the rest of the stage runs in, and dropped the folder the stage was in. Silent in both modes at the project root: `npm --prefix src exec rimraf security`, `npm --prefix=src x rimraf security`, `npm -C src exec rimraf security`, `npm exec --prefix src rimraf security`, `npm --prefix src exec -c 'rimraf security'`, `npx --prefix src rimraf security`, `pnpm --prefix src exec rimraf security`, `npm --prefix run exec rimraf security` (held as F1 in re-probe 6) and `sudo -C 3 npx rimraf security`. Real effect in the re-probe (`real\npmprefix2`, `npxprefix`, `npmC`, `npmx`): the scanner and `security/package.json` deleted; `npm exec` runs its command in the shell's folder and uses `--prefix` only to find packages.
+
+Lex's decision: an option that sets where a package manager looks, without changing the shell's folder, does not move the bare-word resolver; where the reader cannot tell, the location is uncertain.
+
+Change in `staging/hooks/injection-guard-hook.mjs`: `RUNS_IN_DIRECTORY` names the programs that run in the folder a directory option gives, each with its options (`git -C`, `make -C` and `--directory`, `ninja -C`, `tar -C`, `env -C` and `--chdir`, `pnpm -C`, `yarn --cwd`, `bun --cwd`, `uv --directory`, `go -C`, `pwsh -WorkingDirectory`). For a stage with no such program (`runsInDirectory()`), `wordsInPlace()` still moves the words after the option and also keeps the folder the stage was in, in `alt` and `unmoved`, so the bare word and the folder-above check count from both. Found on the way, silent before: `cmake -C cache.cmake -E rm -rf security` (cmake's `-C` is a cache file).
+
+Cost, for Lex to confirm: `npm --prefix src run clean -- security` asks now, although `npm run` does run the script in the prefix folder; telling `run` from `exec` would mean reading each package manager's subcommands, and the ruling names `--prefix` whole.
+
+Tests: `tests/hook.test.js`, "a directory option on a program not known to run there (re-probe 7, H2)": 13 ask (12 failed before the fix; `npx --prefix .. rimraf .` asked already), 8 stay silent in bypass mode. Staged hook suite before: 1383 passed, 12 failed. After: 1395 passed, 0 failed. Lex's regress harness: no line changed. Re-probe 7's lists (640 commands): 18 verdicts changed, each from silent to deny/ask and each an `npm`, `npx` or `pnpm` `--prefix` or `-C` form, `sudo -C 3` or `cmake -C`.
+
+Smoke test after applying: at the root of a scratch project with a `src` folder ask Claude to run `npm --prefix src exec rimraf security`; see a Guardian prompt naming security; decline. In bypass mode `git -C src clean -fdx security` gets no Guardian prompt.
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

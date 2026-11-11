@@ -233,6 +233,14 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A directory option moves the bare word only for a program known to
+  run there (BUG-080, re-probe 7 H2).** `npm --prefix src exec rimraf
+  security` was silent: the word was resolved from `src`, and npm runs
+  the command in the shell's folder. Only the programs on
+  `RUNS_IN_DIRECTORY` (`git -C`, `make -C`, `env -C`, `pnpm -C`,
+  `yarn --cwd` and the like) move the word; for any other the folder the
+  stage was in counts too.
+
 - **A read-only program reads only with options known to only read
   (BUG-075, BUG-066, re-probe 7 H1).** `sort --o=FILE`, `sort /o FILE`
   and `sort --compress-program=sh` counted as reading and emptied the

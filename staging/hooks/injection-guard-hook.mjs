@@ -1465,6 +1465,38 @@ const DIRECTORY_OPTION_VALUE = /^(?:--prefix|--cwd|--chdir|--directory|--git-dir
 // -C with the directory stuck to it (env -C.., make -Csrc, tar -C.claude;
 // re-probe 6, G7). A digit after it is a count (grep -C3, diff -C3).
 const DIRECTORY_STUCK = /^-C[^\d-]/;
+// The programs that run in the folder a directory option names, each with
+// the options that say so. Any other program may only look there for
+// something and run where the shell is: `npm --prefix dir exec` and
+// `npx --prefix dir` find their packages in dir and run the command in
+// the shell's folder, and sudo's -C takes a number. For those the words
+// after the option count from both folders (re-probe 7, H2).
+const RUNS_IN_DIRECTORY = {
+  git: /^-C$/,
+  make: /^(?:-C|--directory)$/,
+  gmake: /^(?:-C|--directory)$/,
+  ninja: /^-C$/,
+  tar: /^(?:-C|--directory)$/,
+  bsdtar: /^(?:-C|--directory)$/,
+  gtar: /^(?:-C|--directory)$/,
+  env: /^(?:-C|--chdir)$/,
+  pnpm: /^-C$/,
+  yarn: /^--cwd$/,
+  bun: /^--cwd$/,
+  uv: /^--directory$/,
+  go: /^-C$/,
+  powershell: /^-(?:workingdirectory|wd)$/i,
+  pwsh: /^-(?:workingdirectory|wd)$/i,
+  "start-process": /^-(?:workingdirectory|wd)$/i,
+};
+
+/** Whether a program named in `stage` runs in the folder `option` names (RUNS_IN_DIRECTORY). */
+function runsInDirectory(stage, option) {
+  return stage.some((word) => {
+    const name = commandName(word);
+    return Object.hasOwn(RUNS_IN_DIRECTORY, name) && RUNS_IN_DIRECTORY[name].test(option);
+  });
+}
 const QUOTED_CHDIR = /chdir\(\s*(['"])(.*?)\1/gi;
 const MAX_COMMAND_BASES = 32;
 const UNKNOWN_DIRECTORY = /[$`%*?()]/;
@@ -2036,8 +2068,11 @@ function scriptDialect(shell, option) {
  * The directory is followed in order, as if every move succeeds: cd,
  * pushd and popd, cd -, and the end of a ( ) subshell, which puts it
  * back. An option that tells one command where to run (env -C dir, env
- * --chdir=dir, git -C dir, make -C dir, npm --prefix dir) moves the words
- * after it in that stage and nothing else. A mover, a directory option
+ * --chdir=dir, git -C dir, make -C dir; RUNS_IN_DIRECTORY) moves the words
+ * after it in that stage and nothing else. The same option on a program
+ * not known to run there (npm --prefix dir exec, npx --prefix dir) moves
+ * them too and keeps the folder the stage was in, in `alt` and `unmoved`
+ * (re-probe 7, H2). A mover, a directory option
  * and their values are marked `moves`: they say where a command runs, not
  * what it acts on.
  *
@@ -2113,10 +2148,12 @@ function wordsInPlace(text, dialect, start) {
       const value = tokens[k + 1]?.word;
       if (value !== undefined) {
         mark(tokens[++k], true);
+        if (!runsInDirectory(stage, word)) stageAlt = [...stageAlt, here];
         toStage(here, value);
       }
     } else if (DIRECTORY_OPTION_VALUE.test(word)) {
       mark(tok, true);
+      if (!runsInDirectory(stage, word.slice(0, word.indexOf("=")))) stageAlt = [...stageAlt, here];
       toStage(here, word.slice(word.indexOf("=") + 1));
     } else if (DIRECTORY_STUCK.test(word)) {
       mark(tok, true);

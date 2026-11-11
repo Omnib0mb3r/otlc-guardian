@@ -4669,6 +4669,58 @@ describe("PreToolUse hook - a read-only program reads only with options known to
 });
 
 // ---------------------------------------------------------------------------
+// Re-probe 7, X1 and H2 (BUG-080): a directory option moves the bare word
+// only for a program known to run there
+// ---------------------------------------------------------------------------
+//
+// G6 resolved the bare word from the folder the shell is in, and took
+// -C and --prefix on any program as that folder. `npm --prefix src exec
+// rimraf security` runs rimraf in the shell's folder: --prefix only says
+// where npm looks for packages. Run for real it deleted the scanner.
+
+describe("PreToolUse hook - a directory option on a program not known to run there (re-probe 7, H2)", () => {
+  for (const command of [
+    "npm --prefix src exec rimraf security",
+    "npm --prefix=src x rimraf security",
+    "npm -C src exec rimraf security",
+    "npm exec --prefix src rimraf security",
+    "npm --prefix ./src exec rimraf security",
+    'npm --prefix src exec rimraf "security"',
+    "npm --prefix src exec -c 'rimraf security'",
+    "npx --prefix src rimraf security",
+    "pnpm --prefix src exec rimraf security",
+    "npm --prefix run exec rimraf security",
+    // sudo's -C takes a number, cmake's a cache file.
+    "sudo -C 3 npx rimraf security",
+    "cmake -C cache.cmake -E rm -rf security",
+    // Held: the folder above the project, from either folder.
+    "npx --prefix .. rimraf .",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // These programs run in the folder the option names: the word is src/security.
+    "git -C src clean -fdx security",
+    "make -C src security",
+    "env -C src npx rimraf security",
+    "pnpm -C src exec rimraf security",
+    "yarn --cwd src rimraf security",
+    // Both folders are under src.
+    "cd src && npm --prefix a exec rimraf security",
+    "npm --prefix src run build",
+    "make -C build -j8",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 
