@@ -2195,13 +2195,24 @@ describe("Rules with no prior test: bad sample fires, good sample is silent", ()
     test(`${id} is silent on its good sample`, () => assert.ok(!auditFires(good, id), `${id} fired on its good sample`));
   }
 
-  // BUG-082: the pattern takes a comparison for an assignment and misses +=.
-  knownBug("BUG-082", "INJ-002 is silent on an innerHTML comparison", () => {
-    assert.ok(!auditFires({ "src/view.js": `const same = a.innerHTML === b.innerHTML;\n` }, "INJ-002"));
-  });
-  knownBug("BUG-082", "INJ-002 fires on innerHTML +=", () => {
-    assert.ok(auditFires({ "src/view.js": `list.innerHTML += rowHtml;\n` }, "INJ-002"));
-  });
+  // BUG-082: the pattern took a comparison for an assignment and missed +=.
+  for (const [label, line] of [
+    ["a strict comparison", "const same = a.innerHTML === b.innerHTML;"],
+    ["a loose comparison", "if (panel.innerHTML == cached) return;"],
+    ["an inequality", "if (panel.innerHTML !== cached) render();"],
+  ]) {
+    test(`INJ-002 is silent on ${label} of innerHTML`, () => {
+      assert.ok(!auditFires({ "src/view.js": line + "\n" }, "INJ-002"));
+    });
+  }
+  for (const [label, line] of [
+    ["innerHTML +=", "list.innerHTML += rowHtml;"],
+    ["innerHTML= with no space", "panel.innerHTML=userHtml;"],
+  ]) {
+    test(`INJ-002 fires on ${label}`, () => {
+      assert.ok(auditFires({ "src/view.js": line + "\n" }, "INJ-002"));
+    });
+  }
 
   // BUG-083: the pattern has no left boundary, so any word ending in "sk-" fires.
   knownBug("BUG-083", "SEC-001b is silent on a task id (task-<32 hex>)", () => {

@@ -1621,7 +1621,8 @@ const AUDIT_RULES = [
   {
     id: "INJ-002", category: "Injection Risk", severity: "HIGH",
     description: "innerHTML assignment - potential XSS",
-    pattern: /\.innerHTML\s*=/,
+    // = and +=, never the first = of a comparison (BUG-082).
+    pattern: /\.innerHTML\s*\+?=(?!=)/,
     excludePatterns: TEST_FILE_EXCLUDES,
     fileTypes: JS_TS_EXTS,
   },

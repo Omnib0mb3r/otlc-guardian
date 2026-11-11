@@ -835,6 +835,12 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
   `page.$eval(`, also catches `new Function(`, and is described as
   "eval() or new Function() runs a string as code".
 
+- **INJ-002 reads an assignment, not a comparison (BUG-082).** The
+  pattern matched the first `=` of `==` and `===`, so
+  `a.innerHTML === b.innerHTML` was reported HIGH, and it missed
+  `innerHTML +=`, which is the same XSS sink. `=` and `+=` now fire and
+  a comparison does not.
+
 - **DEP-002 can fire (BUG-039).** A bare `.env` has no extension, so the
   walker never collected it and the committed-`.env` check never ran.
   `collectFiles()` now keeps a `.env` by name, for DEP-002 only (the

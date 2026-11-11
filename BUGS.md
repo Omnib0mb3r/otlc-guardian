@@ -93,7 +93,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-079 | IN-PROGRESS | Scanner joins its views with newlines, so a pattern matches across two views: honest text is reported (staged: init'd STANDARDS.md fails APPLY.md step 3) |
 | BUG-080 | IN-PROGRESS | Staged hook only: false asks on folders that are not Guardian's (`pytest tests/security`, `rm -rf src/security`, `rm -rf src/.claude`, `pytest -k security`) |
 | BUG-081 | OPEN | Audit walks every checkout under `.claude/worktrees/`, so each finding is reported once per worktree (bridger-base-camp: 95 extra `SEC-005`) |
-| BUG-082 | OPEN | Audit `INJ-002` (innerHTML) fires on a comparison (`a.innerHTML === b.innerHTML`) and misses `innerHTML +=` |
+| BUG-082 | SMOKE-TESTING | Audit `INJ-002` (innerHTML) fires on a comparison (`a.innerHTML === b.innerHTML`) and misses `innerHTML +=` |
 | BUG-083 | OPEN | Audit `SEC-001b` (legacy OpenAI key) fires on any word ending in `sk-` plus 20 alphanumerics, e.g. `task-<32 hex>` |
 
 <!-- INDEX END -->
@@ -1188,13 +1188,17 @@ Seen by the worker while running the audit on real projects, ruled a bug by Lex 
 
 ### BUG-082: Audit `INJ-002` fires on an innerHTML comparison and misses `innerHTML +=`
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 Found by the firing and silent samples for INJ-002 (gate plan step 0 item 2).
 
 - The pattern is `/\.innerHTML\s*=/`. It matches the first `=` of `==` and `===`, so `const same = a.innerHTML === b.innerHTML;` is reported HIGH as "innerHTML assignment". A comparison writes nothing.
 - It does not match `list.innerHTML += rowHtml;`, which is an assignment and the same XSS risk.
 - Both samples are kept as known-bug tests (`knownBug("BUG-082", ...)`) in `tests/audit.test.js`.
+
+**Fix (2026-11-10).** INJ-002 in `security/03-audit.js` is `/\.innerHTML\s*\+?=(?!=)/`: `=` and `+=` fire, the first `=` of `==` or `===` does not; the id, severity and description are unchanged. Tests in `tests/audit.test.js`: the two known-bug tests became real tests, with a loose comparison and an inequality (silent) and `innerHTML=` with no space (fires) added; the strict comparison, the loose comparison and `+=` failed before the fix (394 passed, 3 failed), all pass after (397 passed, 0 failed, 1 known for BUG-083). Docs: manual chapters 01 and 02, CHANGELOG.
+
+Smoke test: run the audit on a project with front-end code and confirm an `innerHTML +=` line is reported and an `innerHTML ===` line is not.
 
 ### BUG-083: Audit `SEC-001b` fires on any word ending in `sk-` plus 20 alphanumerics
 
