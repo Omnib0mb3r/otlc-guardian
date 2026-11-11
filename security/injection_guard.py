@@ -298,11 +298,12 @@ def _decode_base64_printable(candidate: str) -> Optional[str]:
     return decoded if PRINTABLE_PATTERN.match(decoded) else None
 
 
-def _normalize_for_scan(text: str) -> str:
+def _distinct_views(text: str) -> list[str]:
     """
-    Normalize before scanning. Returns every decoded view of the text,
-    newline-joined, so the patterns run over all of them in one pass.
-    Mirrors normalizeForScan() in 01-injection-guard.js:
+    The distinct views of the text, base first. Each is scanned on its
+    own and they are never joined (BUG-079): joined with newlines, a match
+    could begin at the end of one view and finish at the start of the
+    next. Mirrors distinctViews() in 01-injection-guard.js:
 
       1. NFKC with invisible characters removed
       2. Unicode tag characters mapped back to the ASCII they shadow
@@ -351,7 +352,7 @@ def _normalize_for_scan(text: str) -> str:
     add_view(EMPTY_HTML_COMMENT.sub(" ", spaced))
     add_view(_without_html_comments(base))
 
-    return "\n".join(views)
+    return views
 
 
 SCAN_MODES = frozenset({"injection", "secrets", "all"})
@@ -391,16 +392,20 @@ def scan(text: str, mode: str = "all") -> list[Violation]:
         unscanned = len(text) - MAX_SCAN_LENGTH
         text = text[:MAX_SCAN_LENGTH]
 
-    normalized = _normalize_for_scan(text)
+    views = _distinct_views(text)
     violations: list[Violation] = []
 
     if mode in ("injection", "all"):
         for rule in INJECTION_PATTERNS:
-            if rule.matcher is not None:
-                matched = rule.matcher(normalized)
-            else:
-                found = rule.pattern.search(normalized)
-                matched = found.group(0) if found else None
+            matched = None
+            for view in views:
+                if rule.matcher is not None:
+                    matched = rule.matcher(view)
+                else:
+                    found = rule.pattern.search(view)
+                    matched = found.group(0) if found else None
+                if matched is not None:
+                    break
             if matched is not None:
                 violations.append(Violation(
                     type="injection",
@@ -432,7 +437,7 @@ def scan(text: str, mode: str = "all") -> list[Violation]:
 
     if mode in ("secrets", "all"):
         for rule in SECRET_PATTERNS:
-            if rule.pattern.search(normalized):
+            if any(rule.pattern.search(view) for view in views):
                 violations.append(Violation(
                     type="secret",
                     id=rule.id,

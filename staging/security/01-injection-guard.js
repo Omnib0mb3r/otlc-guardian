@@ -372,18 +372,30 @@ function scanViews(text) {
 }
 
 /**
- * Normalizes text before scanning: the distinct views of it, joined by
- * newlines, so the patterns run over all of them in one pass.
+ * The distinct views of a text, base first. Each is scanned on its own
+ * and they are never joined (re-probe 4, E1, BUG-079): joined with
+ * newlines, a match could begin at the end of one view and finish at the
+ * start of the next, which reported honest text for words it holds in
+ * another order.
  * @param {string} text
- * @returns {string} normalized text ready for pattern scanning
+ * @returns {string[]} the base view, then every other non-empty view not already listed
  */
-function normalizeForScan(text) {
+function distinctViews(text) {
   const [base, ...rest] = scanViews(text);
   const views = [base];
   for (const view of rest) {
     if (view && !views.includes(view)) views.push(view);
   }
-  return views.join("\n");
+  return views;
+}
+
+/** The first view-local match of an injection rule, or null. */
+function firstMatch({ pattern, match }, views) {
+  for (const view of views) {
+    const matched = match ? match(view) : (view.match(pattern)?.[0] ?? null);
+    if (matched !== null) return matched;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -517,10 +529,9 @@ function assertScanArgs(fn, text, mode) {
 export function scan(text, mode = "all") {
   assertScanArgs("scan", text, mode);
 
-  // Hard cap BEFORE normalization — the normalizer concatenates
-  // URL-decoded and base64-decoded copies onto the original, so a
-  // large input could double or triple in size inside normalizeForScan.
-  // Capping upstream makes the downstream work bounded.
+  // Hard cap BEFORE the views are built: each view is another copy of
+  // the text (decoded, folded, stripped), so capping upstream bounds
+  // the work downstream.
   let unscanned = 0;
   if (text.length > MAX_SCAN_LENGTH) {
     unscanned = text.length - MAX_SCAN_LENGTH;
@@ -528,14 +539,16 @@ export function scan(text, mode = "all") {
     text = text.slice(0, MAX_SCAN_LENGTH);
   }
 
-  // Normalize before scanning — defeats fullwidth, homoglyph, encoded payloads
-  const normalized = normalizeForScan(text);
+  // The views defeat fullwidth, homoglyph and encoded payloads; every
+  // rule runs over each view on its own.
+  const views = distinctViews(text);
 
   const violations = [];
 
   if (mode === "injection" || mode === "all") {
-    for (const { pattern, match, severity, id } of INJECTION_PATTERNS) {
-      const matched = match ? match(normalized) : (normalized.match(pattern)?.[0] ?? null);
+    for (const rule of INJECTION_PATTERNS) {
+      const { pattern, severity, id } = rule;
+      const matched = firstMatch(rule, views);
       if (matched !== null) {
         violations.push({
           type: "injection",
@@ -580,7 +593,7 @@ export function scan(text, mode = "all") {
   let hasSecrets = false;
   if (mode === "secrets" || mode === "all") {
     for (const { pattern, label, id } of SECRET_PATTERNS) {
-      if (pattern.test(normalized)) {
+      if (views.some((view) => pattern.test(view))) {
         hasSecrets = true;
         violations.push({
           type: "secret",

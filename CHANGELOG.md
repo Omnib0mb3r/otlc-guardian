@@ -227,6 +227,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A pattern is matched inside one view of the text, never across two
+  (BUG-079, re-probe 4 E1).** `scan()` joined its decoded views with
+  newlines, so a match could start in one and end in the next. With the
+  staged comment view that made the installed `STANDARDS.md` report
+  `GUARD-INJ-028` (a glob's `/*` closing on a later view's `*/`), which
+  stopped `staging/APPLY.md` at step 3; and honest text such as "Previous
+  instructions are in `docs/old.md`. Do not ignore all" was CRITICAL
+  `GUARD-INJ-001`, live too. Each view is now scanned on its own. The
+  Python port matches (live).
+
 - **A payload deny is never replaced by an ask (BUG-078, re-probe 4 E4).**
   The staged hook's checks ran in order and the first to speak ended the
   run, so `cp notes/x.md CLAUDE.md && cat .claude/settings.json` asked
