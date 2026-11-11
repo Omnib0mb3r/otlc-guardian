@@ -1182,6 +1182,20 @@ Cost, measured at a project root in bypass mode (each is a deny there): `cp src/
 
 Smoke test after applying: at the root of a scratch project with Guardian installed, ask Claude to run `npx rimraf ..` (a Guardian prompt that says "a folder above this project"; decline). In bypass mode `npx prettier --write .` and, from `src/`, `cmake ..` get no prompt.
 
+**An escape right after a guarded name (2026-11-11, found by the worker while reproducing re-probe 6, W7). Fixed in staging, not yet live.** `printf "rm -rf security\n" | sh` was silent in both modes, and so were `echo -e "rm -rf security\n" | sh`, `printf "rm -rf .claude/hooks\n" | sh`, `printf "rm -f .claude/settings.json\n" | sh`, `printf "npx rimraf security\n" > x.sh; sh x.sh`, `python -c "print('rm -rf security\n')" | sh` and, through the PowerShell tool, `Write-Output "security`n" | ...`. Real effect in scratch projects (`esc1`, `esc2`): the first two deleted `security/01-injection-guard.js` and `security/package.json`. The live 1.5.0 hook and the staged hook before F1 are silent on them too, so the gap is as old as the name check. It is why the re-probe's W7 case `printf "#!/bin/sh\nrm -rf security\n" > .git/hooks/pre-commit; git commit ...` was still silent after G2.
+
+Cause: `nameViews()` reads a backslash two ways, as a path separator and as a bash escape that is dropped. With `\n` straight after the name the first gives `security/n` and the second `securityn`, and each is a different path, so no pattern matched. The stdin-script reader gave `sh` the text with the escape still in it, so it found no `rm` target either.
+
+Change in `staging/hooks/injection-guard-hook.mjs`: `nameViews(text, runChar, dialect)` adds a third view in which a string escape is white space (`STRING_ESCAPES`: `\a \b \e \f \n \r \t \v`, octal `\012`, hex `\x0a`). In the bash dialect every one counts, since a backslash is never a path separator there. In the PowerShell and cmd dialects a backslash is the separator (`.claude\agents\a.md`, `src\notes`), so a backslash escape counts only when no name character follows it, and PowerShell's backtick escapes (`` `n ``, `` `t ``) always count. `guardedNameIn()` passes its dialect.
+
+Tests: `tests/hook.test.js`, "an escape right after a guarded name (BUG-075)": 14 ask, 6 stay silent in bypass mode (`printf "done\n"`, `printf "%s\n" src/security/old.js | xargs rm -f`, and PowerShell paths `.claude\agents\b.md`, `src\notes\readme.md`, `src\security\old.js`). Staged hook suite before: 1097 passed, 14 failed. After: 1111 passed, 0 failed. Lex's regress harness: no line changed.
+
+Cost, measured in bypass mode: through the Bash tool a quoted backslash path under `.claude` whose next folder starts with a, b, e, f, n, r, t or v is read as `.claude` and an escape, so `cp docs/a.md ".claude\agents\b.md"` is denied there (`.claude\commands\b.md` is not). Spell it with forward slashes. For Lex.
+
+Limit that stays, for Lex: through the PowerShell or cmd tool, a backslash escape that is followed by a name character is not read as one, so `python -c "print('rm -rf security\nx')" | sh` is silent there (it asks through the Bash tool). The alternative reads every `\a`, `\n`, `\r` and `\t` in a Windows path as an escape and asks on `Copy-Item docs\a.md .claude\agents\b.md`.
+
+Smoke test after applying: at the root of a scratch project ask Claude to run `printf "rm -rf security\n" | sh` (a Guardian prompt; decline).
+
 ### BUG-076: Runtime GUARD-SEC-008 and -009 miss a quoted JSON key
 
 **Status:** IN-PROGRESS · **Found:** 2026-11-10

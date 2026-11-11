@@ -233,6 +233,13 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **An escape right after a guarded name no longer hides it (BUG-075).**
+  `printf "rm -rf security\n" | sh`, `echo -e "rm -rf security\n" | sh`
+  and `printf "rm -rf .claude/hooks\n" | sh` were silent: the `\n` was
+  read as part of the path. The name check now also reads the text with
+  string escapes (`\n`, `\t`, `\012`, PowerShell's backtick-n) as the
+  white space they become.
+
 - **The bare word `security` is text only in a plain command (BUG-080,
   re-probe 6 G2).** The exemptions for a read-only stage, a test runner,
   a message, a script name and a write to an ordinary file trusted the

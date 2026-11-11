@@ -1256,6 +1256,18 @@ function expandBraces(text) {
 
 const DOT_SEGMENT = /(?:^|\/)\.{1,2}(?:\/|$)/;
 
+// A string escape that printf, echo -e or a string literal in code turns
+// into white space or a control character: \n, \t, \012, \x0a. In bash a
+// backslash is never a path separator, so every one counts. In PowerShell
+// and cmd it is the separator (.claude\agents\a.md, src\notes), so there
+// a backslash escape counts only when no name character follows it, and
+// PowerShell's own backtick escapes (`n, `t) always do.
+const STRING_ESCAPES = {
+  bash: /\\(?:[abefnrtv]|[0-7]{1,3}|x[0-9a-fA-F]{1,2})/g,
+  powershell: /`[0abefnrtv]|\\(?:[abefnrtv]|[0-7]{1,3}|x[0-9a-fA-F]{1,2})(?![A-Za-z0-9_.-])/g,
+  cmd: /\\(?:[abefnrtv]|[0-7]{1,3}|x[0-9a-fA-F]{1,2})(?![A-Za-z0-9_.-])/g,
+};
+
 /**
  * The text spelled one way for name matching: $'...' decoded, quote,
  * backtick and caret characters removed (split quotes, PowerShell and cmd
@@ -1269,14 +1281,23 @@ const DOT_SEGMENT = /(?:^|\/)\.{1,2}(?:\/|$)/;
  * the name patterns then find. Without it a guarded name followed by "/"
  * and more reads as a different path.
  *
+ * A third view reads a string escape as the white space it becomes
+ * (STRING_ESCAPES): in `printf "rm -rf security\n" | sh` the name is
+ * followed by `\n`, which the two views above read as security/n and
+ * securityn, a different path each time, while printf, echo -e and a
+ * string literal in any language make a line end of it.
+ *
  * @param {RegExp} runChar - the characters a path runs over (PATH_RUN_CHAR,
  *   or WORD_PATH_RUN_CHAR for one shell word, where a space is part of it)
+ * @param {"bash"|"powershell"|"cmd"} dialect - which escapes to read (STRING_ESCAPES)
  */
-function nameViews(text, runChar = PATH_RUN_CHAR) {
-  const t = text
+function nameViews(text, runChar = PATH_RUN_CHAR, dialect = "bash") {
+  const spell = (s) => s
     .replace(/\$'((?:[^'\\]|\\[\s\S])*)'/g, (m, body) => decodeAnsiC(body))
     .replace(/['"`^]/g, "")
     .toLowerCase();
+  const t = spell(text);
+  const unescaped = spell(text.replace(STRING_ESCAPES[dialect] ?? STRING_ESCAPES.bash, " "));
   const paths = new RegExp(`${runChar.source}+`, "g");
   // What is left stays a path to the eye ("security/x/.." is "security/"),
   // so it is resolved as one and not read as the bare word.
@@ -1285,7 +1306,9 @@ function nameViews(text, runChar = PATH_RUN_CHAR) {
     const plain = path.posix.normalize(run);
     return plain.includes("/") ? plain : `${plain}/`;
   });
-  const views = [t.replace(/\\/g, "/"), t.replace(/\\([\s\S])/g, "$1")].map((v) => expandBraces(v
+  const spellings = [t.replace(/\\/g, "/"), t.replace(/\\([\s\S])/g, "$1")];
+  if (unescaped !== t) spellings.push(unescaped.replace(/\\/g, "/"));
+  const views = spellings.map((v) => expandBraces(v
     .replace(/:[a-z0-9_.-]*:\$data\b/g, "")
     .replace(/:{1,2}\$[a-z_]+/g, "")
     .replace(/\/(?:\.\/)+/g, "/")
@@ -1691,7 +1714,7 @@ function guardedNameIn(texts, dialect, cwd, root, watches = () => false) {
   // For globs, which are matched as text: the path as the command would spell it.
   const guardedAbs = GUARDED_NAMES.map((name) => ({ name, abs: path.join(root, name).replace(/\\/g, "/").toLowerCase() }));
   for (const text of texts) {
-    const views = nameViews(text);
+    const views = nameViews(text, PATH_RUN_CHAR, dialect);
     const words = shellWords(text, dialect);
     const { bases, certain } = commandBases(views, cwd, words);
     const reaches = (name, spelled) => {
@@ -1731,7 +1754,7 @@ function guardedNameIn(texts, dialect, cwd, root, watches = () => false) {
     // A shell word with white space in it, read whole: a quoted path keeps
     // its spaces, and a string in code ends at its own quotes.
     for (const word of words.filter((w) => /\s/.test(w))) {
-      for (const view of nameViews(word.replace(/['"`]/g, "\0"), WORD_PATH_RUN_CHAR)) {
+      for (const view of nameViews(word.replace(/['"`]/g, "\0"), WORD_PATH_RUN_CHAR, dialect)) {
         for (const { name, re } of GUARDED_NAME_PATTERNS) {
           for (const m of view.matchAll(re)) if (counts(view, name, m, WORD_PATH_RUN_CHAR)) return name;
         }
@@ -1749,7 +1772,7 @@ function guardedNameIn(texts, dialect, cwd, root, watches = () => false) {
       return !guardedFolders.some((folder) => key === folder || key.startsWith(`${folder}/`)) && !watches(file) &&
         !/\/\.(?:git|husky)\//.test(key);
     });
-    for (const view of nameViews(bareWordText(text, dialect, plainSink))) {
+    for (const view of nameViews(bareWordText(text, dialect, plainSink), PATH_RUN_CHAR, dialect)) {
       for (const { name, re } of WORD_FOLDER_PATTERNS) {
         for (const m of view.matchAll(re)) {
           const bare = view[m.index - 1] !== "/" && view[m.index + m[0].length] !== "/";

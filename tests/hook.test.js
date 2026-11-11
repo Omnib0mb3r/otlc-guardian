@@ -3926,6 +3926,66 @@ describe("PreToolUse hook - an exemption is earned only by a plain command (re-p
 });
 
 // ---------------------------------------------------------------------------
+// BUG-075: an escape right after a guarded name
+// ---------------------------------------------------------------------------
+//
+// Found while reproducing re-probe 6, W7. In `printf "rm -rf security\n" |
+// sh` the name is followed by `\n`. The name views read a backslash as a
+// path separator (security/n) or dropped it (securityn), so in both the
+// name ran on into the escape and was a different path. printf, echo -e
+// and every language's string literal make a line end of it. Real effect
+// in scratch projects: the scanner deleted (esc1, esc2). Silent in the
+// live 1.5.0 hook too.
+
+describe("PreToolUse hook - an escape right after a guarded name (BUG-075)", () => {
+  const run = (command, { mode, tool = "Bash" } = {}) => withTempProject((dir) => {
+    for (const rel of [".claude/settings.json", ".claude/hooks/injection-guard-hook.mjs", ".claude/agents/a.md",
+      "security/01-injection-guard.js", "src/security/old.js", "src/notes/readme.md", "docs/a.md", "README.md"]) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), rel.endsWith(".json") ? "{}" : "x\n");
+    }
+    return runHook(PRE_HOOK, { tool_name: tool, cwd: dir, tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) },
+      { CLAUDE_PROJECT_DIR: dir });
+  });
+
+  for (const [command, tool] of [
+    ["printf \"rm -rf security\\n\" | sh"],
+    ["printf 'rm -rf security\\n' | bash"],
+    ["echo -e \"rm -rf security\\n\" | sh"],
+    ["printf \"rm -rf security\\t.\\n\" | sh"],
+    ["printf \"rm -rf security\\012\" | sh"],
+    ["printf \"cd build\\nrm -rf security\\nmake\\n\" | sh"],
+    ["printf \"rm -rf .claude/hooks\\n\" | sh"],
+    ["printf \"rm -f .claude/settings.json\\n\" | sh"],
+    ["printf \"npx rimraf security\\n\" > x.sh; sh x.sh"],
+    ["printf \"#!/bin/sh\\nrm -rf security\\n\" > .git/hooks/pre-commit; git commit --allow-empty -qm x"],
+    ["python -c \"print('rm -rf security\\n')\" | sh"],
+    ["node -e \"console.log('security\\n')\" | xargs rm -rf"],
+    ["Write-Output \"security`n\" | ForEach-Object { Remove-Item -Recurse $_.Trim() }", "PowerShell"],
+    ["python -c \"print('rm -rf security\\n')\" | sh", "PowerShell"],
+  ]) {
+    stagedOnly(`asks${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      const out = run(command, { tool });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const [command, tool] of [
+    ["printf \"done\\n\""],
+    ["echo -e \"a\\tb\\n\" > out.txt"],
+    ["printf \"%s\\n\" src/security/old.js | xargs rm -f"],
+    // In PowerShell and cmd a backslash is the path separator.
+    ["Copy-Item docs\\a.md .claude\\agents\\b.md", "PowerShell"],
+    ["Get-Content src\\notes\\readme.md", "PowerShell"],
+    ["Remove-Item src\\security\\old.js", "PowerShell"],
+  ]) {
+    stagedOnly(`silent${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      expectSilent(run(command, { mode: "bypassPermissions", tool }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 
