@@ -696,6 +696,83 @@ const CONTROL_OPERATORS = new Set(["&&", "||", ";;", "|&", "|", "&", ";", "(", "
 const WRITE_REDIRECTS   = new Set([">", ">>", ">|", "&>", "&>>", "<>", ">&"]);
 const READ_REDIRECTS    = new Set(["<", "<<", "<<-", "<<<", "<&"]);
 const COMMAND_WRAPPERS  = new Set(["sudo", "doas", "env", "command", "builtin", "exec", "nohup", "time", "nice", "timeout", "stdbuf", "xargs"]);
+// Options of the wrappers that take the next word as their value (stuck to
+// a short option, or after "=", the value is in the same word). The word
+// after one is its value, not the program the wrapper starts: in `nice -n
+// 5 cp a b` the program is cp (BUG-066).
+const WRAPPER_VALUE_OPTIONS = {
+  sudo: ["-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt", "-C", "--close-from", "-D", "--chdir",
+    "-R", "--chroot", "-T", "--command-timeout", "-U", "--other-user", "-r", "--role", "-t", "--type"],
+  doas: ["-u", "-C"],
+  env: ["-u", "--unset", "-C", "--chdir", "-S", "--split-string"],
+  exec: ["-a"],
+  time: ["-f", "--format", "-o", "--output"],
+  nice: ["-n", "--adjustment"],
+  timeout: ["-s", "--signal", "-k", "--kill-after"],
+  stdbuf: ["-i", "--input", "-o", "--output", "-e", "--error"],
+  xargs: ["-a", "--arg-file", "-d", "--delimiter", "-E", "-I", "-L", "-n", "--max-args", "-P", "--max-procs",
+    "-s", "--max-chars", "--process-slot-var"],
+};
+// Of those, the ones that name the folder the command runs in, and the
+// one whose value is the command itself (env -S "cp a b").
+const WRAPPER_DIRECTORY_OPTIONS = new Set(["env -C", "env --chdir", "sudo -D", "sudo --chdir"]);
+const WRAPPER_COMMAND_OPTIONS   = new Set(["env -S", "env --split-string"]);
+
+/**
+ * One option word of a wrapper: the option it sets, the value stuck to it
+ * if any, and whether the value is the next word. In a short cluster the
+ * first letter that takes a value takes the rest of the word (-n5, -Eu
+ * root); a long option takes its value after "=" or as the next word.
+ * @returns {{ key: string, value: string|undefined, next: boolean }}
+ */
+function wrapperOption(word, valued) {
+  if (word.startsWith("--")) {
+    const eq = word.indexOf("=");
+    const key = eq < 0 ? word : word.slice(0, eq);
+    return { key, value: eq < 0 ? undefined : word.slice(eq + 1), next: eq < 0 && valued.includes(key) };
+  }
+  for (let j = 1; j < word.length; j++) {
+    const key = `-${word[j]}`;
+    if (valued.includes(key)) return { key, value: word.slice(j + 1) || undefined, next: j === word.length - 1 };
+  }
+  return { key: word, value: undefined, next: false };
+}
+
+/**
+ * A stage's words without the wrappers in front of them (sudo -u root
+ * nice -n 5 CMD ...), their options and those options' values.
+ * @returns {{ words: string[], assignments: string[], moves: string[], commands: string[] }}
+ *   the words from the program on; the NAME=value words of env; the
+ *   folders the wrappers say the program runs in, in order; and the
+ *   command strings of env -S
+ */
+function unwrapped(words) {
+  let rest = words;
+  const assignments = [];
+  const moves = [];
+  const commands = [];
+  while (rest.length > 0 && COMMAND_WRAPPERS.has(commandName(rest[0]))) {
+    const wrapper = commandName(rest[0]);
+    const valued = WRAPPER_VALUE_OPTIONS[wrapper] ?? [];
+    rest = rest.slice(1);
+    while (rest.length > 0 && (rest[0].startsWith("-") || (wrapper === "env" && rest[0].includes("=")))) {
+      const word = rest[0];
+      rest = rest.slice(1);
+      if (!word.startsWith("-")) {
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) assignments.push(word);
+        continue;
+      }
+      const { key, value, next } = wrapperOption(word, valued);
+      const given = next ? rest[0] : value;
+      if (next) rest = rest.slice(1);
+      if (given === undefined) continue;
+      if (WRAPPER_DIRECTORY_OPTIONS.has(`${wrapper} ${key}`)) moves.push(given);
+      else if (WRAPPER_COMMAND_OPTIONS.has(`${wrapper} ${key}`)) commands.push(given);
+    }
+    if (wrapper === "timeout" && rest.length > 1) rest = rest.slice(1); // the duration
+  }
+  return { words: rest, assignments, moves, commands };
+}
 const SHELLS            = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 const INTERPRETERS      = new Set(["node", "deno", "bun", "python", "python3", "py", "ruby", "perl", "php"]);
 // Programs that start another one in an environment they prepare: uv run
@@ -2045,7 +2122,9 @@ function wordAboveProject(texts, dialect, cwd, root) {
     if (unknown) lost = true;
     for (const { tok, dir, unmoved, moves, stage } of placed) {
       if (moves) continue;
-      const script = stage.length > 2 ? scriptDialect(commandName(stage[0]), stage.at(-2)) : null;
+      // The shell may stand behind a wrapper (sudo bash -c "...").
+      const run = unwrapped(stage).words;
+      const script = run.length > 2 ? scriptDialect(commandName(run[0]), run.at(-2)) : null;
       if (script) {
         if (depth < MAX_SHELL_DEPTH) {
           const inner = walk(tok.word, dir, script, depth + 1);
@@ -2619,14 +2698,16 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     readValue(words[0]);
     words = words.slice(1);
   }
-  while (words.length > 0 && COMMAND_WRAPPERS.has(commandName(words[0]))) {
-    const wrapper = commandName(words[0]);
-    words = words.slice(1);
-    while (words.length > 0 && (words[0].startsWith("-") || (wrapper === "env" && words[0].includes("=")))) {
-      if (wrapper === "env" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) readValue(words[0]);
-      words = words.slice(1);
-    }
-    if (wrapper === "timeout" && words.length > 1) words = words.slice(1); // the duration
+  // A wrapper (sudo, env, nice, timeout, xargs...) and its options come
+  // off; what it starts is the command. env -C and sudo -D say where
+  // that one command runs, and env -S holds it as a string (BUG-066).
+  const wrapped = unwrapped(words);
+  words = wrapped.words;
+  for (const assignment of wrapped.assignments) readValue(assignment);
+  if (wrapped.moves.length > 0 || wrapped.commands.length > 0) {
+    const where = wrapped.moves.reduce((from, to) => abs(from, to), dir);
+    for (const command of wrapped.commands) recurse([command, ...words].join(" "), where, "bash");
+    return { dir, out: commandWrites(words, where, ctx, input).out };
   }
   if (words.length === 0) return { dir, out: stdin };
   // uv run, uvx, poetry run and pipx run start another program in an

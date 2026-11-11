@@ -233,6 +233,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A command behind a wrapper option that takes a value is read
+  (BUG-066).** In `nice -n 5 cp notes/x.md CLAUDE.md` the reader took
+  `5` for the program, so the copy was not judged; the same held for
+  `sudo -u root`, `env -u NAME`, `timeout -s KILL 5`, `stdbuf -o L`,
+  `exec -a name` and `xargs -I {}`, and `env -C dir` lost its folder.
+  The wrappers now come off with their options and those options'
+  values, `env -C` and `sudo -D` move that one command, an `env -S`
+  string is read as a command, and a `bash -c` script behind a wrapper
+  is followed by the folder-above check.
+
 - **An option value stuck to its option is read (BUG-074, BUG-075,
   BUG-065, BUG-066; re-probe 6 G7).** `claude mcp add -sproject` wrote
   `.mcp.json` without a prompt. The same gap was in every reader that
