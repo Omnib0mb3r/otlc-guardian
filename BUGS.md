@@ -92,7 +92,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-078 | IN-PROGRESS | HIGH (staged hook only): a guarded-name ask replaces a payload deny, so approving `cp notes/x.md CLAUDE.md && cat .claude/settings.json` lets the payload in |
 | BUG-079 | IN-PROGRESS | Scanner joins its views with newlines, so a pattern matches across two views: honest text is reported (staged: init'd STANDARDS.md fails APPLY.md step 3) |
 | BUG-080 | IN-PROGRESS | Staged hook only: false asks on folders that are not Guardian's (`pytest tests/security`, `rm -rf src/security`, `rm -rf src/.claude`, `pytest -k security`) |
-| BUG-081 | OPEN | Audit walks every checkout under `.claude/worktrees/`, so each finding is reported once per worktree (bridger-base-camp: 95 extra `SEC-005`) |
+| BUG-081 | SMOKE-TESTING | Audit walks every checkout under `.claude/worktrees/`, so each finding is reported once per worktree (bridger-base-camp: 95 extra `SEC-005`) |
 | BUG-082 | SMOKE-TESTING | Audit `INJ-002` (innerHTML) fires on a comparison (`a.innerHTML === b.innerHTML`) and misses `innerHTML +=` |
 | BUG-083 | IN-PROGRESS | Audit `SEC-001b` (legacy OpenAI key) fires on any word ending in `sk-` plus 20 alphanumerics, e.g. `task-<32 hex>` |
 
@@ -1178,13 +1178,19 @@ Smoke test after applying: in a project with a `src/security` folder ask Claude 
 
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** SMOKE-TESTING · **Found:** 2026-11-10
 
 Seen by the worker while running the audit on real projects, ruled a bug by Lex (2026-11-10): a worktree is a second checkout of the same code, not the project's code.
 
 - `SKIP_DIRS` in `security/03-audit.js` does not cover `.claude/worktrees/`, where Claude Code keeps its git worktrees, so `collectFiles()` walks each checkout as if it were project source and every finding in the project is reported again for each worktree.
 - `C:/dev/Projects/bridger-base-camp` reports 95 extra `SEC-005` findings from its worktrees.
 - Lex's order: skip `.claude/worktrees` only, not every folder named `worktrees`.
+
+**Fix (2026-11-10).** `collectFiles()` in `security/03-audit.js` skips an entry named `worktrees` whose parent folder is `.claude` (`isClaudeWorktrees(parentDir, name)`, next to `SKIP_DIRS`). It is the only walker, so pattern rules, analyzers and the project checks all stop reading the checkouts. A folder that is only named `worktrees` (`worktrees/`, `src/worktrees/`) is still read, and so is the rest of `.claude/`. A worktree given as the audit target is audited, because the walk starts inside it. Tests in `tests/audit.test.js`, "BUG-081: checkouts under .claude/worktrees/ are not audited": a finding reported once with two worktrees present, a finding that exists only in a worktree is silent (both failed before the fix: 405 passed, 2 failed), a folder only named `worktrees` and `.claude/hooks/` still report, a worktree as the target reports (both passed before and after); 407 passed, 0 failed after. Docs: manual chapters 01, 02 and 06, CHANGELOG.
+
+Measured on `C:/dev/Projects/bridger-base-camp` (read-only, 2026-11-10): before the fix 18,206 findings, 17,802 of them under `.claude/worktrees/` (SEC-005: 467, of which 459); after the fix 404 findings, none under it (SEC-005: 8). The 95 in the first report was counted when the project had fewer worktrees.
+
+Smoke test: Lex or Michael runs `node C:\dev\Projects\otlc-guardian\security\03-audit.js C:\dev\Projects\bridger-base-camp` and confirms no reported path contains `.claude\worktrees`. Projects that hold their own copy of `security/03-audit.js` get the fix with `guardian update`.
 
 ### BUG-082: Audit `INJ-002` fires on an innerHTML comparison and misses `innerHTML +=`
 

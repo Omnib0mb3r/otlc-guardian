@@ -3538,6 +3538,68 @@ describe("docs/coverage.md indexes every audit rule", () => {
 });
 
 // ---------------------------------------------------------------------------
+// BUG-081: .claude/worktrees/ holds second checkouts, not the project's code
+// ---------------------------------------------------------------------------
+//
+// Claude Code keeps its git worktrees in .claude/worktrees/<name>/. Each is
+// a full checkout of the same repository, so the audit reported every
+// finding once more per worktree. Only that folder is skipped: a folder
+// that is merely named worktrees is the project's own.
+
+describe("BUG-081: checkouts under .claude/worktrees/ are not audited", () => {
+  const leak = `const config = { password: "${"hunter" + "2secret"}" };\n`;
+  const filesOf = (dir, report) =>
+    findingsFor(report, "SEC-005").map((f) => path.relative(dir, f.file).replace(/\\/g, "/")).sort();
+
+  test("a finding is reported once, not again for each worktree", () => {
+    const dir = makeProject({
+      "package.json": "{}",
+      "src/db.js": leak,
+      ".claude/worktrees/feature-a/package.json": "{}",
+      ".claude/worktrees/feature-a/src/db.js": leak,
+      ".claude/worktrees/feature-b/src/db.js": leak,
+    });
+    try {
+      assert.deepEqual(filesOf(dir, runAuditOn(dir)), ["src/db.js"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a project with a finding only inside a worktree is silent", () => {
+    assert.ok(!auditFires({ "package.json": "{}", "src/db.js": "export {};\n", ".claude/worktrees/x/src/db.js": leak }, "SEC-005"));
+  });
+
+  test("a folder that is only named worktrees is still audited", () => {
+    const dir = makeProject({
+      "package.json": "{}",
+      "worktrees/db.js": leak,
+      "src/worktrees/db.js": leak,
+      ".claude/hooks/db.js": leak,
+    });
+    try {
+      assert.deepEqual(filesOf(dir, runAuditOn(dir)), [".claude/hooks/db.js", "src/worktrees/db.js", "worktrees/db.js"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a worktree given as the target is audited", () => {
+    const dir = makeProject({
+      "package.json": "{}",
+      ".claude/worktrees/feature-a/package.json": "{}",
+      ".claude/worktrees/feature-a/src/db.js": leak,
+    });
+    try {
+      const target = path.join(dir, ".claude", "worktrees", "feature-a");
+      assert.deepEqual(filesOf(target, runAuditOn(target)), ["src/db.js"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Gate plan step 0: every rule has a firing test and a silent test
 // ---------------------------------------------------------------------------
 //

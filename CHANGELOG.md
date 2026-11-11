@@ -848,6 +848,13 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
   start of a word. The runtime pattern `GUARD-SEC-001b` is unchanged
   until the staged scanner can be edited.
 
+- **The audit no longer reads `.claude/worktrees/` (BUG-081).** Claude
+  Code keeps its git worktrees there, each a second checkout of the same
+  code, so every finding was reported once more per worktree (one real
+  project: 18,206 findings, 404 without the worktrees). Only that folder
+  is skipped; a folder that is merely named `worktrees` is still read,
+  and a worktree given as the target is audited.
+
 - **DEP-002 can fire (BUG-039).** A bare `.env` has no extension, so the
   walker never collected it and the committed-`.env` check never ran.
   `collectFiles()` now keeps a `.env` by name, for DEP-002 only (the

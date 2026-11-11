@@ -2146,6 +2146,15 @@ const SKIP_DIRS = new Set([
   ".git",
 ]);
 
+// Claude Code keeps its git worktrees in .claude/worktrees/<name>/. Each
+// is a second checkout of the same repository, not the project's code, so
+// walking them reports every finding once more per worktree (BUG-081).
+// Matched with its parent: a folder that is merely named worktrees is the
+// project's own and is read. A worktree given as the target is audited,
+// because the walk starts inside it.
+const isClaudeWorktrees = (parentDir, name) =>
+  name === "worktrees" && path.basename(parentDir) === ".claude";
+
 // (TEST_FILE_EXCLUDES is defined at the top of this file, before
 // AUDIT_RULES, because the rules reference it. See the block there.)
 
@@ -2195,7 +2204,7 @@ function collectFiles(rootDir, extensions, byPath = () => false) {
     catch { return; }
 
     for (const entry of entries) {
-      if (SKIP_DIRS.has(entry.name)) continue;
+      if (SKIP_DIRS.has(entry.name) || isClaudeWorktrees(dir, entry.name)) continue;
 
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
