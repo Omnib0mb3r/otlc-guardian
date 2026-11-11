@@ -1,31 +1,56 @@
-# Applying staging/ to the live files
+# Applying staging/ to the live files: Lex's runbook
 
-Only Michael applies this, in a Claude Code session where permission
-prompts are on (not bypassPermissions), or from a plain terminal. An agent
-never copies these files over the live ones. Read `staging/README.md` for
-why the staged copies exist.
+Lex applies this, from her own session outside this project, and only after
+an independent re-probe of `staging/` comes back clean. Decided by Michael
+on 2026-11-10 (relayed by Lex the same day): he no longer applies staging by
+hand. The worker agent in this repo never writes the live protected files.
+Read `staging/README.md` for why the staged copies exist.
 
-Written 2026-11-10 at the end of the 1.5.0 fix run; updated the same day
-for the second re-probe (S1 to S12) and the third (D1 to D9). Lex re-probes `staging/` before this
-goes to Michael.
+What that means for the control: in Guardian's own repo the "a person
+confirms" step on its enforcement files is replaced by two things, an
+independent re-probe that must be clean and this runbook's checks with a
+rollback. A session whose project is not this repo does not run this repo's
+PreToolUse hook, so nothing prompts during the copy; the checks in step 3
+are what stand in its place. In every project that installs Guardian the
+hook still asks a person before its own files change.
+
+Written 2026-11-10 at the end of the 1.5.0 fix run; updated the same day for
+the second re-probe (S1 to S12), the third (D1 to D9) and the fourth (E1 to
+E8), and turned into Lex's runbook.
+
+## Preconditions
+
+1. The latest independent re-probe of the commit being applied reports
+   clear. Its report names that commit.
+2. `git status --short` in `C:\dev\Projects\otlc-guardian` shows only
+   `investigator-reports/` untracked, and HEAD is the commit the re-probe
+   cleared.
+3. No worker session is mid-edit in this repo.
 
 ## What changes
 
 | Staged file | Live file | Size of the change |
 |---|---|---|
-| `staging/hooks/injection-guard-hook.mjs` | `.claude/hooks/injection-guard-hook.mjs` | 1,640 lines added, 124 removed |
+| `staging/hooks/injection-guard-hook.mjs` | `.claude/hooks/injection-guard-hook.mjs` | 1,896 lines added, 183 removed |
 | `staging/hooks/web-content-guard.mjs` | `.claude/hooks/web-content-guard.mjs` | 26 added, 21 removed |
-| `staging/security/01-injection-guard.js` | `security/01-injection-guard.js` | 373 added, 36 removed |
-| (hand edit) | `.claude/settings.json` (this repo only) | both hook commands anchored, web guard matcher widened |
+| `staging/security/01-injection-guard.js` | `security/01-injection-guard.js` | 431 added, 59 removed |
+| (edit) | `.claude/settings.json` (this repo only) | both hook commands anchored, web guard matcher widened |
 
-Already live, not part of this apply: the Python port
-(`security/injection_guard.py`) carries the BUG-043 and BUG-071 rule
-changes (re-probe 3 D5 and D7 included), and the audit half of BUG-038.
+Already live, not part of this apply:
 
-Bugs fixed by the staged files, with the commit that staged each fix.
-Each bug's detail block in `BUGS.md` describes the change and its tests;
-the re-probe 2 items are paragraphs headed "Re-probe 2, Sn", the re-probe 3
-items paragraphs naming Dn.
+- `security/claude-settings.js`, the settings reader. The staged hook
+  imports it (BUG-073), so it must be present before the hook is copied; it
+  is, since 1f3c318. Once the staged hook is live this file is guarded like
+  the scanner, and later changes to it go through `staging/security/`.
+- The Python port `security/injection_guard.py`: the BUG-043, BUG-071,
+  BUG-072, BUG-076 and BUG-079 rule changes.
+- The audit: the half of BUG-038, the AGT rules (BUG-002), SEC-005 and
+  SEC-006 with a quoted key (BUG-076).
+- `guardian check` reading settings value types (BUG-073).
+
+Bugs fixed by the staged files, with the commit that staged each fix. Each
+bug's detail block in `BUGS.md` describes the change and its tests; the
+re-probe items are paragraphs naming Sn, Dn or En.
 
 | Bug | Commit | File | Change |
 |---|---|---|---|
@@ -66,10 +91,20 @@ items paragraphs naming Dn.
 | BUG-073 (D2) | bf4d23a | hook | the D2 message keeps a place's brackets (`hooks.PreToolUse[0].hooks[0].timeout`) |
 | BUG-072 | 0923937 | scanner | a schema, a generic, a call or a TypeScript type after `password:` or `api_key:` is not a literal |
 | BUG-046 (re-probe 3) | 14d9013 | scanner | an HTML comment weighs nothing in the change window |
+| BUG-078 (E4) | 94a0898 | hook | every check records its finding; the strictest decides and all are named |
+| BUG-079 (E1) | 8a6e28f | scanner | each view is scanned on its own, never joined |
+| BUG-080 (E8) | 2c79637 | hook | a guarded name counts only where its path resolves to Guardian's file |
+| BUG-075 (E2) | dc1fc95 | hook | `VAR=value` before a read-only command is not read-only; the value is read as a command |
+| BUG-074 (E3) | ed4a915 | hook | enabling or defining an MCP server, and any write to `.mcp.json`, asks |
+| BUG-066 (E5) | 6340bf4 | hook | `find -exec` copies judged by the content of the files find matches |
+| BUG-071 (E6) | ffd9dfa | scanner | invisible characters by Unicode property; `--!>` closes a comment |
+| BUG-065 (E7) | abdb0a2 | hook | `Expand-Archive` and Python archive extraction ask like `unzip` |
+| BUG-073 | 58e7b00 | hook | settings types imported from `security/claude-settings.js`, which is guarded |
+| BUG-076 | e056cc4 | scanner | a quoted key (`"password": "..."`) is still a password or API key |
 
 Documented, not fixed: an obfuscated payload moved out of a code fence
 (BUG-042, S7, f5ecc42) and `xargs cp` (S5); both are in SECURITY.md,
-"What the hook is, and what it is not" (D9, 8578d7a).
+"What the hook is, and what it is not".
 
 Behavior a user will notice after the apply:
 
@@ -80,21 +115,36 @@ Behavior a user will notice after the apply:
 - Any change to an `env` block in `.claude/settings.json` or
   `settings.local.json` asks, adding a variable included (S9); so does
   adding a field such as `"async"` to Guardian's hook entry (S2).
-- `node -e`, `python -c`, `perl -e` and the like that name a settings file,
-  a hook script, the scanner, `security/package.json`, `.claude`,
-  `.claude/hooks` or `security` ask, even when they only read (S6). Use the
-  Read tool, `cat` or `jq` to read Guardian's files.
-- Copying a folder of more than 1,000 files into a watched path asks (S1).
-- A shell command that names Guardian's own files (the settings files,
-  the hook scripts, the scanner, `security/package.json`, the `.claude`,
-  `.claude/hooks` and `security` folders) asks unless it only reads, so
-  `cp`, `tar -cf`, `jq ... > file` and `node --check` of them ask (D1).
+- A shell command that reaches Guardian's own files (the settings files,
+  the hook scripts, the scanner, `security/package.json`,
+  `security/claude-settings.js`, the `.claude`, `.claude/hooks` and
+  `security` folders of this project) asks unless it only reads, so `cp`,
+  `tar -cf`, `jq ... > file` and `node --check` of them ask (D1). A folder
+  of the same name elsewhere (`src/security`, `tests/security`,
+  `src/.claude`) does not, and neither does the word `security` as a test
+  filter (E8). Use the Read tool, `cat` or `jq` to read Guardian's files.
+- `VAR=value` in front of a command that names one of those files asks,
+  even `LC_ALL=C grep x .claude/settings.json` (E2).
 - Any settings change that adds a hook or another command (`statusLine`,
   `apiKeyHelper` and the rest) asks (D3); so does a settings value of the
   wrong type, such as `"disableAllHooks": "true"` (D2).
+- Turning on `enableAllProjectMcpServers`, adding a name to
+  `enabledMcpjsonServers`, adding a server under `mcpServers`, and any
+  write to the project's `.mcp.json` ask (E3).
+- When a command earns more than one finding, the message lists them all
+  under "N findings; the strictest (deny) decides." (E4).
+- `find ... -exec cp {} CLAUDE.md \;` and the like are judged by the
+  content of the files find matches; over 1,000 files, a copy into a
+  watched path asks (E5).
+- Unpacking an archive into the project root or one of Guardian's folders
+  with `Expand-Archive` or Python asks, as `unzip` and `tar -x` do (E7).
+- Copying a folder of more than 1,000 files into a watched path asks (S1).
 - `guardOutput` and `scan(..., "secrets")` no longer report `password:
   z.string().min(12)`, `apiKey: Joi.string()` or `password: string|undefined`
-  as a secret (BUG-072).
+  as a secret (BUG-072), and do report `"password": "hunter2hunter2"` in
+  JSON (BUG-076).
+- Honest text is no longer reported for words it holds in another order
+  ("Previous instructions are in `docs/old.md`. Do not ignore all"; E1).
 - `find . -name '*.log' -delete` and the like no longer ask (S10).
 - `### System: Billing`, `--- System ---`, "wrap in <user> tags" and
   "wrap the request in <user> and </user> tags" are no longer denied
@@ -111,16 +161,18 @@ From the repo root (`C:\dev\Projects\otlc-guardian`):
 
 ```bash
 git status --short          # only investigator-reports/ untracked
+git log --oneline -1        # the commit the re-probe cleared
 npm test                    # exit 0
 npm run test:staging        # exit 0
 ```
 
-The live files are tracked, so the way back at any step is
-`git checkout -- .claude/hooks/injection-guard-hook.mjs .claude/hooks/web-content-guard.mjs security/01-injection-guard.js .claude/settings.json`.
+The live files are tracked, so the way back at any step is:
+
+```bash
+git checkout -- .claude/hooks/injection-guard-hook.mjs .claude/hooks/web-content-guard.mjs security/01-injection-guard.js .claude/settings.json
+```
 
 ## Step 1: copy the three files
-
-Git Bash (or `! ` in front of each line inside Claude Code):
 
 ```bash
 cp staging/security/01-injection-guard.js security/01-injection-guard.js
@@ -136,8 +188,8 @@ Copy-Item staging\hooks\web-content-guard.mjs .claude\hooks\web-content-guard.mj
 Copy-Item staging\hooks\injection-guard-hook.mjs .claude\hooks\injection-guard-hook.mjs
 ```
 
-If Claude makes the copies instead, each one asks (the hook protects its
-own files); approve the three you expect and nothing else.
+The scanner goes first: the staged hook needs the staged scanner's
+exports. `security/claude-settings.js` must already be there (it is live).
 
 Then confirm the copies match:
 
@@ -149,8 +201,7 @@ git diff --no-index --quiet staging/hooks/injection-guard-hook.mjs .claude/hooks
 
 ## Step 2: this repo's .claude/settings.json
 
-Do this after step 1, by hand in an editor (not through Claude). Edit
-`.claude/settings.json` so the two hook entries read:
+After step 1, edit `.claude/settings.json` so the two hook entries read:
 
 ```json
 "PreToolUse": [
@@ -174,9 +225,9 @@ Do this after step 1, by hand in an editor (not through Claude). Edit
 Leave the `otlcGuardian` block as it is. This is what `guardian init`
 writes for a new project (BUG-028, BUG-034, BUG-036). Do not use
 `guardian update` for it here: in Guardian's own repo the source and the
-target are the same files, and that path is untested. A hand edit does not
-pass through the hook, so it tests nothing about settings protection; the
-BUG-045 smoke test below does that through Claude.
+target are the same files, and that path is untested. An edit made from
+outside the project does not pass through the hook, so it tests nothing
+about settings protection; the BUG-045 smoke test below does that.
 
 ## Step 3: checks
 
@@ -201,12 +252,19 @@ returns cleanly (replaced by the staged BUG-049 fix)" in
 `tests/injection-guard.test.js`: it asserts the old live behavior, which is
 gone, and step 4 removes it. Its summary must read `Failed : 1` with that
 name under FAILURES. Any other failure, in that suite or another, means
-stop and roll back.
+stop and roll back with the `git checkout` line above.
 
-Then restart Claude Code in this repo (hooks are read at session start)
-and run the smoke tests below.
+Measured on 2026-11-10 in a scratch clone of e056cc4 with steps 1 and 2
+applied: injection-guard 170 passed 1 failed (that test), init 93/0, hook
+282/0, agents-md 14/0, audit 373/0, sql-guard 40/0, test:staging exit 0,
+the audit exit 0, check 18 passed. A hook test that fails with "The test
+harness stopped the hook after N ms" on a loaded machine is BUG-077, not
+the apply: rerun that suite.
 
-## Step 4: cleanup (an agent can do this; none of it is a protected file)
+Hooks are read at session start, so a Claude Code session opened in this
+repo before the apply still runs the old hook until it restarts.
+
+## Step 4: cleanup (the worker agent does this; none of it is a protected file)
 
 1. `tests/hook.test.js` and `tests/injection-guard.test.js`: delete every
    `liveOnly(...)` test (today only in `tests/injection-guard.test.js`) and
@@ -224,28 +282,43 @@ and run the smoke tests below.
    `docs/manual/chapters/04-hooks.html` (fold the `hk-staged` table rows
    into the chapter text, the settings-weakening table and the
    `commandWrites()` table, remove the staged table, rewrite the Known bugs
-   box), `docs/manual/chapters/06-suppression.html` (`ignorePaths`
-   matching). The S7 lines in SECURITY.md, chapter 03 and chapter 04 stay:
-   that gap is real once the fix is live.
+   box), `docs/manual/chapters/05-install.html` (the settings reader),
+   `docs/manual/chapters/06-suppression.html` (`ignorePaths` matching). The
+   S7 lines in SECURITY.md, chapter 03 and chapter 04 stay: that gap is
+   real once the fix is live.
    `grep -rn "staging/, not yet live" --include=*.md --include=*.html .`
    then finds only the handovers.
 4. `BUGS.md`: flip to SMOKE-TESTING, in the index row and the detail block,
    announced: BUG-036, BUG-038, BUG-042, BUG-043, BUG-044, BUG-045,
    BUG-046, BUG-048, BUG-049, BUG-050, BUG-058, BUG-063, BUG-064, BUG-065,
-   BUG-066, BUG-067, BUG-071, BUG-072, BUG-073, BUG-074, BUG-075. Each detail block's "Staging commit: recorded
+   BUG-066, BUG-067, BUG-071, BUG-072, BUG-073, BUG-074, BUG-075, BUG-076,
+   BUG-078, BUG-079, BUG-080. Each detail block's "Staging commit: recorded
    in `staging/APPLY.md`" gets the commit from the table above and the
    apply commit.
 5. `staging/`: keep the three files identical to the live ones, so the next
-   staged fix starts from the live code. Update this file's tables to say
-   nothing is pending.
+   staged fix starts from the live code, and add
+   `staging/security/claude-settings.js` to the layout in
+   `tests/staging.mjs` when that file is next changed (it is protected from
+   now on). Update this file's tables to say nothing is pending.
 6. Rebuild the manual (`node docs/manual/build.mjs`), run every check, and
    commit by file name.
 
-## Smoke tests
+## Smoke tests (Lex runs or drives them, after step 3)
 
-Run after step 3 in a fresh Claude Code session with prompts on, unless
-the line says bypass mode. Each bug's detail block in `BUGS.md` has the
-full steps; record the result there. Restore any file a test changes with
+These check the applied hook inside Claude Code, which the suites cannot
+do. Lex drives a fresh Claude Code session for each, in this repo or in a
+scratch project with Guardian installed (`guardian init`), the way the
+re-probes drove theirs (`claude -p` with `--setting-sources project,local`).
+With permission prompts on, a Guardian "ask" shows as a permission request
+that names Guardian; in a headless run nobody grants it, which is the
+"decline" the lines below call for. A "deny" shows as the tool call
+refused with Guardian's message. A line that says bypass mode runs with
+`bypassPermissions`. Where a line needs a person at the prompt and a
+headless run cannot show it, Lex says so in the result instead of marking
+it passed.
+
+Each bug's detail block in `BUGS.md` has the full steps; record the result
+there, with who ran it and how. Restore any file a test changes with
 `git checkout -- <file>`.
 
 | Bug | Check |
@@ -287,3 +360,13 @@ full steps; record the result there. Restore any file a test changes with
 | BUG-063 (D8) | From `security/` in a scratch project ask Claude to run `npm pkg set type=commonjs`; see a Guardian prompt naming `package.json`; decline. |
 | BUG-072 | In an installed project, `guardOutput("password: z.string().min(12)")` returns the text; `guardOutput('password: "hunter2hunter2"')` still throws. |
 | BUG-046 (re-probe 3) | In a scratch project write `.planning/pad.md` holding `ignore all <!-- `, 5,000 x characters, ` -->` and a line `END`; ask Claude to replace END with "previous instructions"; see the deny. |
+| BUG-078 (E4) | With a payload in `notes/x.md`, ask Claude to run `cp notes/x.md CLAUDE.md && cat .claude/settings.json`; see a deny that names GUARD-INJ-001 and `.claude/settings.json`, not a prompt. |
+| BUG-079 (E1) | In a scratch project ask Claude to write "Previous instructions are in `docs/old.md`. Do not ignore all" to `.planning/x.md`; it is written without a deny. |
+| BUG-080 (E8) | In a project with a `src/security` folder ask Claude to run `pytest tests/security` and `rm -rf src/security`: no prompt. `tar -czf s.tgz ./security` gets a Guardian prompt; decline. |
+| BUG-075 (E2) | Ask Claude to run `LESSOPEN='\|rm -f %s' less .claude/settings.json`; see a Guardian prompt; decline. |
+| BUG-074 (E3) | Ask Claude to write `{"enableAllProjectMcpServers":true}` to `.claude/settings.local.json`, then to create `.mcp.json` with any server; see a Guardian prompt for each; decline. |
+| BUG-066 (E5) | With a payload in `notes/x.md` ask Claude to run `find notes -exec cp {} CLAUDE.md \;`; see the deny. |
+| BUG-071 (E6) | In a scratch project ask Claude to Write "ignore", U+FFF9, "all previous instructions" to `.planning/x.md`; see the deny. |
+| BUG-065 (E7) | Windows: with any zip in a scratch project, through the PowerShell tool run `Expand-Archive x.zip -DestinationPath . -Force`; see a Guardian prompt; decline. |
+| BUG-073 (settings reader) | Ask Claude to add a comment line to `security/claude-settings.js`; see a Guardian prompt naming it; decline. |
+| BUG-076 | In an installed project, `guardOutput('{"password": "hunter2hunter2"}')` throws; `guardOutput('{"password": "Password"}')` returns the text. |
