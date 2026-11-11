@@ -2752,6 +2752,70 @@ describe("PreToolUse hook - enabling or defining an MCP server asks (re-probe 4,
 });
 
 // ---------------------------------------------------------------------------
+// Re-probe 4, E5 (BUG-066): find -exec copies are judged by what find matches
+// ---------------------------------------------------------------------------
+//
+// "find notes -exec cp {} CLAUDE.md \;" copies each file find matches. The
+// reader put the starting point in place of {}, which is a folder, so no
+// content was read and the payload landed in CLAUDE.md.
+
+describe("PreToolUse hook - find -exec copies are judged by content (re-probe 4, E5)", () => {
+  const run = (command, mode, extra = {}) => withTempProject((dir) => {
+    const files = { "notes/x.md": `${CRITICAL_PAYLOAD}\n`, "notes/clean.md": "Be terse.\n", "notes/sub/deep.txt": "plain\n", "src/a.js": "x\n", ...extra };
+    for (const [rel, text] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), text);
+    }
+    mkdirSync(path.join(dir, ".claude", "agents"), { recursive: true });
+    return runHook(PRE_HOOK, { tool_name: "Bash", cwd: dir, tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) });
+  });
+
+  for (const command of [
+    "find notes -name x.md -exec cp {} CLAUDE.md \\;",
+    "find notes -exec cp {} CLAUDE.md \\;",
+    "find notes -type f -exec cat {} + > CLAUDE.md",
+    "find notes -name '*.md' -exec cp {} .claude/agents/ \\;",
+    "find notes -name '*.md' -exec cat {} \\; >> AGENTS.md",
+    "find notes -type f -exec cp -t .claude/agents {} +",
+  ]) {
+    stagedOnly(`denied in both modes: ${command}`, () => {
+      for (const mode of [undefined, "bypassPermissions"]) {
+        const out = run(command, mode);
+        assert.equal(decisionOf(out), "deny", `${mode}: ${out.slice(0, 200)}`);
+        expectWarning(out, "GUARD-INJ-001");
+      }
+    });
+  }
+
+  stagedOnly("a find that matches more files than Guardian reads asks", () => {
+    const many = Object.fromEntries(Array.from({ length: 1005 }, (_, k) => [`big/f${k}.md`, "clean\n"]));
+    const out = run("find big -exec cp {} .claude/agents/ \\;", undefined, many);
+    assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+  });
+
+  // S10 must hold on a tree larger than Guardian reads.
+  test("a cleanup find over more than 1,000 files stays silent", () => {
+    const many = Object.fromEntries(Array.from({ length: 1005 }, (_, k) => [`big/f${k}.md`, "clean\n"]));
+    for (const command of ["find . -name '*.log' -exec rm {} \\;", "find . -type f -exec grep -l terse {} +", "find . -name '*.md' -exec cp {} backup/ \\;"]) {
+      expectSilent(run(command, "bypassPermissions", many));
+    }
+  });
+
+  for (const command of [
+    "find notes -name clean.md -exec cp {} CLAUDE.md \\;",
+    "find notes -name '*.txt' -exec cp {} .claude/agents/ \\;",
+    "find notes -type d -exec cp -r {} backup/ \\;",
+    "find notes -name '*.md' -exec grep -l terse {} +",
+    "find src -type f -exec cp {} backup/ \\;",
+    "find notes -type f > listing.txt",
+  ]) {
+    test(`silent: ${command}`, () => {
+      expectSilent(run(command, "bypassPermissions"));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

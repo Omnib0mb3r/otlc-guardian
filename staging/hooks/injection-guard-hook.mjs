@@ -327,12 +327,13 @@ function readSource(absPath) {
  * when `deep`, else the top level only. At most MAX_TREE_FILES; past that,
  * or when a subfolder cannot be listed, the list is marked `unjudged`
  * and a copy into a watched path fails closed (re-probe 2, S1). Links are
- * not followed. null when `absDir` is not a folder.
+ * not followed. null when `absDir` is not a folder. `quiet` leaves the
+ * notice to the caller.
  */
 const MAX_TREE_FILES = 1000;
 // A source marker: this folder's files were not all read.
 const UNJUDGED = "unjudged:";
-function treeFiles(absDir, deep) {
+function treeFiles(absDir, deep, quiet = false) {
   if (!statSync(absDir, { throwIfNoEntry: false })?.isDirectory()) return null;
   const files = [];
   const pending = [""];
@@ -351,7 +352,7 @@ function treeFiles(absDir, deep) {
       if (entry.isDirectory() && deep) pending.push(child);
       else if (entry.isFile()) files.push(child);
       if (files.length >= MAX_TREE_FILES) {
-        process.stderr.write(`${TAG} copy source ${absDir} holds more than ${MAX_TREE_FILES} files; the rest are not judged.\n`);
+        if (!quiet) process.stderr.write(`${TAG} copy source ${absDir} holds more than ${MAX_TREE_FILES} files; the rest are not judged.\n`);
         files.unjudged = true;
         return files;
       }
@@ -475,6 +476,17 @@ function findPathSamples(root) {
  * test there is tried against the folders that hold the project, which
  * Guardian cannot list (re-probe 3, D6). -fprint, -fprint0, -fprintf and
  * -fls write their file whatever matches.
+ *
+ * What a clause reads through {} is the files find matches, and those
+ * are on disk (re-probe 4, E5): each clause is also read once per regular
+ * file under the starting points (matchedFiles()), so "-exec cp {}
+ * CLAUDE.md ;" is judged by the content of those files, as "cp FILE
+ * CLAUDE.md" is. A -name or -iname test before the clause, not negated
+ * and outside parentheses, narrows the files; other tests do not, so the
+ * set read can be larger than the set find matches, never smaller.
+ *
+ * @returns {string[]} the sources whose content find writes to its
+ *   stdout (through -exec cat and the like), for a redirect after it
  */
 function findWrites(args, dir, ctx) {
   const first = args.findIndex((a) => /^[-(!]/.test(a));
@@ -488,7 +500,7 @@ function findWrites(args, dir, ctx) {
     if (/^-(?:exec|execdir|ok|okdir)$/.test(args[k])) {
       let end = args.findIndex((a, j) => j > k && (a === ";" || a === "+"));
       if (end < 0) end = args.length;
-      expr.push({ word: args[k], clause: args.slice(k + 1, end) });
+      expr.push({ word: args[k], clause: args.slice(k + 1, end), together: args[end] === "+" });
       k = end;
     } else expr.push({ word: args[k] });
   }
@@ -508,6 +520,33 @@ function findWrites(args, dir, ctx) {
     }
     return true;
   };
+  const out = [];
+  /** The regular files under the starting points that the tests before expr[i] can match. */
+  const matchedFiles = (i) => {
+    const names = [];
+    if (!grouped) {
+      let s = i;
+      while (s > 0 && !isOr(expr[s - 1])) s--;
+      for (let k = s; k < i - 1; k++) {
+        const negated = k > 0 && (expr[k - 1].word === "!" || expr[k - 1].word === "-not");
+        if (negated) continue;
+        if (expr[k].word === "-type" && expr[k + 1].word === "d") return { files: [], unjudged: false }; // folders only
+        if (FIND_NAME_TESTS.has(expr[k].word)) names.push(findGlob(expr[k + 1].word));
+      }
+    }
+    const files = [];
+    let unjudged = false;
+    for (const root of roots) {
+      const tree = treeFiles(ctx.abs(dir, root), true, true);
+      if (tree === null) {
+        if (statSync(ctx.abs(dir, root), { throwIfNoEntry: false })?.isFile()) files.push(root);
+        continue;
+      }
+      unjudged ||= Boolean(tree.unjudged);
+      for (const rel of tree) files.push(`${root.replace(/[\\/]+$/, "")}/${rel}`);
+    }
+    return { files: files.filter((f) => names.every((re) => re.test(f.slice(f.lastIndexOf("/") + 1)))), unjudged };
+  };
   expr.forEach((e, i) => {
     if (/^-(?:fprint0?|fprintf|fls)$/.test(e.word) && expr[i + 1]) ctx.add(dir, expr[i + 1].word);
     if (e.word === "-delete" && reaches(i)) for (const p of roots) ctx.add(dir, p);
@@ -515,7 +554,24 @@ function findWrites(args, dir, ctx) {
     // A clause that cannot reach a guarded file still writes the paths it spells out.
     const reach = reaches(i);
     for (const root of reach ? roots : ["{}"]) commandWrites(e.clause.map((a) => (reach ? a.split("{}").join(root) : a)), dir, ctx);
+    if (!e.clause.some((a) => a.includes("{}"))) return;
+    // The same clause on the files find matches (re-probe 4, E5).
+    const { files, unjudged } = matchedFiles(i);
+    const runs = e.together
+      ? [e.clause.flatMap((a) => (a === "{}" ? files : [a]))]
+      : files.map((file) => e.clause.map((a) => a.split("{}").join(file)));
+    for (const words of files.length > 0 ? runs : []) out.push(...commandWrites(words, dir, ctx).out);
+    if (unjudged) {
+      // Files past the cap were not read: what the clause writes is marked
+      // unjudged, so a copy into a watched path fails closed (as in S1).
+      // {} stays as it is: it stands for a file that was not read, never
+      // for the starting point, which "rm {}" would then seem to remove.
+      const marker = `${UNJUDGED}${ctx.abs(dir, roots[0])}`;
+      const marked = { ...ctx, add: (d, p, sources = [], append = false) => ctx.add(d, p, [...sources, marker], append) };
+      commandWrites(e.clause, dir, marked);
+    }
   });
+  return out;
 }
 
 // npm commands that rewrite package.json.
@@ -1537,7 +1593,8 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   } else if (name === "eval") {
     recurse(args.join(" "), dir);
   } else if (name === "find") {
-    findWrites(args, dir, ctx);
+    // What -exec cat and the like print is find's stdout (re-probe 4, E5).
+    return { dir, out: [...out, ...findWrites(args, dir, ctx)] };
   } else if (name === "tar") {
     tarWrites(args, dir, ctx);
   } else if (name === "unzip") {

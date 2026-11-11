@@ -227,6 +227,15 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **`find -exec` copies are judged by the files find matches (BUG-066,
+  re-probe 4 E5).** `find notes -exec cp {} CLAUDE.md \;` and `find notes
+  -type f -exec cat {} + > CLAUDE.md` put a payload into `CLAUDE.md`
+  silently: the reader put the starting folder in place of `{}`, so no
+  content was read. Each clause is now also read once per file under the
+  starting points (narrowed by a `-name` test before it), through the
+  same readers as a typed `cp` or `cat`, and what the clauses print is
+  find's output for a redirect. More than 1,000 files asks.
+
 - **Enabling or defining an MCP server asks (BUG-074, re-probe 4 E3).** A
   stdio MCP server is a command Claude Code starts with the session. A
   settings change that turns on `enableAllProjectMcpServers`, adds a name
