@@ -1169,4 +1169,8 @@ Re-probe 4, U8 (`C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af
 
 Smoke test after applying: in a project with a `src/security` folder ask Claude to run `pytest tests/security` and `rm -rf src/security` (no prompt), then `tar -czf s.tgz ./security` (a Guardian prompt; decline).
 
+**Lex ruling on the pushback (2026-11-10): agreed, code stays as committed.** A quoted `'security'` inside inline code (`node -e`, `bun --eval`, `python -c`) keeps counting as guarded: those three forms really deleted the folder in re-probe 3, and a false ask on a harmless `print('security')` is the cheaper side. E8's bare-word rule holds for shell words only.
+
+**Open question for re-probe 5 to rule on (not changed).** `npx rimraf security` at the project root is silent: the word is a bare shell word, and `rimraf` is a program the readers do not parse, so neither the name check nor a reader sees that it deletes Guardian's `security` folder (the scanner, `security/package.json`, `security/claude-settings.js`). The same holds for any other deleter outside the readers' list given the bare word (`trash security`, `shx rm -rf security`). `rm`, `mv`, `chmod`, `git mv`, `Remove-Item` and `rd` are parsed and ask, and so do `./security` and `security/`. It is listed in SECURITY.md under "Commands that do not name a guarded file". Whether the bare word should count for some programs (and which), or the limit stands, is for the re-probe and Lex.
+
 <!-- DETAILS END -->
