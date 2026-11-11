@@ -964,6 +964,69 @@ const INLINE_WRITE_CALLS = [
   /\b(?:subprocess|child_process)\b|(?<![.\w$])(?:exec|execSync|execFile|execFileSync|spawn|spawnSync|system|popen|proc_open|shell_exec|passthru)\s*\(|\bos\.(?:system|popen|exec\w*|spawn\w*)\s*\(/,
 ];
 const ROOT_WORD = /^(?:[\\/]+|[A-Za-z]:[\\/]*)$/;
+
+// Python calls that unpack an archive (re-probe 4, E7). An archive can
+// hold .claude/settings.local.json or a CLAUDE.md, so unpacking one
+// writes the folder it unpacks into, as unzip and tar -x do. "extract"
+// and "extractall" are also methods of other things (pandas, re), so
+// they count only in code that names an archive module.
+const PY_ARCHIVE_MODULE = /\b(?:zipfile|tarfile|ZipFile|TarFile)\b/;
+const PY_ARCHIVE_CALLS = [
+  { call: /\.extractall\s*\(/g, dest: 0, needsModule: true },
+  { call: /\.extract\s*\(/g, dest: 1, needsModule: true },
+  { call: /\bunpack_archive\s*\(/g, dest: 1, needsModule: false },
+];
+
+/** The arguments of the call whose "(" ends at `open`, split at top-level commas. */
+function callArguments(code, open) {
+  const parts = [];
+  let depth = 1;
+  let start = open;
+  let quote = null;
+  for (let i = open; i < code.length && i < open + 2000; i++) {
+    const ch = code[i];
+    if (quote) {
+      if (ch === "\\") i++;
+      else if (ch === quote) quote = null;
+    } else if (ch === "'" || ch === '"') quote = ch;
+    else if ("([{".includes(ch)) depth++;
+    else if (")]}".includes(ch) && --depth === 0) {
+      parts.push(code.slice(start, i));
+      return parts.map((p) => p.trim()).filter((p, k, all) => p !== "" || all.length > 1);
+    } else if (ch === "," && depth === 1) {
+      parts.push(code.slice(start, i));
+      start = i + 1;
+    }
+  }
+  return null; // no closing parenthesis in reach
+}
+
+/**
+ * The folders a python command unpacks an archive into: the destination
+ * when it is a quoted literal, else the working folder, which is the
+ * default and the safe reading of an expression this cannot evaluate.
+ */
+function archiveDestinations(args, code) {
+  const dests = [];
+  // python -m zipfile -e ARCHIVE DIR; python -m tarfile -e ARCHIVE [DIR]
+  const m = args.indexOf("-m");
+  if (m >= 0 && /^(?:zipfile|tarfile)$/.test(args[m + 1] ?? "")) {
+    const e = args.findIndex((a, k) => k > m + 1 && /^(?:-e|--extract)$/.test(a));
+    if (e >= 0) dests.push(args[e + 2] ?? ".");
+  }
+  const namesModule = PY_ARCHIVE_MODULE.test(code);
+  for (const { call, dest, needsModule } of PY_ARCHIVE_CALLS) {
+    if (needsModule && !namesModule) continue;
+    for (const hit of code.matchAll(call)) {
+      const given = callArguments(code, hit.index + hit[0].length);
+      const named = given?.find((a) => /^(?:path|extract_dir)\s*=/.test(a));
+      const arg = (named ?? given?.[dest])?.replace(/^[a-z_]+\s*=\s*/, "");
+      const literal = /^(['"])(.*)\1$/.exec(arg ?? "");
+      dests.push(arg === undefined ? "." : literal ? literal[2] || "." : ".");
+    }
+  }
+  return dests;
+}
 // The guarded files and the folders that hold them, as path endings.
 // Matched by ending because the shell reader does not know the project
 // root; the folders are named so "." or ".." never count.
@@ -1471,6 +1534,11 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
         if (/^move$/i.test(m[1])) add(cwd, paths[0]);
       } else for (const p of paths) add(cwd, p);
     }
+    // [IO.Compression.ZipFile]::ExtractToDirectory('a.zip', 'dir') unpacks into dir (re-probe 4, E7).
+    for (const m of command.matchAll(DOTNET_ZIP_EXTRACT)) {
+      const literal = /^(['"])(.*)\1$/.exec(callArguments(command, m.index + m[0].length)?.[1] ?? "");
+      add(cwd, literal ? literal[2] || "." : ".");
+    }
   }
 
   let dir = cwd;
@@ -1637,6 +1705,7 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     for (const p of pathLikeWords(code)) {
       if (!ROOT_WORD.test(p) && (writes || namesGuardFile(abs(dir, p)))) add(dir, p);
     }
+    for (const dest of archiveDestinations(args, code)) add(dir, dest);
   } else if (COPY_COMMANDS.has(name)) {
     const t = args.findIndex((a) => a === "-t" || a === "--target-directory");
     const inline = args.find((a) => a.startsWith("--target-directory="));
@@ -1838,6 +1907,7 @@ const PS_PARAMS = {
   "invoke-webrequest": { params: WEB_PARAMS, aliases: {} },
   "invoke-restmethod": { params: [...WEB_PARAMS, "statuscodevariable", "responseheadersvariable", "followrellink", "maximumfollowrellink"], aliases: {} },
   "invoke-expression": { params: ["command"], aliases: {} },
+  "expand-archive":    { params: ["path", "literalpath", "destinationpath", "force", "passthru"], aliases: LITERAL_ALIASES },
 };
 PS_PARAMS["add-content"] = PS_PARAMS["set-content"];
 const PS_CMDLET_ALIASES = {
@@ -1867,6 +1937,7 @@ function psParam(cmdlet, typed) {
 }
 const PS_DOWNLOADERS = new Set(["invoke-webrequest", "iwr", "invoke-restmethod", "irm", "curl", "wget"]);
 const PS_EVALUATORS  = new Set(["invoke-expression", "iex"]);
+const DOTNET_ZIP_EXTRACT = /\[(?:system\.)?io\.compression\.zipfile(?:extensions)?\]::extracttodirectory\s*\(/gi;
 const DOTNET_FILE_WRITE = /\[(?:system\.)?io\.file\]::((?:write|append|create|delete|copy|move|replace)\w*)\s*\(([^)]*)\)/gi;
 
 /**
@@ -1934,6 +2005,10 @@ function powershellWrites(name, args, dir, ctx, stdin) {
     if (PS_MOVERS.has(name)) for (const src of sources) add(dir, src);
   } else if (PS_REMOVERS.has(name)) {
     for (const p of [...(named.get("path") ?? []), ...(named.get("literalpath") ?? []), ...positional]) add(dir, p);
+  } else if (name === "expand-archive") {
+    // What the archive holds lands in -DestinationPath, the working
+    // folder by default, as with unzip (re-probe 4, E7).
+    add(dir, psPaths(args, name, ["destinationpath"], 1)[0] ?? ".");
   } else if (PS_RENAMERS.has(name)) {
     const [target] = psPaths(args, name, ["path", "literalpath"], 0);
     const [newName] = psPaths(args, name, ["newname"], 1);

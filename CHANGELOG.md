@@ -227,6 +227,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Unpacking an archive with `Expand-Archive` or Python asks where
+  `unzip` and `tar` do (BUG-065, re-probe 4 E7).** An archive can hold
+  `.claude/settings.local.json` and a `CLAUDE.md`. `Expand-Archive
+  evil.zip -DestinationPath . -Force` and `python -c "...
+  zipfile.ZipFile('evil.zip').extractall('.')"` wrote both silently. The
+  readers now take `Expand-Archive`, `ZipFile.ExtractToDirectory`,
+  Python's `extractall`, `extract` and `shutil.unpack_archive`, and
+  `python -m zipfile -e` / `-m tarfile -e` as a write of the folder
+  unpacked into, so the project root asks and `build/` does not.
+
 - **Invisible characters are defined by Unicode property (BUG-071,
   re-probe 4 E6).** The strip set was a list, and format characters
   outside it split a pattern unseen: U+1BCA0 to U+1BCA3, U+1D173 to

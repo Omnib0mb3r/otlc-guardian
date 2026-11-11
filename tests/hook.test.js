@@ -2816,6 +2816,72 @@ describe("PreToolUse hook - find -exec copies are judged by content (re-probe 4,
 });
 
 // ---------------------------------------------------------------------------
+// Re-probe 4, E7 (BUG-065): archive extraction outside unzip and tar
+// ---------------------------------------------------------------------------
+//
+// An archive can hold .claude/settings.local.json and a CLAUDE.md. unzip
+// and tar -x ask when they extract into a folder that holds Guardian's
+// files; Expand-Archive and Python's zipfile, tarfile and shutil did not.
+
+describe("PreToolUse hook - archive extraction asks where unzip and tar do (re-probe 4, E7)", () => {
+  const run = (tool, command, { sub = "", mode } = {}) => withTempProject((dir) => {
+    for (const rel of [".claude/settings.json", "security/01-injection-guard.js", "src/a.js", "evil.zip", "evil.tar", "build/x.txt"]) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), rel.endsWith(".json") ? "{}" : "x\n");
+    }
+    return runHook(PRE_HOOK, { tool_name: tool, cwd: path.join(dir, sub), tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) },
+      { CLAUDE_PROJECT_DIR: dir });
+  });
+
+  // Controls: what unzip and tar already do in the staged hook (BUG-065).
+  for (const command of ["unzip -o evil.zip", "tar -xf evil.tar"]) {
+    stagedOnly(`asks (as before): ${command}`, () => {
+      assert.equal(decisionOf(run("Bash", command)), "ask");
+    });
+  }
+
+  for (const [tool, command, sub] of [
+    ["PowerShell", "Expand-Archive evil.zip -DestinationPath . -Force"],
+    ["PowerShell", "Expand-Archive -Path evil.zip -Force"],
+    ["PowerShell", "Expand-Archive -LiteralPath evil.zip -DestinationPath .claude"],
+    ["PowerShell", "Expand-Archive ..\\evil.zip -DestinationPath .. -Force", "src"],
+    ["PowerShell", "[System.IO.Compression.ZipFile]::ExtractToDirectory('evil.zip', '.')"],
+    ["Bash", `python -c "import zipfile; zipfile.ZipFile('evil.zip').extractall('.')"`],
+    ["Bash", `python -c "import zipfile; zipfile.ZipFile('evil.zip').extractall()"`],
+    ["Bash", `python -c "import zipfile; zipfile.ZipFile('evil.zip').extract('.claude/settings.local.json')"`],
+    ["Bash", `python -c "import tarfile; tarfile.open('evil.tar').extractall(path='.')"`],
+    ["Bash", `python -c "import shutil; shutil.unpack_archive('evil.zip', '.')"`],
+    ["Bash", `python -c "import shutil; shutil.unpack_archive('evil.zip')"`],
+    ["Bash", `python3 -c "import zipfile, sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" evil.zip .`],
+    ["Bash", "python -m zipfile -e evil.zip ."],
+    ["Bash", "python -m tarfile -e evil.tar"],
+    ["Bash", `python -c "import zipfile; zipfile.ZipFile('../evil.zip').extractall('..')"`, "src"],
+  ]) {
+    stagedOnly(`asks${sub ? ` from ${sub}/` : ""}: ${command}`, () => {
+      const out = run(tool, command, { sub });
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    });
+  }
+
+  for (const [tool, command, sub] of [
+    ["PowerShell", "Expand-Archive evil.zip -DestinationPath build"],
+    ["Bash", `python -c "import zipfile; zipfile.ZipFile('evil.zip').extractall('build')"`],
+    ["Bash", `python -c "import shutil; shutil.unpack_archive('evil.zip', 'build/out')"`],
+    ["Bash", "python -m zipfile -e evil.zip build"],
+    ["Bash", "python -m zipfile -l evil.zip"],
+    ["Bash", `python -c "import zipfile; print(zipfile.ZipFile('evil.zip').namelist())"`],
+    ["Bash", `python -c "import re; print(re.compile('a').pattern); print('x'.split('.'))"`],
+    ["Bash", `python -c "import pandas as pd; print(pd.Series(['a1']).str.extract('(\\d)'))"`],
+    ["PowerShell", "Expand-Archive ..\\evil.zip -DestinationPath .", "src"],
+  ]) {
+    // Staged only: the live hook denies read-only inline code in bypass mode (BUG-044).
+    stagedOnly(`silent${sub ? ` from ${sub}/` : ""}: ${command}`, () => {
+      expectSilent(run(tool, command, { sub, mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 
