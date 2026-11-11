@@ -841,6 +841,13 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
   `innerHTML +=`, which is the same XSS sink. `=` and `+=` now fire and
   a comparison does not.
 
+- **SEC-001b needs the key to start a word (BUG-083, audit half).** The
+  legacy OpenAI pattern had no left boundary, so `task-`, `disk-` or
+  `risk-` followed by 20 letters and digits (a job id) was reported
+  CRITICAL as a hardcoded key. The audit rule now requires `sk-` at the
+  start of a word. The runtime pattern `GUARD-SEC-001b` is unchanged
+  until the staged scanner can be edited.
+
 - **DEP-002 can fire (BUG-039).** A bare `.env` has no extension, so the
   walker never collected it and the committed-`.env` check never ran.
   `collectFiles()` now keeps a `.env` by name, for DEP-002 only (the

@@ -2214,10 +2214,22 @@ describe("Rules with no prior test: bad sample fires, good sample is silent", ()
     });
   }
 
-  // BUG-083: the pattern has no left boundary, so any word ending in "sk-" fires.
-  knownBug("BUG-083", "SEC-001b is silent on a task id (task-<32 hex>)", () => {
-    assert.ok(!auditFires({ "src/job.js": `const job = "task-${"550e8400e29b41d4" + "a716446655440000"}";\n` }, "SEC-001b"));
-  });
+  // BUG-083: the pattern had no left boundary, so any word ending in "sk-" fired.
+  const hex32 = "550e8400e29b41d4" + "a716446655440000";
+  for (const word of ["task", "disk", "risk"]) {
+    test(`SEC-001b is silent on an id that starts ${word}- (${word}-<32 hex>)`, () => {
+      assert.ok(!auditFires({ "src/job.js": `const job = "${word}-${hex32}";\n` }, "SEC-001b"));
+    });
+  }
+  for (const [label, before] of [
+    ["after a space (Bearer sk-...)", `const auth = "Bearer `],
+    ["after an equals sign (KEY=sk-...)", `const line = "OPENAI_API_KEY=`],
+    ["after a colon", `const pair = "key:`],
+  ]) {
+    test(`SEC-001b fires on a legacy key ${label}`, () => {
+      assert.ok(auditFires({ "src/k.js": `${before}${"sk-" + "a1B2c3D4e5".repeat(3)}";\n` }, "SEC-001b"));
+    });
+  }
 
   // BUG-040: the pattern had no word boundary, so `retrieval(` fired.
   test("INJ-001 (eval) is silent on a function whose name ends in 'eval'", () => {

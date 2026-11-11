@@ -94,7 +94,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-080 | IN-PROGRESS | Staged hook only: false asks on folders that are not Guardian's (`pytest tests/security`, `rm -rf src/security`, `rm -rf src/.claude`, `pytest -k security`) |
 | BUG-081 | OPEN | Audit walks every checkout under `.claude/worktrees/`, so each finding is reported once per worktree (bridger-base-camp: 95 extra `SEC-005`) |
 | BUG-082 | SMOKE-TESTING | Audit `INJ-002` (innerHTML) fires on a comparison (`a.innerHTML === b.innerHTML`) and misses `innerHTML +=` |
-| BUG-083 | OPEN | Audit `SEC-001b` (legacy OpenAI key) fires on any word ending in `sk-` plus 20 alphanumerics, e.g. `task-<32 hex>` |
+| BUG-083 | IN-PROGRESS | Audit `SEC-001b` (legacy OpenAI key) fires on any word ending in `sk-` plus 20 alphanumerics, e.g. `task-<32 hex>` |
 
 <!-- INDEX END -->
 
@@ -1202,12 +1202,16 @@ Smoke test: run the audit on a project with front-end code and confirm an `inner
 
 ### BUG-083: Audit `SEC-001b` fires on any word ending in `sk-` plus 20 alphanumerics
 
-**Status:** OPEN · **Found:** 2026-11-10
+**Status:** IN-PROGRESS · **Found:** 2026-11-10
 
 Found by the silent sample for SEC-001b (gate plan step 0 item 2).
 
 - The pattern is `/sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}/` with no left boundary, so `const job = "task-550e8400e29b41d4a716446655440000";` is reported CRITICAL as a hardcoded OpenAI key. The same holds for `disk-`, `risk-`, `mask-` and `desk-` followed by 20 or more letters and digits.
 - The runtime twin `GUARD-SEC-001b` in `security/01-injection-guard.js` has the same pattern, so `guardOutput()` and the hook's secret scan take the same text for a key. That file is protected and its fix goes through `staging/`, which is frozen while Lex runs re-probe 5.
 - The sample is kept as a known-bug test (`knownBug("BUG-083", ...)`) in `tests/audit.test.js`.
+
+**Audit half fixed (2026-11-10); runtime half waits on staging.** SEC-001b in `security/03-audit.js` is `/(?<![a-zA-Z0-9])sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}/`: the key must start a word. The id, severity and description are unchanged, and the `SECRET_PARITY` sample still fires. Tests in `tests/audit.test.js`: the known-bug test became three real tests (`task-`, `disk-`, `risk-` plus 32 hex digits, silent), with three firing tests for a key after a space, an equals sign and a colon; the three silent tests failed before the fix, all pass after (403 passed, 0 failed, 0 known). Docs: manual chapters 01 and 02, CHANGELOG.
+
+Still open, which is why the status stays IN-PROGRESS: the runtime pattern `GUARD-SEC-001b` in `security/01-injection-guard.js` (and its copies in `staging/security/01-injection-guard.js` and `security/injection_guard.py`) has no left boundary either. The scanner is a protected file and `staging/` is frozen for re-probe 5, so none of the three was changed; the same boundary goes into staging and the Python port together once Lex names the re-probe report. Until then the audit and the runtime differ on `task-<32 hex>`: the audit is silent, `guardOutput()` still throws.
 
 <!-- DETAILS END -->

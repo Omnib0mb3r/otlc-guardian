@@ -1442,7 +1442,8 @@ const AUDIT_RULES = [
   {
     id: "SEC-001b", category: "Secrets", severity: "CRITICAL",
     description: "Hardcoded OpenAI API key (legacy sk- format)",
-    pattern: /sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}/,
+    // The key starts a word: task-, disk- and risk- ids are not keys (BUG-083).
+    pattern: /(?<![a-zA-Z0-9])sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}/,
     fileTypes: SECRET_FILE_EXTS,
   },
   {
