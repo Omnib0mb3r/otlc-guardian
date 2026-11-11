@@ -1273,6 +1273,10 @@ Limit that stays, for Lex to confirm: a command string sent to a file by a readi
 
 Scope of (b), confirmed by Lex (2026-11-11): the comment is blanked for the bare word only. A guarded path spelled out in a comment (`rm -rf build # see .claude/hooks`) still asks, because the path reading runs over the whole command text and stays the backstop for anything the reader misplaces.
 
+**F1b, confirmed by Lex (2026-11-11).** The redirect tightening is confirmed: the exemption for a reading command that writes an ordinary file holds only when that file is not named again in the command, so `echo "rm -rf security" > x.sh && sh x.sh` asks. The limit above is confirmed as a stated limit: a command string written to a file and run by a later, separate command is not seen, as with the Write tool. SECURITY.md ("Commands that do not name a guarded file", Not seen) and manual chapter 04 (`hk-blind`) say so.
+
+Smoke test after applying (F1b): at the root of a scratch project with Guardian installed, in bypass mode, ask Claude to run `echo "## Security notes" >> README.md`, `git tag -a v1 -m "security release"` and `npm run security` (no prompt for any), then `npx rimraf security` (denied with Guardian's message).
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10
@@ -1369,5 +1373,7 @@ Cost: a comment or a heredoc inside an array assignment (`x=( a # first` on one 
 Limit that stays: PowerShell here-strings (`@'` to `'@`) are read as ordinary quotes. No silent form was found (a here-string body with one quote in it leaves the next line starting with a quoted word, which is not a read-only command), but it is not modelled.
 
 Smoke test after applying: in a scratch project ask Claude to run the three lines `cat <<EOF`, `$(rm -rf .claude/hooks)`, `EOF` as one Bash command (a Guardian prompt; decline).
+
+**Confirmed by Lex (2026-11-11).** The cost and the limit above are confirmed as written. So is the ask the worker added on its own judgment: a command the reader could not place for certain asks when it names a watched file too, so a copy behind such a form (`(( # )) ; cp notes/x.md CLAUDE.md`) is confirmed by a person. Her reason is the S1 precedent: what is not judged asks.
 
 <!-- DETAILS END -->

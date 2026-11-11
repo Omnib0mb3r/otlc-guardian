@@ -16,7 +16,8 @@ hook still asks a person before its own files change.
 
 Written 2026-11-10 at the end of the 1.5.0 fix run; updated the same day for
 the second re-probe (S1 to S12), the third (D1 to D9) and the fourth (E1 to
-E8), and turned into Lex's runbook.
+E8), and turned into Lex's runbook; updated on 2026-11-11 for the fifth
+(F1 to F7, then F1b and F3b) and for BUG-083 and BUG-085.
 
 ## Preconditions
 
@@ -31,9 +32,9 @@ E8), and turned into Lex's runbook.
 
 | Staged file | Live file | Size of the change |
 |---|---|---|
-| `staging/hooks/injection-guard-hook.mjs` | `.claude/hooks/injection-guard-hook.mjs` | 1,896 lines added, 183 removed |
+| `staging/hooks/injection-guard-hook.mjs` | `.claude/hooks/injection-guard-hook.mjs` | 2,566 lines added, 202 removed |
 | `staging/hooks/web-content-guard.mjs` | `.claude/hooks/web-content-guard.mjs` | 26 added, 21 removed |
-| `staging/security/01-injection-guard.js` | `security/01-injection-guard.js` | 431 added, 59 removed |
+| `staging/security/01-injection-guard.js` | `security/01-injection-guard.js` | 433 added, 60 removed |
 | (edit) | `.claude/settings.json` (this repo only) | both hook commands anchored, web guard matcher widened |
 
 Already live, not part of this apply:
@@ -43,9 +44,11 @@ Already live, not part of this apply:
   is, since 1f3c318. Once the staged hook is live this file is guarded like
   the scanner, and later changes to it go through `staging/security/`.
 - The Python port `security/injection_guard.py`: the BUG-043, BUG-071,
-  BUG-072, BUG-076 and BUG-079 rule changes.
+  BUG-072, BUG-076, BUG-079 and BUG-083 rule changes.
 - The audit: the half of BUG-038, the AGT rules (BUG-002), SEC-005 and
-  SEC-006 with a quoted key (BUG-076).
+  SEC-006 with a quoted key (BUG-076), `.claude/worktrees/` left out
+  (BUG-081), INJ-002 reading an assignment (BUG-082) and SEC-001b needing
+  the key to start a word (BUG-083).
 - `guardian check` reading settings value types (BUG-073).
 
 Bugs fixed by the staged files, with the commit that staged each fix. Each
@@ -101,6 +104,17 @@ re-probe items are paragraphs naming Sn, Dn or En.
 | BUG-065 (E7) | abdb0a2 | hook | `Expand-Archive` and Python archive extraction ask like `unzip` |
 | BUG-073 | 58e7b00 | hook | settings types imported from `security/claude-settings.js`, which is guarded |
 | BUG-076 | e056cc4 | scanner | a quoted key (`"password": "..."`) is still a password or API key |
+| BUG-080 (F1) | 6090de2 | hook | the bare word `security` counts where it can reach a program |
+| BUG-080 (F2) | a755877 | hook | the guarded-name resolver fails closed: Git Bash drive paths, any character and quoted spaces in a path |
+| BUG-075 (F3) | b00cf1c | hook | a guarded folder followed by `/.` or `/x/..` is found |
+| BUG-066 (F4) | 642e1f1 | hook | `find` output past 1,000 files into a watched file asks |
+| BUG-065 (F5) | 3d2c8c0 | hook | keyword, stdin-script, wrapper and `$PWD` extraction forms ask |
+| BUG-084 (F6) | e3108d2 | hook | without `CLAUDE_PROJECT_DIR` the project root is found upward |
+| BUG-074 (F7) | d4281f4 | hook | `claude mcp add` for the project scope asks |
+| BUG-083 | 99a82f7 | scanner | `GUARD-SEC-001b` needs the key to start a word |
+| BUG-085 | 7b371ff | hook | text the shell runs is never dropped by the reader; a command it cannot place for certain asks |
+| BUG-080 (F1b) | a2f07e7 | hook | the bare word `security` is text in a message, a comment, a script name and a write to an ordinary file |
+| BUG-075 (F3b) | 4085f23 | hook | a folder strictly above the project root asks unless the command only reads |
 
 Documented, not fixed: an obfuscated payload moved out of a code fence
 (BUG-042, S7, f5ecc42) and `xargs cp` (S5); both are in SECURITY.md,
@@ -121,8 +135,42 @@ Behavior a user will notice after the apply:
   `security` folders of this project) asks unless it only reads, so `cp`,
   `tar -cf`, `jq ... > file` and `node --check` of them ask (D1). A folder
   of the same name elsewhere (`src/security`, `tests/security`,
-  `src/.claude`) does not, and neither does the word `security` as a test
-  filter (E8). Use the Read tool, `cat` or `jq` to read Guardian's files.
+  `src/.claude`) does not (E8). Use the Read tool, `cat` or `jq` to read
+  Guardian's files.
+- The word `security` on its own at the project root is Guardian's folder
+  when a program is handed it: `npx rimraf security` asks (F1). It is
+  text, and silent, in a stage that only reads, in a test runner's stage
+  (`pytest -k security`), in a message or title of git and gh, in a
+  comment, as the script name of `npm run`, and in what a reading command
+  sends to an ordinary file (`echo "## Security notes" >> README.md`)
+  (F1, F1b). Inline code that carries the word still asks there
+  (`python -c "print('security')"`).
+- Guardian's files are found in more spellings: a Git Bash drive path
+  (`/c/.../.claude/hooks`), a path with `@`, `+` or a quoted space in it,
+  a project whose own folder name has a space (F2), and a guarded folder
+  followed by `/.` or `/x/..` (F3).
+- A command given a folder strictly above the project root asks unless it
+  only reads: `npx rimraf ..` at the root, and with it `docker build ..`,
+  `cp src/a.js ..` and `git add ..` (F3b). A session whose project root is
+  one package of a larger repository will meet this. The project root
+  itself is not judged (`npx prettier --write .`, `npx rimraf .`).
+- `find` output past 1,000 files, redirected or piped into a watched
+  file, asks (F4).
+- More archive forms ask: `extractall(filter='data')`, a script given on
+  stdin, an extraction started through `uv run`, `poetry run` or
+  `pipx run`, and a destination spelled `$PWD` (F5).
+- Without `CLAUDE_PROJECT_DIR` the hook takes the nearest folder upward
+  that holds `.claude` or `.git` as the project root, the home folder
+  passed over (F6, BUG-084).
+- `claude mcp add`, `add-json`, `add-from-claude-desktop` and `remove`
+  with `-s project` ask (F7).
+- Text the shell runs inside an unquoted heredoc or `$'...'` is read. A
+  command that names a guarded or a watched file and holds a `#` or `<<`
+  inside brackets (`(( # ))`, `${x/ #/y}`) asks, because the reader
+  cannot place it for certain (BUG-085).
+- `guardOutput` and `scan(..., "secrets")` no longer report `task-`,
+  `disk-` or `risk-` followed by 32 hex characters as an API key
+  (BUG-083).
 - `VAR=value` in front of a command that names one of those files asks,
   even `LC_ALL=C grep x .claude/settings.json` (E2).
 - Any settings change that adds a hook or another command (`statusLine`,
@@ -254,10 +302,11 @@ gone, and step 4 removes it. Its summary must read `Failed : 1` with that
 name under FAILURES. Any other failure, in that suite or another, means
 stop and roll back with the `git checkout` line above.
 
-Measured on 2026-11-10 in a scratch clone of e056cc4 with steps 1 and 2
-applied: injection-guard 170 passed 1 failed (that test), init 93/0, hook
-282/0, agents-md 14/0, audit 373/0, sql-guard 40/0, test:staging exit 0,
-the audit exit 0, check 18 passed. A hook test that fails with "The test
+Measured on 2026-11-11 in a scratch clone of 4085f23 with steps 1 and 2
+applied: injection-guard 175 passed 1 failed (that test), init 93/0, hook
+283/0, agents-md 14/0, audit 407/0, sql-guard 40/0, test:staging exit 0
+(staged injection-guard 288/0, staged hook 1009/0), the audit exit 0,
+check 18 passed. A hook test that fails with "The test
 harness stopped the hook after N ms" on a loaded machine is BUG-077, not
 the apply: rerun that suite.
 
@@ -292,7 +341,7 @@ repo before the apply still runs the old hook until it restarts.
    announced: BUG-036, BUG-038, BUG-042, BUG-043, BUG-044, BUG-045,
    BUG-046, BUG-048, BUG-049, BUG-050, BUG-058, BUG-063, BUG-064, BUG-065,
    BUG-066, BUG-067, BUG-071, BUG-072, BUG-073, BUG-074, BUG-075, BUG-076,
-   BUG-078, BUG-079, BUG-080. Each detail block's "Staging commit: recorded
+   BUG-078, BUG-079, BUG-080, BUG-083, BUG-084, BUG-085. Each detail block's "Staging commit: recorded
    in `staging/APPLY.md`" gets the commit from the table above and the
    apply commit.
 5. `staging/`: keep the three files identical to the live ones, so the next
@@ -365,8 +414,10 @@ there, with who ran it and how. Restore any file a test changes with
 | BUG-080 (E8) | In a project with a `src/security` folder ask Claude to run `pytest tests/security` and `rm -rf src/security`: no prompt. `tar -czf s.tgz ./security` gets a Guardian prompt; decline. |
 | BUG-080 (F1) | At the root of a scratch project with Guardian installed ask Claude to run `npx rimraf security`: a Guardian prompt naming security; decline. `pytest -k security` and `git commit --allow-empty -m "security: test"` get no prompt. |
 | BUG-080 (F2) | Windows, Git Bash: ask Claude to run `npx rimraf /c/<path to the project>/.claude/hooks`, then `npx rimraf x@/../security`: a Guardian prompt each; decline. |
+| BUG-080 (F1b) | Bypass mode, at the root of a scratch project with Guardian installed: `echo "## Security notes" >> README.md`, `git tag -a v1 -m "security release"` and `npm run security` get no prompt; `npx rimraf security` is denied with Guardian's message. |
 | BUG-075 (E2) | Ask Claude to run `LESSOPEN='\|rm -f %s' less .claude/settings.json`; see a Guardian prompt; decline. |
 | BUG-075 (F3) | Ask Claude to run `npx rimraf .claude/agents/..`; see a Guardian prompt; decline. |
+| BUG-075 (F3b) | At the root of a scratch project ask Claude to run `npx rimraf ..`; see a Guardian prompt that says "a folder above this project"; decline. In bypass mode `npx prettier --write .` and, from `src/`, `cmake ..` get no prompt. |
 | BUG-074 (E3) | Ask Claude to write `{"enableAllProjectMcpServers":true}` to `.claude/settings.local.json`, then to create `.mcp.json` with any server; see a Guardian prompt for each; decline. |
 | BUG-074 (F7) | Ask Claude to run `claude mcp add -s project e -- node -e 1`; see a Guardian prompt naming `.mcp.json`; decline. |
 | BUG-066 (E5) | With a payload in `notes/x.md` ask Claude to run `find notes -exec cp {} CLAUDE.md \;`; see the deny. |
@@ -377,3 +428,5 @@ there, with who ran it and how. Restore any file a test changes with
 | BUG-084 (F6) | Run the hook by hand with `CLAUDE_PROJECT_DIR` unset, `cwd` a project's `src` folder and a Write of `../.mcp.json` as the payload; the output is an ask. |
 | BUG-073 (settings reader) | Ask Claude to add a comment line to `security/claude-settings.js`; see a Guardian prompt naming it; decline. |
 | BUG-076 | In an installed project, `guardOutput('{"password": "hunter2hunter2"}')` throws; `guardOutput('{"password": "Password"}')` returns the text. |
+| BUG-083 | In an installed project, `guardOutput('const job = "task-550e8400e29b41d4a716446655440000";')` returns the text. |
+| BUG-085 | In a scratch project ask Claude to run, as one Bash command, the three lines `cat <<EOF`, `$(rm -rf .claude/hooks)`, `EOF`; see a Guardian prompt; decline. |
