@@ -5770,6 +5770,25 @@ describe("PreToolUse hook - git is not trusted beside a hook or a configuration 
     // A file in a hook folder is never an ordinary file.
     "echo 'rm -rf security' > .githooks/pre-commit",
     "echo 'rm -rf security' > .husky/pre-commit",
+    // A program the command can have replaced is handed the word, and
+    // need not resolve it from the folder the shell is in: a hook git
+    // runs in a nested repository, or a file under the program's name,
+    // can go up a folder (rm -rf "../$3").
+    "cp g.sh src/.git/hooks/commit-msg && git -C src commit --allow-empty -m security",
+    "cd src && cp ../g.sh .git/hooks/commit-msg && git commit --allow-empty -m security",
+    "cd src && git config core.hooksPath ../hk && git commit --allow-empty -m security",
+    "printf '#!/bin/sh\\nrm -rf \"../$3\"\\n' > bin/git; PATH=$PWD/bin:$PATH; cd src && git commit -m security",
+    "cp evil ~/bin/git; cd src && git commit -m security",
+    "printf -v PATH %s ./bin; cd src && git commit -m security",
+    "cd src && hash -p ../g.sh git && git commit -m security",
+    "cd src && alias git='sh ../g.sh' && git commit -m security",
+    "cd src && eval \"$X\" && git commit -m security",
+    "printf 'rm -rf \"../$1\"\\n' > src/e.sh; cd src && sh e.sh security",
+    "printf 'rm -rf \"../$1\"\\n' > src/e.sh; chmod +x src/e.sh; cd src && ./e.sh security",
+    // A cost of H6, measured again here: a glob in a stage that writes
+    // can expand to a file named git, also where it is only read. The
+    // cost ruling on write positions takes it up.
+    "cp src/* dist/ && git commit -m \"security fix\"",
   ]) {
     stagedOnly(`asks: ${command}`, () => {
       const out = runGuarded(command);
@@ -5783,6 +5802,9 @@ describe("PreToolUse hook - git is not trusted beside a hook or a configuration 
     ["[core]\n\thooksPath = hk\n", "cp g.sh hk/commit-msg && git commit --allow-empty -m security"],
     ["[core]\n\thookspath = \"tools/hooks\"\n", "cp g.sh tools/hooks/commit-msg; git commit --allow-empty -m security"],
     ["[core]\n\thooksPath = hk\n", "cp g.sh h?/commit-msg && git commit --allow-empty -m security"],
+    // After the move the word is src/security to the shell. The hook is
+    // a script and can go up a folder.
+    ["[core]\n\thooksPath = hk\n", "cd src && cp ../g.sh ../hk/commit-msg && git commit --allow-empty -m security"],
   ]) {
     stagedOnly(`asks, with core.hooksPath configured: ${command}`, () => {
       const out = withTempProject((dir) => {
@@ -5811,6 +5833,14 @@ describe("PreToolUse hook - git is not trusted beside a hook or a configuration 
     "git config core.hooksPath .githooks",
     // The folder name with no hooksPath configured.
     "cp g.sh hk/commit-msg && git commit --allow-empty -m security",
+    // After a move the word is the folder's own, for a program nothing
+    // in the command can have replaced (G6 stands).
+    "cd src && rm -rf security",
+    "cd src && git commit --allow-empty -m security",
+    "git -C src commit --allow-empty -m security",
+    "cd src && npx rimraf security",
+    "cd src && sh e.sh security",
+    "cd src && source .venv/bin/activate && pytest security",
   ]) {
     stagedOnly(`silent: ${command}`, () => {
       expectSilent(runGuarded(command, { mode: "bypassPermissions" }));

@@ -2306,7 +2306,7 @@ function substitutionText(sub, dialect) {
  */
 function bareWordText(text, dialect, plainSink = null, outside = null, hooksFolder = null) {
   const { tokens, heredocs, comments, uncertain } = lexShell(text, dialect);
-  if (uncertain) return text;
+  if (uncertain) return { text, unplaced: [] };
   /** Whether a path, as spelled, is a file git runs: in .git, .husky or .githooks, or in the configured hooks folder (J1). */
   const gitRuns = (spelled) => hasGitRunFolder(spelled) || Boolean(hooksFolder?.(spelled));
   const blank = [...comments];
@@ -2316,7 +2316,34 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
     return out;
   };
   const plain = plainCommand(text, tokens, dialect, outside);
-  if (!plain) return blanked();
+  // Nothing is plain: text is run in the shell itself (eval, source,
+  // trap), and it can define what any other command word runs. A stage
+  // that runs such text is judged by the text, from the folder the shell
+  // is in; every other stage may run what the text defined.
+  if (!plain) {
+    const unplaced = [];
+    let from = null;
+    let runsText = false;
+    let end = 0;
+    const close = () => {
+      if (from !== null && !runsText) unplaced.push([from, end]);
+      from = null;
+    };
+    for (const tok of tokens) {
+      if (tok.word === undefined) {
+        if (PIPE_OPERATORS.has(tok.op) || CONTROL_OPERATORS.has(tok.op)) close();
+        continue;
+      }
+      if (from === null) {
+        from = tok.start;
+        const name = commandName(tok.word);
+        runsText = RUNS_TEXT_COMMANDS.has(name) || SHELL_RUNS_TEXT_COMMANDS.has(name);
+      }
+      end = tok.end;
+    }
+    close();
+    return { text: blanked(), unplaced };
+  }
   blank.push(...plain.reads);
   /**
    * What a word can spell when a variable in it that the command does
@@ -2463,34 +2490,44 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
     const program = s[0].word;
     const spelled = /[\\/]/.test(program);
     if (spelled && !(outside?.(program) || PROGRAM_FOLDER.test(program) || commandName(program) === "manage.py")) return false;
-    if ((plain.redirects || spelled) && !all.every((other) => other === s || kind(other).settled)) return false;
+    return !replaced(s, names, spelled);
+  };
+  /**
+   * Whether the command can have put something else in the place of a
+   * program a stage runs: a file under its name, a hook or a
+   * configuration git runs, or, with PATH set, a virtual environment
+   * entered or the program spelled with a path, any stage that does more
+   * than read, move, assign or run an exempt stage of its own.
+   */
+  const replaced = (s, names, spelled = false) => {
+    if ((plain.redirects || spelled) && !all.every((other) => other === s || kind(other).settled)) return true;
     const stems = names.map(programStem);
     // git runs the hooks of its folders and what its configuration
     // names, and gh runs git. Neither is the program its name says in a
     // command that sets git configuration, or in which another stage that
     // can write names a file in a folder git takes hooks from (J1).
     if (stems.includes("git") || stems.includes("gh")) {
-      if (gitConfigured) return false;
+      if (gitConfigured) return true;
       for (const other of all) {
         if (other === s || kind(other).quiet) continue;
-        if (other.some((tok) => spellings(tok).some((one) => gitRuns(one)))) return false;
+        if (other.some((tok) => spellings(tok).some((one) => gitRuns(one)))) return true;
       }
     }
     for (const other of all) {
       if (other === s || kind(other).quiet) continue;
-      if (other.slice(1).some((tok) => spellings(tok).some((one) => stems.some((stem) => holdsProgram(one, stem))))) return false;
+      if (other.slice(1).some((tok) => spellings(tok).some((one) => stems.some((stem) => holdsProgram(one, stem))))) return true;
     }
     for (const arg of plain.opens) {
       const from = holder(arg.start);
       if (!from || from === s || kind(from).quiet) continue;
-      if (stems.some((stem) => PROGRAM_EXTENSIONS.some((ending) => expandsTo(arg, `${stem}${ending}`)))) return false;
+      if (stems.some((stem) => PROGRAM_EXTENSIONS.some((ending) => expandsTo(arg, `${stem}${ending}`)))) return true;
       // A word the reader cannot spell out can be the program's file,
       // unless its stage writes no file (git add) or what it says is
       // known and is not the program's name (cost (b)).
       if (arg.sub && (background || arg.start < s[0].start) && !kind(from).settled && !gitKeeps(from) &&
-        !namesNothing(arg, (said) => stems.some((stem) => holdsProgram(said, stem)))) return false;
+        !namesNothing(arg, (said) => stems.some((stem) => holdsProgram(said, stem)))) return true;
     }
-    return true;
+    return false;
   };
   /**
    * Whether every file a stage sends its output to is one a redirect may
@@ -2535,7 +2572,21 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
       if (spans.length > 0 && redirectsToSinks(s) && trusted(s, programNames(words))) blank.push(...spans);
     }
   }
-  return blanked();
+  // The stages whose program the command can have replaced (J1). The
+  // shell hands such a program the word, and what it does with it is not
+  // the named program's doing: a hook git runs after `git -C src`, or a
+  // file put under the program's name before `cd src`, can go up a folder
+  // (rm -rf "../$3"). A script a shell or an interpreter is given is a
+  // program the command can have written too.
+  const unplaced = [];
+  for (const s of all) {
+    const words = s.map((tok) => tok.word);
+    const runner = commandName(words[0]);
+    const script = SHELLS.has(runner) || INTERPRETERS.has(runner) ? words.slice(1).find((word) => !word.startsWith("-")) : undefined;
+    const names = [...programNames(words), ...(script ? [commandName(script)] : [])];
+    if (s[0].start >= plain.replacedFrom || replaced(s, names)) unplaced.push(place(s));
+  }
+  return { text: blanked(), unplaced };
 }
 
 /**
@@ -2650,7 +2701,19 @@ function guardedNameIn(texts, dialect, cwd, root, watches = () => false) {
     // `cd src &&` the word is src/security (re-probe 6, G6). A base the
     // in-order reading never visits (a chdir() in inline code) counts for
     // every word.
-    const left = bareWordText(text, dialect, plainSink, outside, hooksFolder);
+    const { text: left, unplaced } = bareWordText(text, dialect, plainSink, outside, hooksFolder);
+    // In a stage whose program the command can have replaced, the word
+    // counts wherever the shell is: that program need not resolve it
+    // from the shell's folder (J1).
+    for (const [from, to] of unplaced) {
+      for (const view of nameViews(left.slice(from, to), PATH_RUN_CHAR, dialect)) {
+        for (const { name, re } of WORD_FOLDER_PATTERNS) {
+          for (const m of view.matchAll(re)) {
+            if (view[m.index - 1] !== "/" && view[m.index + m[0].length] !== "/") return name;
+          }
+        }
+      }
+    }
     const places = (certain && textByDirectory(left, dialect, cwd)) || [{ from: bases, text: left }];
     const visited = new Set(places.flatMap((place) => place.from.map(watchKey)));
     const unwalked = bases.filter((base) => !visited.has(watchKey(base)));

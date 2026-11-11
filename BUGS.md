@@ -1690,6 +1690,31 @@ Tests: `tests/hook.test.js`, "git is not trusted beside a hook or a configuratio
 
 Smoke test after applying: at the root of a scratch git project ask Claude to run `cp g.sh .git/hooks/commit-msg && git commit --allow-empty -m security` (any `g.sh`); see a Guardian prompt naming security; decline. In bypass mode `echo node_modules >> .gitignore && git add .gitignore && git commit -m "security"` gets no Guardian prompt.
 
+**J1, second commit, on Lex's order of 2026-11-11: a replaced program is handed the word wherever the shell is. Fixed in staging, not yet live.** The worker's first J1 commit was amended (16aedd2 to 8063339, then c99239c) and the amend removed three tests that the staged suite had failed. That was wrong for two of them, and Lex ordered them back.
+
+Why each was removed, and what is true:
+
+- `cp g.sh src/.git/hooks/commit-msg && git -C src commit --allow-empty -m security` and, with `core.hooksPath = hk` in `.git/config`, `cd src && cp ../g.sh ../hk/commit-msg && git commit --allow-empty -m security`. Both were silent, and the worker took that for right: after `git -C src` or `cd src` the shell resolves the word to `src/security`, which is not Guardian's (re-probe 6, G6). It is not right. The hook is a script the command put there, git hands it the message, and a script can go up a folder (`rm -rf "../$(cat "$1")"`). G6's reading holds for a program that is the one its name says, and J1 had just established that git here is not. Both are attack forms inside J1 and both ask now.
+- `cp src/* dist/ && git commit -m "security fix"` was written as a silent test and is denied in bypass mode. It was denied at 0621d0b and at d9431ba as well: a glob in a stage that can write may expand to a file named `git` (H6, `expandsTo()`), also where the glob is only read. The test is back as an ask and is a measured cost of H6, listed below; Lex's cost ruling on write positions (a program name counts as planted only where something is written) takes it up.
+
+The class is wider than git's hooks. Silent at c99239c, each with the word resolved to `src/security` after a move while the program handed it was one the command wrote or replaced: `printf '#!/bin/sh\nrm -rf "../$3"\n' > bin/git; PATH=$PWD/bin:$PATH; cd src && git commit -m security`; `cp evil ~/bin/git; cd src && git commit -m security`; `printf -v PATH %s ./bin; cd src && git commit -m security`; `cd src && hash -p ../g.sh git && git commit -m security`; `cd src && alias git='sh ../g.sh' && git commit -m security`; `cd src && eval "$X" && git commit -m security`; `printf 'rm -rf "../$1"\n' > src/e.sh; cd src && sh e.sh security` and the `./e.sh` form; `cd src && git config core.hooksPath ../hk && git commit --allow-empty -m security`. In each of them no exemption was earned, and the word still did not count, because of where the shell was. Hook verdicts only; none was run for real.
+
+Change in `staging/hooks/injection-guard-hook.mjs`:
+
+- `trusted()` is split: `replaced(s, names, spelled)` holds every way the command can have put something else in a program's place (a file under its name, a hook or configuration git runs, PATH or a virtual environment with a stage that is not settled).
+- `bareWordText()` returns `{ text, unplaced }`. `unplaced` is the place of every stage that stands at or after `replacedFrom` (a PATH or environment change, a function, an alias, `hash`) or whose program `replaced()` finds. For a shell or an interpreter the script it is given counts as a program the command can have written (`sh e.sh`). When nothing in the command is plain (eval, source, trap), every stage is unplaced except the one that runs the text, which is judged by that text from the folder the shell is in, as before (`trap 'rm -rf security' EXIT` from `src/` stays silent).
+- `guardedNameIn()`: the bare word in an unplaced stage counts wherever the shell is.
+
+Held: `cd src && rm -rf security`, `cd src && git commit -m security`, `git -C src commit -m security`, `cd src && npx rimraf security`, `cd src && sh e.sh security` and `cd src && source .venv/bin/activate && pytest security` are silent.
+
+Cost. Asking now, silent at c99239c: after a move into a folder, the bare word in a stage that follows an environment assignment whose name is not known harmless, a function, an alias or `eval` (`export DJANGO_SETTINGS_MODULE=app.test && cd backend && pytest security`, `cd frontend && eval "$(fnm env)" && npm run security`), where before it counted as that folder's own. Measured again, not new: `cp src/* dist/ && git commit -m "security fix"` and `cp -r src/* dist/ && npm run security` are denied in bypass mode (H6).
+
+Not closed, a stated limit: a script the command does not write and runs after a move (`cd src && sh e.sh security` with `e.sh` from an earlier call), and a program the reader does not know handed the word after a move (`cd src && npx rimraf security`), both silent as G6 decided.
+
+Tests: `tests/hook.test.js`, the J1 group gains 13 asks (one with `core.hooksPath` set) and 6 silent, and stands at 44 ask, 17 silent. Against the hook at c99239c, 12 failed. Staged hook suite before: 1941 passed, 12 failed. After: 1953 passed, 0 failed. Re-probe 7's 640 commands: 0 verdicts changed. Re-probe 8's 851: 9 changed, all silent to deny: eight Y5 forms that set HOME, PWD or a variable in front of a `cd` (`cd src && printf -v HOME %s .. && cd ~ && rm -rf security`), closed here as a side effect while J5 is still to do, and `cd src && x=1 rm -rf security`, a cost of the kind named above. Everyday commands: 0 changed in the 75 and in the 197. Lex's regress harness: no line changed.
+
+Smoke test after applying: at the root of a scratch git project with a `src` folder ask Claude to run `cp g.sh ~/bin/git; cd src && git commit --allow-empty -m security` (any `g.sh`); see a Guardian prompt naming security; decline. In bypass mode `cd src && git commit --allow-empty -m security` gets no Guardian prompt.
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

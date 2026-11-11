@@ -233,6 +233,15 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A replaced program is handed the word wherever the shell is
+  (BUG-080, re-probe 8 J1).** After `cd src &&` or `git -C src` the
+  bare word is `src/security`, which is not Guardian's, and that held
+  even when the program given the word was one the command wrote: `cp
+  g.sh src/.git/hooks/commit-msg && git -C src commit -m security`, or
+  `cp evil ~/bin/git; cd src && git commit -m security`. Such a
+  program can go up a folder. The word now counts from any folder in a
+  stage whose program the command can have replaced.
+
 - **git is not trusted beside a hook or a configuration change
   (BUG-080, re-probe 8 J1).** `cp g.sh .git/hooks/commit-msg && git
   commit -m security` was silent: git handed the hook the message, and
