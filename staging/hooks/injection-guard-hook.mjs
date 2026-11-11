@@ -953,27 +953,29 @@ function componentPattern(name) {
   return { long: escapeRe(name), short: `${escapeRe(stem.slice(0, 6))}~\\d+${ext ? `\\.${escapeRe(ext.slice(0, 3))}` : ""}` };
 }
 
-// One pattern per guarded name over a normalized view of the text. A name
-// that starts with a dot needs no boundary before it, so a value attached
-// to an option cluster still counts (curl -so.claude/settings.local.json);
-// a folder name followed by "/" and a further name is a different path
-// (.claude/agents), so it does not count there.
-const GUARDED_NAME_PATTERNS = GUARDED_NAMES.filter((n) => n.includes("/") || n.startsWith(".")).map((name) => {
+// One pattern per guarded name over a normalized view of the text; it
+// finds where a name is spelled, and guardedNameIn() then decides whether
+// the path it sits in reaches Guardian's file. A name that starts with a
+// dot needs no boundary before it, so a value attached to an option
+// cluster is still found (curl -so.claude/settings.local.json); a folder
+// name followed by "/" and a further name is a different path
+// (.claude/agents), so it is not matched there.
+const GUARDED_NAME_PATTERNS = GUARDED_NAMES.map((name) => {
   const parts = name.split("/").map(componentPattern);
   const first = parts[0].short
     ? `(?:${parts[0].long}|(?<![${NAME_CHAR}])${parts[0].short})`
     : parts[0].long;
   const rest = parts.slice(1).map((p) => (p.short ? `(?:${p.long}|${p.short})` : p.long));
   const lead = name.startsWith(".") ? "" : `(?<![${NAME_CHAR}])`;
-  return { name, re: new RegExp(`${lead}${[first, ...rest].join("/")}(?=/?(?:$|[^${NAME_CHAR}/]))`, "m") };
+  return { name, re: new RegExp(`${lead}${[first, ...rest].join("/")}(?=/?(?:$|[^${NAME_CHAR}/]))`, "gm") };
 });
-// A bare folder name that is also an English word counts only as a path:
-// after or before a "/", as a whole shell word, or as a quoted literal
-// (rmSync('security')), so a commit message saying "security" does not.
-const BARE_GUARDED_FOLDERS = GUARDED_NAMES.filter((n) => !n.includes("/") && !n.startsWith(".")).map((name) => ({
+// A guarded folder whose name is also an English word ("security"). As a
+// bare word it never counts (pytest -k security, npm test -- security):
+// only as a path with a separator, or as a quoted literal inside code
+// (rmSync('security')), which is how inline code names the folder.
+const WORD_FOLDERS = GUARDED_NAMES.filter((n) => !n.includes("/") && !n.startsWith(".")).map((name) => ({
   name,
-  re: new RegExp(`(?<=/)${escapeRe(name)}(?=/?(?:$|[^${NAME_CHAR}/]))|(?<![${NAME_CHAR}])${escapeRe(name)}/(?=$|[^${NAME_CHAR}/])`, "m"),
-  quoted: new RegExp(`(['"\`])(?:\\./)?${escapeRe(name)}/?\\1`, "i"),
+  quoted: new RegExp(`(['"\`])${escapeRe(name)}\\1`, "gi"),
 }));
 
 /** Text of a bash $'...' string with its escapes decoded. */
@@ -1035,30 +1037,109 @@ function globRegex(glob) {
   return compiles(`^${re}/?$`, "");
 }
 
+// Where a command can be running: the session's directory, and every
+// directory it moves to in so many words. A relative path is resolved
+// against each, so the set only has to hold the real one.
+const DIRECTORY_CHANGES = [
+  /(?:^|[\s;&|(){}])(?:cd|chdir|pushd|set-location|sl|push-location)\s+(?:\/d\s+|-(?:path|literalpath)\s+)?(\S+)/g,
+  /\s(?:-c|--prefix|--cwd|--directory|--git-dir|--work-tree|-workingdirectory|-wd)(?:=|\s+)(\S+)/g,
+  /chdir\(\s*([^\s)]+)\s*\)/g,
+];
+const MAX_COMMAND_BASES = 32;
+const UNKNOWN_DIRECTORY = /[$`%*?()]/;
+
 /**
- * The first of Guardian's files a command's text names, in any spelling,
- * or null.
+ * The directories a command's relative paths may resolve from.
+ * @returns {{ bases: string[], certain: boolean }} certain is false when a
+ *   move names a directory the text does not spell out (a variable, a
+ *   substitution, a glob) or there are too many to follow
+ */
+function commandBases(views, cwd) {
+  const bases = [cwd];
+  let certain = true;
+  for (const view of views) {
+    for (const re of DIRECTORY_CHANGES) {
+      for (const m of view.matchAll(re)) {
+        const dir = m[1].replace(/[;&|)]+$/, "").replace(/\/+$/, "") || "/";
+        if (dir === "-") continue; // back to a directory already in the set
+        if (UNKNOWN_DIRECTORY.test(dir)) { certain = false; continue; }
+        for (const base of [...bases]) {
+          const next = path.resolve(base, dir.replace(/^~(?=$|\/)/, os.homedir()));
+          if (!bases.includes(next)) bases.push(next);
+        }
+        if (bases.length > MAX_COMMAND_BASES) return { bases: bases.slice(0, MAX_COMMAND_BASES), certain: false };
+      }
+    }
+  }
+  return { bases, certain };
+}
+
+const PATH_RUN_CHAR = new RegExp(`[${NAME_CHAR}/]`);
+
+/**
+ * The first of Guardian's files a command's text names, or null
+ * (re-probe 3, D1; re-probe 4, E8).
+ *
+ * A name is found in any spelling (nameViews()), and counts when the path
+ * it is part of resolves to that file in this project, from a directory
+ * the command can be running in (commandBases()). So "src/security" and
+ * "src/.claude" are the project's own folders, and "../security" from
+ * src/ is Guardian's. Where the path cannot be resolved, the name counts
+ * as before, wherever it stands: the base is a variable or a substitution,
+ * the command moves to a directory the text does not spell out, or the
+ * name is a Windows short name (CLAUDE~1), which exists only for the file
+ * it shortens.
+ *
  * @param {string[]} texts - the command and any scripts it carries encoded
- * @param {string} cwd - the session's working directory, for globs
+ * @param {string} cwd - the session's working directory
  * @param {string} root - the project root
  */
 function guardedNameIn(texts, dialect, cwd, root) {
+  const guardedKey = new Map(GUARDED_NAMES.map((name) => [name, watchKey(path.join(root, name))]));
+  // For globs, which are matched as text: the path as the command would spell it.
   const guardedAbs = GUARDED_NAMES.map((name) => ({ name, abs: path.join(root, name).replace(/\\/g, "/").toLowerCase() }));
   for (const text of texts) {
-    const words = lexShell(text, dialect).tokens.filter((t) => t.word !== undefined)
-      .map((t) => t.word.replace(/\\/g, "/").replace(/\/+$/, "").replace(/^\.\//, "").toLowerCase());
-    for (const view of nameViews(text)) {
-      const hit = GUARDED_NAME_PATTERNS.find((p) => p.re.test(view));
-      if (hit) return hit.name;
+    const views = nameViews(text);
+    const { bases, certain } = commandBases(views, cwd);
+    const reaches = (name, spelled) => {
+      const rel = spelled.replace(/^~(?=$|\/)/, os.homedir());
+      return bases.some((base) => watchKey(path.resolve(base, rel)) === guardedKey.get(name));
+    };
+    for (const view of views) {
+      for (const { name, re } of GUARDED_NAME_PATTERNS) {
+        for (const m of view.matchAll(re)) {
+          // The path the name is part of: back over path characters, and a drive letter.
+          let start = m.index;
+          while (start > 0 && PATH_RUN_CHAR.test(view[start - 1])) start--;
+          if (/^[a-z]:$/.test(view.slice(start - 2, start)) && !PATH_RUN_CHAR.test(view[start - 3] ?? " ")) start -= 2;
+          const spelled = view.slice(start, m.index + m[0].length);
+          // A word folder with no separator before or after it is the bare word.
+          const isPath = spelled.includes("/") || view[m.index + m[0].length] === "/";
+          if (!isPath && WORD_FOLDERS.some((f) => f.name === name)) continue;
+          const before = view[start - 1] ?? "";
+          const unresolvable = !certain || /[$}%)]/.test(before) || /~\d/.test(spelled);
+          // A name stuck to an option cluster (-so.claude/x) is also read on its own.
+          const attached = start < m.index && view[m.index - 1] !== "/";
+          if (unresolvable || reaches(name, spelled) || (attached && reaches(name, m[0]))) return name;
+        }
+      }
       for (const run of view.split(/[\s;|&<>()=,]+/)) {
         if (!/[*?[]/.test(run)) continue;
-        const re = globRegex(path.resolve(cwd, run.replace(/^~(?=$|\/)/, os.homedir())).replace(/\\/g, "/").toLowerCase());
-        const globHit = re && guardedAbs.find((g) => re.test(g.abs));
-        if (globHit) return globHit.name;
+        for (const base of bases) {
+          const re = globRegex(path.resolve(base, run.replace(/^~(?=$|\/)/, os.homedir())).replace(/\\/g, "/").toLowerCase());
+          const globHit = re && guardedAbs.find((g) => re.test(g.abs));
+          if (globHit) return globHit.name;
+        }
       }
     }
-    for (const folder of BARE_GUARDED_FOLDERS) {
-      if (nameViews(text).some((v) => folder.re.test(v)) || words.includes(folder.name) || folder.quoted.test(text)) return folder.name;
+    // A quoted literal of a word folder inside code: rmSync('security').
+    // The same literal as a whole shell word (-k 'security') is the word.
+    const words = lexShell(text, dialect).tokens.filter((tok) => tok.word !== undefined);
+    for (const { name, quoted } of WORD_FOLDERS) {
+      for (const m of text.matchAll(quoted)) {
+        const wholeWord = words.some((tok) => tok.start <= m.index && m.index + m[0].length <= tok.end && tok.word.toLowerCase() === name);
+        if (!wholeWord && (!certain || reaches(name, name))) return name;
+      }
     }
   }
   return null;

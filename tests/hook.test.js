@@ -2553,6 +2553,78 @@ describe("PreToolUse hook - the strictest finding decides (re-probe 4, E4)", () 
 });
 
 // ---------------------------------------------------------------------------
+// Re-probe 4, E8 (BUG-080): guarded means Guardian's own files, resolved
+// ---------------------------------------------------------------------------
+//
+// The D1 name check matched a guarded name anywhere in a command, so a
+// project's own src/security folder, a nested .claude, and the word
+// "security" as a test filter all asked. A named path now counts only
+// when it resolves, from a folder the command can be running in, to one
+// of Guardian's files in this project.
+
+describe("PreToolUse hook - a guarded name counts only where it resolves to Guardian's file (re-probe 4, E8)", () => {
+  const run = (command, { sub = "", tool = "Bash", mode } = {}) => withTempProject((dir) => {
+    for (const rel of [".claude/settings.json", "security/01-injection-guard.js", "src/security/old.js", "src/.claude/x.json",
+      "tests/security/test_a.py", "backend/tests/security/test_a.py", "src/a.js"]) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), rel.endsWith(".json") ? "{}" : "x\n");
+    }
+    return runHook(PRE_HOOK, { tool_name: tool, cwd: path.join(dir, sub), tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) },
+      { CLAUDE_PROJECT_DIR: dir });
+  });
+
+  // Each asked ("This command names security" or ".claude") in the re-probe.
+  for (const command of [
+    "rm -rf src/security",
+    "cp src/a.js src/security",
+    "tar -czf s.tgz src/security",
+    "pytest tests/security",
+    "npx vitest run src/security",
+    "npx jest src/security",
+    "rm -rf src/.claude",
+    "pytest -k security",
+    "python manage.py test security",
+    "npm test -- security",
+    "python -c \"import security.audit\"",
+    "cd backend && pytest tests/security",
+    "git -C backend status tests/security",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(run(command, { mode: "bypassPermissions" }));
+    });
+  }
+
+  // From a subfolder the same names are that folder's own.
+  for (const command of ["rm -rf security", "python -c \"import shutil; shutil.rmtree('security')\"", "tar -czf s.tgz .claude", "rm -rf ./security"]) {
+    stagedOnly(`silent from src/: ${command}`, () => {
+      expectSilent(run(command, { sub: "src", mode: "bypassPermissions" }));
+    });
+  }
+
+  // A path that does reach Guardian's files still asks, however it gets there.
+  for (const [command, sub] of [
+    ["tar -czf s.tgz ./security", ""],
+    ["tar -czf s.tgz security/", ""],
+    ["python -c \"import shutil; shutil.rmtree('security')\"", ""],
+    ["python -c \"import shutil; shutil.rmtree('./security')\"", ""],
+    ["tar -czf s.tgz src/../security", ""],
+    ["tar -czf s.tgz ../security", "src"],
+    ["python -c \"import shutil; shutil.rmtree('../security')\"", "src"],
+    ["node -e \"require('fs').rmSync('../.claude/settings.json')\"", "src"],
+    ["cd .. && tar -czf s.tgz security/", "src"],
+    ["tar -C .. -czf s.tgz security/", "src"],
+    ["python -c \"import os, shutil; os.chdir('..'); shutil.rmtree('security/')\"", "src"],
+    ["cd \"$TARGET\" && tar -czf s.tgz src/.claude", ""],
+    ["tar -czf s.tgz \"$ROOT/.claude\"", "src"],
+  ]) {
+    stagedOnly(`asks${sub ? ` from ${sub}/` : ""}: ${command}`, () => {
+      const out = run(command, { sub });
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

@@ -227,6 +227,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A guarded name counts only where it reaches Guardian's file (BUG-080,
+  re-probe 4 E8).** The staged D1 check matched `security` and `.claude`
+  anywhere in a command, so `pytest tests/security`, `rm -rf src/security`,
+  `rm -rf src/.claude` and `pytest -k security` asked. A named path is now
+  resolved from the directories the command can be running in (the session
+  cwd and any `cd`, `-C`, `--prefix` or `chdir()` it spells out) and counts
+  when it lands on one of Guardian's files in this project; `../security`
+  from `src/` still asks. The bare word `security` never counts as a shell
+  word. A path whose base is a variable keeps the old reading.
+
 - **A pattern is matched inside one view of the text, never across two
   (BUG-079, re-probe 4 E1).** `scan()` joined its decoded views with
   newlines, so a match could start in one and end in the next. With the
