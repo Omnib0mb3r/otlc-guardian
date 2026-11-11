@@ -1698,7 +1698,80 @@ function scriptNameSpans(stage) {
 // (re-probe 6, G2): each runs text as a command, defines one, or reads a
 // value into a variable a later stage can run.
 const NOT_PLAIN_COMMANDS = new Set(["case", "eval", "source", ".", "read", "mapfile", "readarray", "function", "alias",
-  "invoke-expression", "iex", "&"]);
+  "invoke-expression", "iex", "&",
+  // Each of these makes a later command word run something else
+  // (re-probe 7, H6): hash -p ./g.sh git, enable -f ./x.so git,
+  // Set-Alias pytest Remove-Item, doskey git=rd, and cmd's path, which
+  // sets PATH.
+  "hash", "enable", "set-alias", "sal", "new-alias", "nal", "doskey", "path"]);
+// The script a Python virtual environment is entered with. Sourcing it
+// is everyday work and leaves a command plain (H6).
+const VENV_ACTIVATE = /^(?:\.[\\/])?\.?venv[\\/](?:bin|Scripts)[\\/]activate(?:\.(?:sh|fish|csh|ps1|bat))?$/i;
+const ASSIGNMENT = /^([A-Za-z_]\w*)\+?=/;
+// Commands that put a value in the environment of what runs after them,
+// and the ones that declare a variable without running anything.
+const ENVIRONMENT_SETTERS = new Set(["export", "declare", "typeset", "readonly", "local", "env", "set", "setx"]);
+const DECLARERS = new Set(["export", "declare", "typeset", "readonly", "local"]);
+// An environment value can be what a program runs or loads (GIT_EXEC_PATH,
+// NODE_OPTIONS, PYTHONSTARTUP, HOME with its .gitconfig), and no list of
+// those is complete. These are the names known to carry nothing a
+// program runs; a command that sets any other is not plain (H6).
+const HARMLESS_ENVIRONMENT = new Set(["NODE_ENV", "CI", "FORCE_COLOR", "NO_COLOR", "TERM", "TZ", "LANG", "LC_ALL", "DEBUG", "PORT"]);
+// A program spelled with a relative path is the one its name says only
+// in the folders package managers and virtual environments fill.
+const PROGRAM_FOLDER = /^(?:\.[\\/])?(?:node_modules[\\/]\.bin|\.?venv[\\/](?:bin|Scripts))[\\/][^\\/]+$/i;
+// What a file that runs under a program's name can end in.
+const PROGRAM_EXTENSIONS = ["", ".exe", ".cmd", ".bat", ".com", ".ps1"];
+const PROGRAM_EXTENSION = /\.(?:exe|cmd|bat|com|ps1)$/;
+const programStem = (name) => name.toLowerCase().replace(PROGRAM_EXTENSION, "");
+/** Whether a word holds a file that would run under a program's name: bin/git, ~/bin/git.cmd, open('/x/git','w'). */
+const holdsProgram = (word, stem) => word.split(/[\s\\/=:'"\x60(),;|&<>]+/).some((part) => part !== "" && programStem(part) === stem);
+
+/**
+ * For a project, the test of whether a path, as spelled, is absolute and
+ * neither the project nor inside it: a program or a PATH folder there
+ * is not one the project's files can replace (H6). A path the text does
+ * not spell out (a variable, a glob) is not known to be.
+ * @param {string} root - the project root
+ * @returns {(spelled: string) => boolean}
+ */
+function outsideProject(root) {
+  const rootKey = watchKey(root);
+  return (spelled) => {
+    if (spelled === "" || /[$\x60%*?[\]{};]/.test(spelled)) return false;
+    const abs = drivePath(spelled.replace(/^~(?=$|[\\/])/, os.homedir()));
+    if (!path.isAbsolute(abs)) return false;
+    const key = watchKey(abs);
+    return key !== rootKey && !key.startsWith(`${rootKey}/`);
+  };
+}
+
+/**
+ * The programs a stage's words run, by name: the command, and what a
+ * run wrapper (uv run), a package runner (npx jest), a package manager
+ * (npm exec jest, yarn jest) or Python (python manage.py; python -m
+ * pytest, a module Python finds as pytest.py or a folder pytest in the
+ * folder it runs in) starts for it. The script of `npm run` and `npm
+ * test` is an entry of package.json, not a program.
+ * @param {string[]} words
+ * @returns {string[]}
+ */
+function programNames(words) {
+  const name = commandName(words[0] ?? "");
+  const started = runWrapped(words);
+  if (started) return [name, ...programNames(started)];
+  const args = words.slice(1);
+  const plain = args.filter((a) => !a.startsWith("-"));
+  let run = [];
+  if (PACKAGE_RUNNERS.has(name)) run = [plain[0]];
+  else if (PACKAGE_MANAGERS.has(name)) {
+    if (!/^(?:run(?:-script)?|t|test)$/.test(plain[0] ?? "")) run = [plain[/^(?:exec|x|dlx)$/.test(plain[0] ?? "") ? 1 : 0]];
+  } else if (name === "python" || name === "python3" || name === "py") {
+    const module = /^-m/.test(args[0] ?? "") ? args[0].slice(2) || args[1] : undefined;
+    run = module ? [module, `${module}.py`] : [plain[0]];
+  }
+  return [name, ...run.map((word) => commandName(word ?? ""))].filter(Boolean);
+}
 const quotesOut = (raw) => raw.replace(/'[^']*'|"(?:\\[\s\S]|[^"\\])*"/g, "");
 const singleQuotesOut = (raw) => raw.replace(/'[^']*'/g, "");
 const isRedirect = (op) => op !== undefined && /[<>]/.test(op) && op !== "<<" && op !== "<<-";
@@ -1755,12 +1828,24 @@ const PS_VARIABLE_SETTERS = new Set(["set-variable", "sv", "set", "new-variable"
  * is name again a file an exempt stage wrote, so the arguments that could
  * are returned.
  *
- * @returns {{ opens: Array<{ start: number, word: string, sub: boolean }>, reads: Array<[number, number]> }|null}
+ * A command can also put another program in the place of the one a
+ * later stage names (re-probe 7, H6). hash, enable, alias, Set-Alias and
+ * a function definition make it not plain, and so does PATH set to
+ * anything but absolute folders outside the project (PATH=./bin, an
+ * empty entry, a variable other than $PATH and $HOME). PATH set to
+ * such folders, and a Python virtual environment sourced, leave it
+ * plain and are reported in `redirects`: bareWordText() then trusts a
+ * program only when nothing else in the command could have written one.
+ *
+ * @param {((spelled: string) => boolean)|null} outside - whether a path,
+ *   as spelled, is absolute and outside the project
+ * @returns {{ opens: Array<{ start: number, word: string, sub: boolean }>, reads: Array<[number, number]>, redirects: boolean }|null}
  *   null when the command is not plain; else `opens`, the arguments that
- *   hold a glob, a brace list or a substitution, and `reads`, the place of
- *   each PowerShell statement with a ( ) that only reads
+ *   hold a glob, a brace list or a substitution, `reads`, the place of
+ *   each PowerShell statement with a ( ) that only reads, and
+ *   `redirects`, whether PATH or a virtual environment is set
  */
-function plainCommand(text, tokens, dialect) {
+function plainCommand(text, tokens, dialect, outside = null) {
   // A PowerShell ( ) is an expression. It is no hazard when the statement
   // it stands in only reads, and that statement is then text as a whole.
   const reads = [];
@@ -1771,7 +1856,7 @@ function plainCommand(text, tokens, dialect) {
       const place = [statement[0]?.start, statement.at(-1)?.end];
       statement = [];
       if (!parens) return true;
-      if (!onlyReads(text.slice(...place), dialect)) return false;
+      if (!onlyReads(text.slice(...place), dialect, 0, null, outside)) return false;
       reads.push(place);
       return true;
     };
@@ -1810,6 +1895,7 @@ function plainCommand(text, tokens, dialect) {
 
   let first = true;
   let stageName = "";
+  let redirects = false;
   const opens = [];
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i];
@@ -1821,18 +1907,48 @@ function plainCommand(text, tokens, dialect) {
     const raw = text.slice(tok.start, tok.end);
     const bare = quotesOut(raw);
     if (bare === "{" || bare === "}" || /[()]/.test(bare)) return null;
+    // PATH decides which program a name runs. Each entry must be $PATH
+    // itself or an absolute folder outside the project ($HOME and ~ are
+    // read as the home folder); a relative or empty entry is the
+    // folder the shell is in (H6).
+    const pathSet = dialect === "powershell" ? null : /^PATH\+?=([\s\S]*)$/i.exec(tok.word);
+    if (pathSet) {
+      const safe = outside !== null && pathSet[1].split(":").every((entry) =>
+        /^\$\{?PATH\}?$/.test(entry) || outside(entry.replace(/^\$\{?HOME\}?(?=$|\/)/, "~")));
+      if (!safe) return null;
+      redirects = true;
+      continue;
+    }
     const pattern = (/[*?[]/.test(bare) && bare !== "[" && bare !== "[[") || BRACE_LIST.test(bare);
     const sub = substitution.test(singleQuotesOut(raw));
     const redirected = isRedirect(tokens[i - 1]?.op);
+    // A value put in the environment, or in a variable that is already
+    // there, can be what a later program runs. Only the names known to
+    // be harmless leave the command plain (H6). PowerShell reaches the
+    // environment through its env: drive ($env:X is a variable word).
+    if (dialect === "powershell") {
+      if (/^env:/i.test(tok.word)) return null;
+    } else if (!redirected && (first || ENVIRONMENT_SETTERS.has(stageName))) {
+      const assigned = ASSIGNMENT.exec(tok.word);
+      if (assigned && !HARMLESS_ENVIRONMENT.has(assigned[1])) return null;
+    }
     if (first && !redirected) {
       first = false;
       stageName = commandName(tok.word);
+      const next = tokens[i + 1]?.word;
+      if ((stageName === "source" || stageName === ".") && next !== undefined && VENV_ACTIVATE.test(next) && tokens[i + 2]?.word === undefined) {
+        redirects = true;
+        i++;
+        continue;
+      }
       if (pattern || /[$`]/.test(singleQuotesOut(raw)) || NOT_PLAIN_COMMANDS.has(stageName)) return null;
+      // builtin hash, command enable: the wrapper is not the command.
+      if ((stageName === "builtin" || stageName === "command") && next !== undefined && NOT_PLAIN_COMMANDS.has(commandName(next))) return null;
     } else if (stageName === "printf" && /^-[A-Za-z]*v/.test(tok.word) && tokens[i - 1]?.word !== undefined && commandName(tokens[i - 1].word) === "printf") return null;
     else if (setsOneOf(raw) || (redirected && (pattern || sub))) return null;
     else if (pattern || sub) opens.push({ start: tok.start, word: tok.word, sub });
   }
-  return { opens, reads };
+  return { opens, reads, redirects };
 }
 
 /**
@@ -1861,10 +1977,24 @@ function plainCommand(text, tokens, dialect) {
  * expands to its name, or a substitution (G2b). A comment is blanked
  * either way: it is not part of the command.
  *
+ * Every one of these rests on a program being the one its name says, so
+ * a stage earns nothing when the command could have put another program
+ * in its place (re-probe 7, H6; `trusted` below): the program is spelled
+ * with a path that is not an absolute one outside the project or a
+ * folder a package manager fills (./git, bin/git); another stage that
+ * can write names a file that would run under its name (printf ... >
+ * ~/bin/git, > node_modules/.bin/jest, > pytest.py before python -m
+ * pytest), in a word, a glob, a brace list, or a substitution that comes
+ * before it; or, when PATH is set or a virtual environment entered, any
+ * other stage does more than read, move, assign or run an exempt stage
+ * of its own.
+ *
  * @param {((word: string) => boolean)|null} plainSink - whether a redirect
  *   target, as spelled, is a file that is neither Guardian's nor watched
+ * @param {((spelled: string) => boolean)|null} outside - whether a path,
+ *   as spelled, is absolute and outside the project
  */
-function bareWordText(text, dialect, plainSink = null) {
+function bareWordText(text, dialect, plainSink = null, outside = null) {
   const { tokens, heredocs, comments, uncertain } = lexShell(text, dialect);
   if (uncertain) return text;
   const blank = [...comments];
@@ -1873,7 +2003,7 @@ function bareWordText(text, dialect, plainSink = null) {
     for (const [a, b] of blank) out = `${out.slice(0, a)}${" ".repeat(b - a)}${out.slice(b)}`;
     return out;
   };
-  const plain = plainCommand(text, tokens, dialect);
+  const plain = plainCommand(text, tokens, dialect, outside);
   if (!plain) return blanked();
   blank.push(...plain.reads);
   /** Whether a word with a glob or a brace list in it can expand to a file of this name. */
@@ -1896,43 +2026,25 @@ function bareWordText(text, dialect, plainSink = null) {
   /** Whether every substitution in a place of the text only reads. */
   const substitutionsRead = ([a, b]) => {
     const inner = lexShell(text.slice(a, b), dialect);
-    return !inner.uncertain && inner.subs.every((sub) => onlyReads(sub, dialect));
+    return !inner.uncertain && inner.subs.every((sub) => onlyReads(sub, dialect, 0, null, outside));
   };
-  let pipeline = [];
+  // Every pipeline of the command with its stages, gathered before any
+  // is judged: whether a stage earns an exemption depends on what the
+  // others can do (H6).
+  const pipelines = []; // [{ stages, bodies }], bodies the heredocs fed to the pipeline: [{ at, body }]
+  let stages = [];
   let stage = [];
-  let fed = []; // the heredocs of this pipeline: [{ at, body }]
+  let fed = [];
   let heredocsSeen = 0;
   const endStage = () => {
-    if (stage.length > 0) pipeline.push(stage);
+    if (stage.length > 0) stages.push(stage);
     stage = [];
   };
   const endPipeline = () => {
     endStage();
-    const bodies = fed;
+    if (stages.length > 0) pipelines.push({ stages, bodies: fed });
+    stages = [];
     fed = [];
-    if (pipeline.length === 0) return;
-    const to = pipeline[pipeline.length - 1].at(-1).end;
-    // The first stage from which the rest of the pipeline only reads.
-    const moves = (s) => DIRECTORY_MOVERS.has(commandName(s[0].word));
-    let reading = pipeline.length;
-    while (reading > 0 && !moves(pipeline[reading - 1]) && onlyReads(text.slice(pipeline[reading - 1][0].start, to), dialect, 0, sink)) reading--;
-    if (reading < pipeline.length) {
-      const from = pipeline[reading][0].start;
-      blank.push([from, to]);
-      for (const { at, body } of bodies) if (at >= from && inert(body)) blank.push([body.start, body.end]);
-    }
-    // The stage before those, when it is not one of them, prints into
-    // stages that only read, or into nothing: it can be a test run, or
-    // hold a message or a script name. A stage further up feeds one that
-    // does something else with what it prints (git commit -m security |
-    // xargs rm -rf), so it earns nothing (G2b).
-    const s = pipeline[reading - 1];
-    if (s) {
-      const whole = [s[0].start, s.at(-1).end];
-      if (isTestRun(s.map((tok) => tok.word)) && lexShell(text.slice(...whole), dialect).subs.length === 0) blank.push(whole);
-      else blank.push(...[...messageSpans(s), ...scriptNameSpans(s)].filter(substitutionsRead));
-    }
-    pipeline = [];
   };
   for (const tok of tokens) {
     if (tok.word !== undefined) stage.push(tok);
@@ -1944,6 +2056,78 @@ function bareWordText(text, dialect, plainSink = null) {
     }
   }
   endPipeline();
+  const all = pipelines.flatMap((line) => line.stages);
+  const place = (s) => [s[0].start, s.at(-1).end];
+  const holder = (at) => all.find((s) => at >= s[0].start && at < s.at(-1).end);
+  const moves = (s) => DIRECTORY_MOVERS.has(commandName(s[0].word));
+  const entersVenv = (s) => s.length === 2 && (s[0].word === "source" || s[0].word === ".") && VENV_ACTIVATE.test(s[1].word);
+  const assigns = (s) => {
+    const declared = DECLARERS.has(s[0].word);
+    return s.slice(declared ? 1 : 0).every((tok) => ASSIGNMENT.test(tok.word) || (declared && tok.word.startsWith("-")));
+  };
+  const exempt = (s) => isTestRun(s.map((tok) => tok.word)) || messageSpans(s).length > 0 || scriptNameSpans(s).length > 0;
+  // What a stage can do to the others: `quiet`, it writes no file (it
+  // moves, enters a virtual environment, assigns, or only reads with no
+  // redirect); `settled`, it is quiet, or an exempt stage of its own, or
+  // reads into a file a redirect may write.
+  const kinds = new Map();
+  const kind = (s) => {
+    if (!kinds.has(s)) {
+      const quiet = moves(s) || entersVenv(s) || assigns(s) || onlyReads(text.slice(...place(s)), dialect, 0, null, outside);
+      kinds.set(s, { quiet, settled: quiet || exempt(s) || onlyReads(text.slice(...place(s)), dialect, 0, sink, outside) });
+    }
+    return kinds.get(s);
+  };
+  // A command sent to the background runs beside what follows it, so
+  // "before" is not known there.
+  const background = tokens.some((tok) => tok.op === "&");
+  /**
+   * Whether the programs a stage runs are the ones their names say (H6).
+   * @param {string[]} names - the programs the stage runs (programNames())
+   */
+  const trusted = (s, names) => {
+    const program = s[0].word;
+    const spelled = /[\\/]/.test(program);
+    if (spelled && !(outside?.(program) || PROGRAM_FOLDER.test(program) || commandName(program) === "manage.py")) return false;
+    if ((plain.redirects || spelled) && !all.every((other) => other === s || kind(other).settled)) return false;
+    const stems = names.map(programStem);
+    for (const other of all) {
+      if (other === s || kind(other).quiet) continue;
+      if (other.slice(1).some((tok) => stems.some((stem) => holdsProgram(tok.word, stem)))) return false;
+    }
+    for (const arg of plain.opens) {
+      const from = holder(arg.start);
+      if (!from || from === s || kind(from).quiet) continue;
+      if (arg.sub ? (background || arg.start < s[0].start) && !kind(from).settled
+        : stems.some((stem) => PROGRAM_EXTENSIONS.some((ending) => expandsTo(arg.word, `${stem}${ending}`)))) return false;
+    }
+    return true;
+  };
+  for (const { stages: line, bodies } of pipelines) {
+    const to = line.at(-1).at(-1).end;
+    // The first stage from which the rest of the pipeline only reads.
+    let reading = line.length;
+    while (reading > 0 && !moves(line[reading - 1]) && onlyReads(text.slice(line[reading - 1][0].start, to), dialect, 0, sink, outside) &&
+      trusted(line[reading - 1], [commandName(line[reading - 1][0].word)])) reading--;
+    if (reading < line.length) {
+      const from = line[reading][0].start;
+      blank.push([from, to]);
+      for (const { at, body } of bodies) if (at >= from && inert(body)) blank.push([body.start, body.end]);
+    }
+    // The stage before those, when it is not one of them, prints into
+    // stages that only read, or into nothing: it can be a test run, or
+    // hold a message or a script name. A stage further up feeds one that
+    // does something else with what it prints (git commit -m security |
+    // xargs rm -rf), so it earns nothing (G2b).
+    const s = line[reading - 1];
+    if (s) {
+      const words = s.map((tok) => tok.word);
+      const whole = place(s);
+      const spans = isTestRun(words) ? (lexShell(text.slice(...whole), dialect).subs.length === 0 ? [whole] : [])
+        : [...messageSpans(s), ...scriptNameSpans(s)].filter(substitutionsRead);
+      if (spans.length > 0 && trusted(s, programNames(words))) blank.push(...spans);
+    }
+  }
   return blanked();
 }
 
@@ -1980,6 +2164,7 @@ function bareWordText(text, dialect, plainSink = null) {
 function guardedNameIn(texts, dialect, cwd, root, watches = () => false) {
   const guardedKey = new Map(GUARDED_NAMES.map((name) => [name, watchKey(path.join(root, name))]));
   const guardedFolders = [".claude", ...WORD_FOLDERS].map((name) => guardedKey.get(name));
+  const outside = outsideProject(root);
   // For globs, which are matched as text: the path as the command would spell it.
   const guardedAbs = GUARDED_NAMES.map((name) => ({ name, abs: path.join(root, name).replace(/\\/g, "/").toLowerCase() }));
   for (const text of texts) {
@@ -2046,7 +2231,7 @@ function guardedNameIn(texts, dialect, cwd, root, watches = () => false) {
     // `cd src &&` the word is src/security (re-probe 6, G6). A base the
     // in-order reading never visits (a chdir() in inline code) counts for
     // every word.
-    const left = bareWordText(text, dialect, plainSink);
+    const left = bareWordText(text, dialect, plainSink, outside);
     const places = (certain && textByDirectory(left, dialect, cwd)) || [{ from: bases, text: left }];
     const visited = new Set(places.flatMap((place) => place.from.map(watchKey)));
     const unwalked = bases.filter((base) => !visited.has(watchKey(base)));
@@ -2653,13 +2838,13 @@ function withoutComparingBlocks(toks, text) {
  * -fprintf, -fls) are not known, and neither is a word find would take
  * for an action this list has not heard of (re-probe 7, H1).
  */
-function findOnlyReads(args, dialect, depth) {
+function findOnlyReads(args, dialect, depth, outside = null) {
   for (let k = 0; k < args.length; k++) {
     const a = args[k];
     if (a === "-exec" || a === "-execdir") {
       const end = args.findIndex((x, j) => j > k && (x === ";" || x === "\\;" || x === "+"));
       const run = args.slice(k + 1, end < 0 ? args.length : end).map((x) => (x === "{}" ? "x" : x));
-      if (run.length === 0 || !onlyReads(run.join(" "), dialect, depth + 1)) return false;
+      if (run.length === 0 || !onlyReads(run.join(" "), dialect, depth + 1, null, outside)) return false;
       k = end < 0 ? args.length : end;
     } else if (FIND_VALUED.has(a) || /^-newer[aBcm][aBcmt]$/.test(a)) k++;
     else if (a.startsWith("-") && a !== "-" && !FIND_FLAGS.has(a) && !/^-O\d$/.test(a)) return false;
@@ -2674,11 +2859,14 @@ function findOnlyReads(args, dialect, depth) {
  *
  * @param {((word: string) => boolean)|null} plainSink - redirect targets
  *   that still count as reading, for bareWordText(); none by default
+ * @param {((spelled: string) => boolean)|null} outside - whether a path,
+ *   as spelled, is absolute and outside the project (outsideProject());
+ *   without it no program spelled with a path is known to only read
  */
-function onlyReads(command, dialect, depth = 0, plainSink = null) {
+function onlyReads(command, dialect, depth = 0, plainSink = null, outside = null) {
   if (depth > MAX_SHELL_DEPTH) return false;
   const { tokens, subs, uncertain } = lexShell(command, dialect);
-  if (uncertain || !subs.every((s) => onlyReads(s, dialect, depth + 1))) return false;
+  if (uncertain || !subs.every((s) => onlyReads(s, dialect, depth + 1, null, outside))) return false;
   let stage = [];
   let afterGroup = false; // the stage being read follows a ")"
   /** @param {string} [closing] - the operator that ends the stage */
@@ -2712,19 +2900,23 @@ function onlyReads(command, dialect, depth = 0, plainSink = null) {
     // GIT_EXTERNAL_DIFF, PAGER), so the stage is no longer known to
     // only read (re-probe 4, E2).
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w[0])) return false;
+    // A program spelled with a path is the one its name says only at an
+    // absolute path outside the project (/usr/bin/grep). ./grep and
+    // bin/cat are files of the project (re-probe 7, H6).
+    if (/[\\/]/.test(w[0]) && !outside?.(w[0])) return false;
     const name = commandName(w[0]);
     if (name === "git") return gitOnlyReads(w.slice(1));
     // A nested shell reads when the script it runs does.
-    if (SHELLS.has(name)) return w[1] === "-c" && w.length === 3 && onlyReads(w[2], "bash", depth + 1);
+    if (SHELLS.has(name)) return w[1] === "-c" && w.length === 3 && onlyReads(w[2], "bash", depth + 1, null, outside);
     if (name === "cmd") {
       const script = cmdScript(w.slice(1));
-      return script !== null && onlyReads(script, "cmd", depth + 1);
+      return script !== null && onlyReads(script, "cmd", depth + 1, null, outside);
     }
     if (name === "powershell" || name === "pwsh") {
       const script = powershellScript(w.slice(1));
-      return script !== null && !script.encoded && onlyReads(script.text, "powershell", depth + 1);
+      return script !== null && !script.encoded && onlyReads(script.text, "powershell", depth + 1, null, outside);
     }
-    if (name === "find") return findOnlyReads(w.slice(1), dialect, depth);
+    if (name === "find") return findOnlyReads(w.slice(1), dialect, depth, outside);
     // tee passes its input on and writes it to its files: a read with a
     // redirect, when each file is one a redirect may write (re-probe 6,
     // G6) and its options are the ones that say how (H1).
@@ -4320,9 +4512,10 @@ process.stdin.on("end", () => {
     // A shell command that names one of those files, or a folder holding
     // one, in any spelling, and is not known to only read (re-probe 3, D1).
     if (write.kind === "bash" && selfProtected.size === 0) {
+      const outside = outsideProject(projectRoot);
       const named = guardedNameIn([write.content, ...shellRead.decoded], write.dialect, sessionCwd, projectRoot,
         (file) => isWatchedPath(file, settings));
-      if (named && !onlyReads(write.content, write.dialect)) {
+      if (named && !onlyReads(write.content, write.dialect, 0, null, outside)) {
         record(confirmOrDeny,
           `${TAG} This command names ${safeEchoPath(named, 60)}, part of Guardian's own enforcement or settings, ` +
           `and is not a known read-only command. Guardian does not read every shell, interpreter and script ` +
@@ -4331,7 +4524,7 @@ process.stdin.on("end", () => {
       }
       // A folder above the project holds all of them at once (F3b).
       const above = named ? null : wordAboveProject([write.content, ...shellRead.decoded], write.dialect, sessionCwd, projectRoot);
-      if (above && !onlyReads(write.content, write.dialect)) {
+      if (above && !onlyReads(write.content, write.dialect, 0, null, outside)) {
         record(confirmOrDeny,
           `${TAG} This command names ${safeEchoPath(above, 60)}, a folder above this project, which holds the project ` +
           `and Guardian's own enforcement and settings with it, and is not a known read-only command. Guardian ` +

