@@ -233,6 +233,14 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A cd with an option, or CDPATH, is a location the resolver does not
+  know (BUG-080, re-probe 6 G3).** `cd -P src/a && npx rimraf
+  ../../security` was resolved as if the directory were named `-P`,
+  and `CDPATH=src cd a` as if CDPATH were not there, so the path did not
+  reach Guardian's folder and the command was silent. An option after
+  `cd`, `pushd` or `Set-Location`, and CDPATH anywhere in the command,
+  now make a guarded name count wherever it stands.
+
 - **A carriage return no longer hides the rest of a command (BUG-085,
   re-probe 6 G1).** The reader took a CR for white space, so
   `true\r#; rm -rf .claude/hooks` looked like `true` and a comment; bash

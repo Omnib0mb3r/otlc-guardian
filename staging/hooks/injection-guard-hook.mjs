@@ -1316,7 +1316,7 @@ function globRegex(glob) {
 // directory it moves to in so many words. A relative path is resolved
 // against each, so the set only has to hold the real one.
 const DIRECTORY_CHANGES = [
-  /(?:^|[\s;&|(){}])(?:cd|chdir|pushd|set-location|sl|push-location)\s+(?:\/d\s+|-(?:path|literalpath)\s+)?(\S+)/g,
+  /(?:^|[\s;&|(){}])(?:cd|chdir|pushd|set-location|sl|push-location)\s+(?:\/d\s+)?(\S+)/g,
   /\s(?:-c|--prefix|--cwd|--directory|--git-dir|--work-tree|-workingdirectory|-wd)(?:=|\s+)(\S+)/g,
   /chdir\(\s*([^\s)]+)\s*\)/g,
 ];
@@ -1325,7 +1325,12 @@ const DIRECTORY_CHANGES = [
 // cwd option in inline code (execSync(..., { cwd }), subprocess.run(...,
 // cwd=...)) in a folder the code picks. With one of these in the text the
 // bases are not certain, and a guarded name counts wherever it stands
-// (re-probe 5, F2).
+// (re-probe 5, F2). So it is with CDPATH anywhere in the text, which
+// sends a relative cd to a folder the text does not name, and with an
+// option after cd, pushd or Set-Location (cd -P, cd --, Set-Location
+// -Path): the word after the mover is then not the directory, and the
+// resolver does not parse each shell's options (re-probe 6, G3).
+const CDPATH_IN_TEXT = /cdpath/i;
 const UNFOLLOWED_MOVE = /(?:^|\s)-(?:execdir|okdir)(?=\s|$)|(?:^|\s)--chdir(?=[=\s]|$)|(?<![\w-])cwd\s*[:=]/;
 // The options and the call of DIRECTORY_CHANGES as whole shell words. A
 // word keeps its case, so -C (a directory) is not -c (python -c "code").
@@ -1343,17 +1348,18 @@ const UNKNOWN_DIRECTORY = /[$`%*?()]/;
  *   which a directory with white space in its name is read whole
  * @returns {{ bases: string[], certain: boolean }} certain is false when a
  *   move names a directory the text does not spell out (a variable, a
- *   substitution, a glob), is one the resolver does not follow, or there
- *   are too many to follow
+ *   substitution, a glob), has an option, is one the resolver does not
+ *   follow, the text holds CDPATH, or there are too many to follow
  */
 function commandBases(views, cwd, words) {
   const bases = [cwd];
-  let certain = !views.some((view) => UNFOLLOWED_MOVE.test(view));
+  let certain = !views.some((view) => UNFOLLOWED_MOVE.test(view) || CDPATH_IN_TEXT.test(view));
   /** Adds the directory a move names, from every base so far. False once there are too many. */
   const move = (spelled) => {
     const dir = spelled.replace(/[;&|)]+$/, "").replace(/\/+$/, "") || "/";
     if (dir === "-") return true; // back to a directory already in the set
-    if (UNKNOWN_DIRECTORY.test(dir)) { certain = false; return true; }
+    // An option (cd -P x, cd -- x): `cd -` alone is handled above.
+    if (UNKNOWN_DIRECTORY.test(dir) || dir.startsWith("-")) { certain = false; return true; }
     for (const base of [...bases]) {
       const next = path.resolve(base, drivePath(dir.replace(/^~(?=$|\/)/, os.homedir())));
       if (!bases.includes(next)) bases.push(next);
@@ -1717,12 +1723,17 @@ function scriptDialect(shell, option) {
  * run in (cd .., git -C .., npm --prefix ..), which is where it runs
  * and not what it acts on; a word that is not a folder (NOT_A_FOLDER);
  * and any word when the command moves somewhere the text does not spell
- * out (commandBases(), `certain`).
+ * out: a move to a variable, a substitution or a glob, a move the
+ * resolver does not follow (UNFOLLOWED_MOVE), or CDPATH in the text. An
+ * option after cd is passed over here, which commandBases() does not do,
+ * so `cd -P .. && npx rimraf .` is still the folder above.
  */
 function wordAboveProject(texts, dialect, cwd, root) {
   const rootKey = watchKey(root);
   const home = (p) => drivePath(p.replace(/^~(?=$|[\\/])/, os.homedir()));
   const isAbove = (dir, word) => rootKey.startsWith(`${watchKey(path.resolve(dir, home(word))).replace(/\/+$/, "")}/`);
+  // Set when a move names a directory the text does not spell out.
+  let lost = false;
   /** Follows one command text from `start`; returns the word found and the directory it ends in. */
   const walk = (text, start, inDialect, depth) => {
     const { tokens, subs } = lexShell(text, inDialect);
@@ -1751,6 +1762,7 @@ function wordAboveProject(texts, dialect, cwd, root) {
         do k++; while (tokens[k]?.word !== undefined && /^(?:-.|\/d$)/i.test(tokens[k].word));
         const target = tokens[k]?.word;
         if (target === undefined) k--;
+        else if (UNKNOWN_DIRECTORY.test(target)) lost = true;
         if (name === "pushd" || name === "push-location") pushed.push(dir);
         const next = target === "-" ? previous : path.resolve(dir, home(target ?? "~"));
         previous = dir;
@@ -1775,9 +1787,10 @@ function wordAboveProject(texts, dialect, cwd, root) {
     return { found: null, dir };
   };
   for (const text of texts) {
-    if (!commandBases(nameViews(text), cwd, shellWords(text, dialect)).certain) continue;
+    if (nameViews(text).some((view) => UNFOLLOWED_MOVE.test(view) || CDPATH_IN_TEXT.test(view))) continue;
+    lost = false;
     const { found } = walk(text, cwd, dialect, 0);
-    if (found) return found;
+    if (found && !lost) return found;
   }
   return null;
 }

@@ -3771,6 +3771,67 @@ describe("PreToolUse hook - a carriage return or control character in a command 
 });
 
 // ---------------------------------------------------------------------------
+// Re-probe 6, G3 (BUG-080): a cd with an option, and CDPATH
+// ---------------------------------------------------------------------------
+//
+// The resolver took the first word after `cd` for the directory, so
+// `cd -P src/a` moved it to a folder named -P, and nothing read CDPATH.
+// It still called itself certain, so `../../security` was resolved from
+// the wrong place and did not count. Real effect in the re-probe
+// (real\cdP, real\cdpath): the scanner deleted. Lex's decision: a move
+// with an option, and any command with CDPATH in it, is a location the
+// resolver does not know, and a guarded name then counts wherever it
+// stands (F2).
+
+describe("PreToolUse hook - a cd with an option or CDPATH is not followed (re-probe 6, G3)", () => {
+  const run = (command, { mode, tool = "Bash" } = {}) => withTempProject((dir) => {
+    const root = path.join(dir, "proj");
+    for (const rel of [".claude/settings.json", ".claude/hooks/injection-guard-hook.mjs", "security/01-injection-guard.js",
+      "src/security/old.js", "src/a/x.txt", "src/a.js"]) {
+      mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      writeFileSync(path.join(root, rel), rel.endsWith(".json") ? "{}" : "x\n");
+    }
+    return runHook(PRE_HOOK, { tool_name: tool, cwd: root, tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) },
+      { CLAUDE_PROJECT_DIR: root });
+  });
+
+  for (const [command, tool] of [
+    ["cd -P src/a && npx rimraf ../../security"],
+    ["cd -- src/a && npx rimraf ../../security"],
+    ["cd -L src/a && npx rimraf ../../security"],
+    ["cd -e src/a && trash ../../security"],
+    ["cd -@ src/a && npx rimraf ../../security"],
+    ["cd -P src/a && npx rimraf ../../.claude/hooks"],
+    ["pushd -n src/a && npx rimraf ../../security"],
+    ["CDPATH=src cd a && npx rimraf ../../security"],
+    ["export CDPATH=src; cd a && npx rimraf ../../security"],
+    ["Set-Location -Path src/a; npx rimraf ../../security", "PowerShell"],
+    // The folder above the project is still found behind an option (F3b).
+    ["cd -P .. && npx rimraf ."],
+    ["cd -- .. && npx rimraf ."],
+  ]) {
+    stagedOnly(`asks${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      const out = run(command, { tool });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // A move the resolver follows: src/security is the project's own.
+    "cd src/a && npx rimraf ../security",
+    "cd src && npx rimraf security/old.js",
+    // An option on a move in a command that names nothing of Guardian's.
+    "cd -P src && npm test",
+    "cd -- src/a && ls",
+    "CDPATH=src cd a && npm run build",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(run(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

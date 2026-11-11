@@ -1277,6 +1277,16 @@ Scope of (b), confirmed by Lex (2026-11-11): the comment is blanked for the bare
 
 Smoke test after applying (F1b): at the root of a scratch project with Guardian installed, in bypass mode, ask Claude to run `echo "## Security notes" >> README.md`, `git tag -a v1 -m "security release"` and `npm run security` (no prompt for any), then `npx rimraf security` (denied with Guardian's message).
 
+**Re-probe 6, W3 and Lex decision G3 (2026-11-11): a cd with an option, and CDPATH. Fixed in staging, not yet live.** `commandBases()` took the first word after `cd` for the directory. `cd -P src/a && npx rimraf ../../security` therefore added a folder named `-p` and never `src/a`, the resolver still called itself certain, and `../../security` was resolved only from the session folder, where it is not Guardian's. Nothing read `CDPATH`, which sends a relative `cd` to a folder the text does not name. Silent in both modes at the project root: `cd -P`, `cd --`, `cd -L`, `cd -e` and `cd -@` in front of `src/a && npx rimraf ../../security`, the same with `../../.claude/hooks`, and `CDPATH=src cd a && npx rimraf ../../security`. Real effect in the re-probe (`real\cdP`, `real\cdpath`): the scanner deleted. Some of these asked in re-probe 5, by accident: the same move was applied once per name view, which left bases such as `<root>/-p/-p` from which the path happened to reach Guardian's folder. De-duplicating the views (F3) removed the accident.
+
+Lex's decision G3: `cd`, `pushd` and `Set-Location` with any option, and any command with CDPATH set, make the location uncertain, and an uncertain location falls back to the name-anywhere reading, as F2 decided. Change in `staging/hooks/injection-guard-hook.mjs`: in `commandBases()` a directory that starts with `-` (other than `cd -`) sets `certain` to false, and so does `CDPATH` anywhere in the text (`CDPATH_IN_TEXT`). `Set-Location -Path` and `-LiteralPath` were followed before; they are an option like any other now. `wordAboveProject()` (F3b) no longer takes its certainty from `commandBases()`: it follows moves itself, in order and past their options, so `cd -P .. && npx rimraf .` still asks; it skips a command with an unfollowed move or CDPATH in it, and stops counting once a move names a directory with a variable, a substitution or a glob.
+
+Tests: `tests/hook.test.js`, "a cd with an option or CDPATH is not followed (re-probe 6, G3)": 12 ask (9 failed before the fix; `Set-Location -Path src/a; npx rimraf ../../security` and the two F3b forms asked already), 5 stay silent in bypass mode (`cd src/a && npx rimraf ../security`, which is the project's own `src/security`; an option or CDPATH in a command that names nothing of Guardian's). Staged hook suite before: 1035 passed, 9 failed. After: 1044 passed, 0 failed.
+
+Cost: with an option on the move, a folder of the same name elsewhere asks too (`cd -P src && rm -rf security` is `src/security`, and asks). Write the move without the option.
+
+Smoke test after applying: at the root of a scratch project with a `src/a` folder ask Claude to run `cd -P src/a && npx rimraf ../../security` (a Guardian prompt; decline).
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10
