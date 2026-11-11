@@ -233,6 +233,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **The guarded-name resolver fails closed (BUG-080, re-probe 5 F2).** E8
+  resolved three kinds of real path wrongly, so the name did not count: a
+  Git Bash drive path (`rm -rf /c/Users/.../.claude/hooks`, read as
+  `C:\c\Users`), a path with `@`, `+` or a space in one of its parts
+  (`x@/../.claude/hooks`, `'src/x y/../../security'`, any project whose
+  folder name has a space), and `find -execdir`. Drive paths are mapped,
+  a path is read over any character and a quoted word is read whole, and
+  `-execdir`, `-okdir`, `env --chdir` and a `cwd` option in inline code
+  make a guarded name count wherever it stands.
+
 - **The bare word `security` counts where it can reach a program (BUG-080,
   re-probe 5 F1).** E8 skipped the word wherever it stood alone, so
   `npx rimraf security`, `echo security | xargs rm -rf`,

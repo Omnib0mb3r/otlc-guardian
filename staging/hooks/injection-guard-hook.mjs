@@ -214,12 +214,14 @@ function loadSettings(projectRoot) {
  *     (PowerShell and cmd write ".claude.\settings.json" to .claude);
  *   - an absolute path resolved through the file system (onDisk()), so an
  *     8.3 short name (CLAUDE~1), a symbolic link or a junction is matched
- *     as the file it reaches.
+ *     as the file it reaches;
+ *   - on Windows, a Git Bash or Cygwin drive path as Windows spells it
+ *     (drivePath()).
  */
 function canonicalPath(p) {
-  const slashed = String(p).replace(/\\/g, "/")
+  const slashed = drivePath(String(p).replace(/\\/g, "/")
     .replace(/^\/\/[?.]\/UNC\//i, "//")
-    .replace(/^\/\/[?.]\/(?=[A-Za-z]:)/, "");
+    .replace(/^\/\/[?.]\/(?=[A-Za-z]:)/, ""));
   const names = slashed.split("/").map((name, k) => {
     if (k === 0 && /^[A-Za-z]:$/.test(name)) return name;
     const plain = name.replace(/:.*$/, "");
@@ -231,6 +233,19 @@ function canonicalPath(p) {
 
 const IS_WINDOWS = process.platform === "win32";
 const onDiskCache = new Map();
+
+/**
+ * On Windows, a drive path as Git Bash (MSYS) and Cygwin spell it, turned
+ * into the Windows spelling: /c/Users/x and /cygdrive/c/Users/x are
+ * C:/Users/x (re-probe 5, F2). The Bash tool runs Git Bash there, and
+ * path.resolve() reads "/c/Users" as a folder named c on the current
+ * drive, so such a path never matched the file it names. Any other path
+ * is returned as it is.
+ */
+function drivePath(p) {
+  if (!IS_WINDOWS) return p;
+  return p.replace(/^[\\/](?:cygdrive[\\/])?([A-Za-z])(?=[\\/]|$)/, (m, drive) => `${drive.toUpperCase()}:`).replace(/^([A-Z]:)$/, "$1/");
+}
 
 /**
  * An absolute path as the file system spells it: the deepest part that
@@ -1198,36 +1213,89 @@ const DIRECTORY_CHANGES = [
   /\s(?:-c|--prefix|--cwd|--directory|--git-dir|--work-tree|-workingdirectory|-wd)(?:=|\s+)(\S+)/g,
   /chdir\(\s*([^\s)]+)\s*\)/g,
 ];
+// Moves the resolver does not follow: find -execdir and -okdir run their
+// command in each match's folder, env --chdir in the one it names, and a
+// cwd option in inline code (execSync(..., { cwd }), subprocess.run(...,
+// cwd=...)) in a folder the code picks. With one of these in the text the
+// bases are not certain, and a guarded name counts wherever it stands
+// (re-probe 5, F2).
+const UNFOLLOWED_MOVE = /(?:^|\s)-(?:execdir|okdir)(?=\s|$)|(?:^|\s)--chdir(?=[=\s]|$)|(?<![\w-])cwd\s*[:=]/;
+// The options and the call of DIRECTORY_CHANGES as whole shell words. A
+// word keeps its case, so -C (a directory) is not -c (python -c "code").
+const DIRECTORY_OPTION = /^(?:--prefix|--cwd|--directory|--git-dir|--work-tree|-workingdirectory|-wd)$/i;
+const DIRECTORY_OPTION_VALUE = /^(?:--prefix|--cwd|--directory|--git-dir|--work-tree)=/i;
+const QUOTED_CHDIR = /chdir\(\s*(['"])(.*?)\1/gi;
 const MAX_COMMAND_BASES = 32;
 const UNKNOWN_DIRECTORY = /[$`%*?()]/;
 
 /**
  * The directories a command's relative paths may resolve from.
+ * @param {string[]} views - the command text in its name views
+ * @param {string} cwd - the session's working directory
+ * @param {string[]} words - the command's shell words (shellWords()), from
+ *   which a directory with white space in its name is read whole
  * @returns {{ bases: string[], certain: boolean }} certain is false when a
  *   move names a directory the text does not spell out (a variable, a
- *   substitution, a glob) or there are too many to follow
+ *   substitution, a glob), is one the resolver does not follow, or there
+ *   are too many to follow
  */
-function commandBases(views, cwd) {
+function commandBases(views, cwd, words) {
   const bases = [cwd];
-  let certain = true;
+  let certain = !views.some((view) => UNFOLLOWED_MOVE.test(view));
+  /** Adds the directory a move names, from every base so far. False once there are too many. */
+  const move = (spelled) => {
+    const dir = spelled.replace(/[;&|)]+$/, "").replace(/\/+$/, "") || "/";
+    if (dir === "-") return true; // back to a directory already in the set
+    if (UNKNOWN_DIRECTORY.test(dir)) { certain = false; return true; }
+    for (const base of [...bases]) {
+      const next = path.resolve(base, drivePath(dir.replace(/^~(?=$|\/)/, os.homedir())));
+      if (!bases.includes(next)) bases.push(next);
+    }
+    return bases.length <= MAX_COMMAND_BASES;
+  };
+  const tooMany = () => ({ bases: bases.slice(0, MAX_COMMAND_BASES), certain: false });
   for (const view of views) {
     for (const re of DIRECTORY_CHANGES) {
-      for (const m of view.matchAll(re)) {
-        const dir = m[1].replace(/[;&|)]+$/, "").replace(/\/+$/, "") || "/";
-        if (dir === "-") continue; // back to a directory already in the set
-        if (UNKNOWN_DIRECTORY.test(dir)) { certain = false; continue; }
-        for (const base of [...bases]) {
-          const next = path.resolve(base, dir.replace(/^~(?=$|\/)/, os.homedir()));
-          if (!bases.includes(next)) bases.push(next);
-        }
-        if (bases.length > MAX_COMMAND_BASES) return { bases: bases.slice(0, MAX_COMMAND_BASES), certain: false };
-      }
+      for (const m of view.matchAll(re)) if (!move(m[1])) return tooMany();
     }
+  }
+  // The same moves with white space in the directory's name (cd "My
+  // Project", git -C 'My Project', os.chdir('my proj')): the views end a
+  // path at the space, the shell's own words do not.
+  const spaced = (word) => word !== undefined && /\s/.test(word);
+  for (let k = 0; k < words.length; k++) {
+    const word = words[k];
+    const dirs = [];
+    if (DIRECTORY_MOVERS.has(commandName(word))) {
+      let j = k + 1;
+      while (j < words.length && /^(?:-|\/d$)/i.test(words[j])) j++;
+      dirs.push(words[j]);
+    } else if (word === "-C" || DIRECTORY_OPTION.test(word)) dirs.push(words[k + 1]);
+    else if (DIRECTORY_OPTION_VALUE.test(word)) dirs.push(word.slice(word.indexOf("=") + 1));
+    else if (spaced(word)) for (const m of word.matchAll(QUOTED_CHDIR)) dirs.push(m[2]);
+    for (const dir of dirs.filter(spaced)) if (!move(dir.replace(/\\/g, "/"))) return tooMany();
   }
   return { bases, certain };
 }
 
-const PATH_RUN_CHAR = new RegExp(`[${NAME_CHAR}/]`);
+// The characters a path runs over when it is read back from a guarded name
+// to its start. A file name can hold almost anything (x@, x+, a space), so
+// the run ends only at what ends a shell word or a string in code. In the
+// name views, where quotes are gone, white space ends it too; in a single
+// shell word (shellWords()) white space is part of the path and a quote,
+// kept there as "\0", ends it.
+const PATH_RUN_CHAR = /[^\s\0=(),;|&<>{}[\]:$%]/;
+const WORD_PATH_RUN_CHAR = /[^\0=(),;|&<>{}[\]:$%]/;
+
+/** Every shell word of a command in order, with those of its substitutions after them. */
+function shellWords(text, dialect, depth = 0) {
+  if (depth > MAX_SHELL_DEPTH) return [];
+  const { tokens, subs } = lexShell(text, dialect);
+  return [
+    ...tokens.filter((tok) => tok.word !== undefined).map((tok) => tok.word),
+    ...subs.flatMap((sub) => shellWords(sub, dialect, depth + 1)),
+  ];
+}
 
 // Programs whose arguments name tests to run. "security" given to one is
 // a test filter or a module name (pytest -k security, npm test -- security).
@@ -1345,9 +1413,15 @@ function bareWordText(text, dialect) {
  * "src/.claude" are the project's own folders, and "../security" from
  * src/ is Guardian's. Where the path cannot be resolved, the name counts
  * as before, wherever it stands: the base is a variable or a substitution,
- * the command moves to a directory the text does not spell out, or the
- * name is a Windows short name (CLAUDE~1), which exists only for the file
- * it shortens.
+ * the command moves to a directory the text does not spell out or in a way
+ * the resolver does not follow (UNFOLLOWED_MOVE), or the name is a Windows
+ * short name (CLAUDE~1), which exists only for the file it shortens.
+ *
+ * A path is read twice (re-probe 5, F2). In the name views quotes are
+ * gone, so a path ends at white space; that reading sees through split
+ * quotes and escapes. A shell word that holds white space is also read
+ * whole, so 'src/x y/../../security' and "C:/My Project/security" are the
+ * paths they spell. The name counts if either reading reaches the file.
  *
  * The bare word "security" is resolved the same way, from the text
  * bareWordText() leaves (re-probe 5, F1): `npx rimraf security` at the
@@ -1363,29 +1437,32 @@ function guardedNameIn(texts, dialect, cwd, root) {
   const guardedAbs = GUARDED_NAMES.map((name) => ({ name, abs: path.join(root, name).replace(/\\/g, "/").toLowerCase() }));
   for (const text of texts) {
     const views = nameViews(text);
-    const { bases, certain } = commandBases(views, cwd);
+    const words = shellWords(text, dialect);
+    const { bases, certain } = commandBases(views, cwd, words);
     const reaches = (name, spelled) => {
-      const rel = spelled.replace(/^~(?=$|\/)/, os.homedir());
+      const rel = drivePath(spelled.replace(/^~(?=$|\/)/, os.homedir()));
       return bases.some((base) => watchKey(path.resolve(base, rel)) === guardedKey.get(name));
+    };
+    /** Whether the name matched at m is part of a path that reaches Guardian's file. */
+    const counts = (view, name, m, runChar) => {
+      // The path the name is part of: back over path characters, and a drive letter.
+      let start = m.index;
+      while (start > 0 && runChar.test(view[start - 1])) start--;
+      if (/^[a-z]:$/.test(view.slice(start - 2, start)) && !runChar.test(view[start - 3] ?? " ")) start -= 2;
+      const spelled = view.slice(start, m.index + m[0].length).trimStart();
+      // A word folder with no separator before or after it is the bare
+      // word, which is judged below on the text bareWordText() leaves.
+      const isPath = spelled.includes("/") || view[m.index + m[0].length] === "/";
+      if (!isPath && WORD_FOLDERS.includes(name)) return false;
+      const before = view[start - 1] ?? "";
+      const unresolvable = !certain || /[$}%)]/.test(before) || /~\d/.test(spelled);
+      // A name stuck to an option cluster (-so.claude/x) is also read on its own.
+      const attached = start < m.index && view[m.index - 1] !== "/";
+      return unresolvable || reaches(name, spelled) || (attached && reaches(name, m[0]));
     };
     for (const view of views) {
       for (const { name, re } of GUARDED_NAME_PATTERNS) {
-        for (const m of view.matchAll(re)) {
-          // The path the name is part of: back over path characters, and a drive letter.
-          let start = m.index;
-          while (start > 0 && PATH_RUN_CHAR.test(view[start - 1])) start--;
-          if (/^[a-z]:$/.test(view.slice(start - 2, start)) && !PATH_RUN_CHAR.test(view[start - 3] ?? " ")) start -= 2;
-          const spelled = view.slice(start, m.index + m[0].length);
-          // A word folder with no separator before or after it is the bare
-          // word, which is judged below on the text bareWordText() leaves.
-          const isPath = spelled.includes("/") || view[m.index + m[0].length] === "/";
-          if (!isPath && WORD_FOLDERS.includes(name)) continue;
-          const before = view[start - 1] ?? "";
-          const unresolvable = !certain || /[$}%)]/.test(before) || /~\d/.test(spelled);
-          // A name stuck to an option cluster (-so.claude/x) is also read on its own.
-          const attached = start < m.index && view[m.index - 1] !== "/";
-          if (unresolvable || reaches(name, spelled) || (attached && reaches(name, m[0]))) return name;
-        }
+        for (const m of view.matchAll(re)) if (counts(view, name, m, PATH_RUN_CHAR)) return name;
       }
       for (const run of view.split(/[\s;|&<>()=,]+/)) {
         if (!/[*?[]/.test(run)) continue;
@@ -1393,6 +1470,16 @@ function guardedNameIn(texts, dialect, cwd, root) {
           const re = globRegex(path.resolve(base, run.replace(/^~(?=$|\/)/, os.homedir())).replace(/\\/g, "/").toLowerCase());
           const globHit = re && guardedAbs.find((g) => re.test(g.abs));
           if (globHit) return globHit.name;
+        }
+      }
+    }
+    // A shell word with white space in it, read whole: a quoted path keeps
+    // its spaces, and a string in code ends at its own quotes.
+    for (const word of words.filter((w) => /\s/.test(w))) {
+
+      for (const view of nameViews(word.replace(/['"`]/g, "\0"))) {
+        for (const { name, re } of GUARDED_NAME_PATTERNS) {
+          for (const m of view.matchAll(re)) if (counts(view, name, m, WORD_PATH_RUN_CHAR)) return name;
         }
       }
     }
@@ -1646,8 +1733,11 @@ function pathLikeWords(text) {
 function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { decoded: [], filters: [], quiet: [] }) {
   const targets = new Map();
   if (depth > MAX_SHELL_DEPTH) return targets;
-  const abs = (dir, p) => path.resolve(dir, p.replace(/^~(?=$|[\\/])/, os.homedir())).replace(/\\/g, "/");
+  // Git Bash spells a drive as a folder (/c/Users); PowerShell and cmd do not.
+  const spelledPath = (p) => (dialect === "bash" ? drivePath(p) : p);
+  const abs = (dir, p) => path.resolve(dir, spelledPath(p.replace(/^~(?=$|[\\/])/, os.homedir()))).replace(/\\/g, "/");
   const add = (dir, p, sources = [], append = false) => {
+
     if (!p || p === "-" || /^&?\d+$/.test(p)) return;
     const key = abs(dir, p);
     const entry = targets.get(key) ?? { sources: new Set(), append: false };
