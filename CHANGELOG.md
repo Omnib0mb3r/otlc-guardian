@@ -233,6 +233,13 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **`claude mcp add -s project` asks (BUG-074, re-probe 5 F7).** E3 asks
+  on any write to the project's `.mcp.json`, but Claude Code's own CLI
+  writes it without naming it, so `claude mcp add -s project e -- node -e
+  1` was silent. `claude mcp add`, `add-json`, `add-from-claude-desktop`
+  and `remove` for the project scope are now read as a write of that
+  file.
+
 - **Without `CLAUDE_PROJECT_DIR` the project root is found, not assumed
   (BUG-084, re-probe 5 F6).** The hook took the session folder as the
   root, so a session in `src/` did not see the project's `.mcp.json` or

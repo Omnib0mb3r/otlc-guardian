@@ -3367,6 +3367,64 @@ describe("PreToolUse hook - the project root without CLAUDE_PROJECT_DIR (re-prob
 });
 
 // ---------------------------------------------------------------------------
+// Re-probe 5, F7 (BUG-074): claude mcp add for the project scope
+// ---------------------------------------------------------------------------
+//
+// E3: any write to the project's .mcp.json asks, because a stdio server is
+// a command Claude Code starts with the session. `claude mcp add -s
+// project` writes that file without naming it. Real effect in the
+// re-probe: .mcp.json created with the stdio server.
+
+describe("PreToolUse hook - claude mcp add for the project scope asks (re-probe 5, F7)", () => {
+  const run = (command, { sub = "", mode, tool = "Bash" } = {}) => withTempProject((dir) => {
+    for (const rel of [".claude/settings.json", "src/a.js"]) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), rel.endsWith(".json") ? "{}" : "x\n");
+    }
+    return runHook(PRE_HOOK, { tool_name: tool, cwd: path.join(dir, sub), tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) },
+      { CLAUDE_PROJECT_DIR: dir });
+  });
+
+  for (const [command, options] of [
+    ["claude mcp add -s project e -- node -e 1"],
+    ["claude mcp add --scope project e -- node server.js"],
+    ["claude mcp add --scope=project e -- node server.js"],
+    ["claude mcp add e -s project -- node -e 1"],
+    ["claude mcp add --transport http -s project e https://example.com/mcp"],
+    ["claude mcp add-json -s project e '{\"command\":\"node\",\"args\":[\"-e\",\"1\"]}'"],
+    ["claude mcp add-from-claude-desktop -s project"],
+    ["claude mcp remove -s project e"],
+    ["npx @anthropic-ai/claude-code mcp add -s project e -- node -e 1"],
+    ["npx -y claude mcp add -s project e -- node -e 1"],
+    ["timeout 30 claude mcp add -s project e -- node -e 1"],
+    ["cd src && claude mcp add -s project e -- node -e 1"],
+    ["claude mcp add -s project e -- node -e 1", { sub: "src" }],
+    ["claude mcp add -s project e -- node -e 1", { tool: "PowerShell" }],
+  ]) {
+    stagedOnly(`asks${options?.sub ? ` from ${options.sub}/` : ""}${options?.tool ? ` (${options.tool})` : ""}: ${command}`, () => {
+      const out = run(command, options);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+      assert.match(out, /\.mcp\.json/);
+    });
+  }
+
+  // Other scopes write the user's own files, and a listing writes nothing.
+  for (const command of [
+    "claude mcp add e -- node -e 1",
+    "claude mcp add -s user e -- node -e 1",
+    "claude mcp add -s local e -- node -e 1",
+    "claude mcp add e -- mytool -s project",
+    "claude mcp list",
+    "claude mcp get e",
+    "claude --version",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(run(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

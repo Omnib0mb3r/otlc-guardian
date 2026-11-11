@@ -704,6 +704,32 @@ const RUN_WRAPPERS      = new Set(["uv", "poetry", "pipx", "pdm", "hatch"]);
 // Commands whose arguments are the text they put on stdout.
 const TEXT_SAYERS       = new Set(["echo", "printf"]);
 
+// `claude mcp` subcommands that change a server list.
+const CLAUDE_MCP_WRITERS = new Set(["add", "add-json", "add-from-claude-desktop", "remove"]);
+const CLAUDE_PACKAGE = /^(?:claude|@anthropic-ai\/claude-code(?:@\S*)?)$/i;
+
+/**
+ * Whether a command changes the project's MCP servers through Claude
+ * Code's own CLI: `claude mcp add`, `add-json`, `add-from-claude-desktop`
+ * or `remove` with `-s project` or `--scope project`, run directly or
+ * through npx, pnpx or bunx (re-probe 5, F7). That scope is stored in
+ * .mcp.json at the project root; the user and local scopes are stored in
+ * the user's own ~/.claude.json. Words after "--" belong to the server's
+ * command, not to claude.
+ */
+function writesProjectMcp(name, args) {
+  let rest = args;
+  if (PACKAGE_RUNNERS.has(name)) {
+    const k = rest.findIndex((a) => !a.startsWith("-"));
+    if (k < 0 || !CLAUDE_PACKAGE.test(rest[k])) return false;
+    rest = rest.slice(k + 1);
+  } else if (name !== "claude") return false;
+  if (rest[0] !== "mcp" || !CLAUDE_MCP_WRITERS.has(rest[1])) return false;
+  const end = rest.indexOf("--");
+  const own = end < 0 ? rest : rest.slice(0, end);
+  return own.some((a, k) => /^(?:-s|--scope)=project$/i.test(a) || (/^(?:-s|--scope)$/.test(a) && own[k + 1]?.toLowerCase() === "project"));
+}
+
 /**
  * The command a run wrapper starts, as its words, or null when the words
  * are not a wrapper's. The wrapper's own options may take a value
@@ -2082,6 +2108,10 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     if (name === "rsync" && dest) add(dir, dest);
   } else if (name === "robocopy" || name === "xcopy") {
     winCopyWrites(name, args, dir, ctx);
+  } else if (writesProjectMcp(name, args)) {
+    // The file is not named, so it is added here: the project's
+    // .mcp.json, which the main handler asks about (re-probe 4, E3).
+    add(ctx.root ?? dir, ".mcp.json");
   } else if (name === "git") {
     gitWrites(args, dir, ctx);
   } else if (name === "patch") {
