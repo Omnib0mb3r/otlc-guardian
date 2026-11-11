@@ -233,6 +233,13 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A variable setter is known in every spelling (BUG-080, re-probe 7
+  H5).** `printf -vc security; rm -rf $c` was silent: only the separate
+  word `-v` was read. With `printf -v`, `read`, `mapfile`, `declare`,
+  `export` and the like, or a PowerShell parameter that names a variable
+  (`-OutVariable:c`, `-ov +c`, `-Variable`), any variable in the command
+  may have been set, and the bare-word exemptions are not earned.
+
 - **A PowerShell script block is read (BUG-080, re-probe 7 H4).**
   `(Get-Content README.md) -split { Remove-Item -Recurse -Force
   .claude\hooks }` was silent: a stage that starts with an operator after

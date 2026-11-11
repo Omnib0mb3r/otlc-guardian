@@ -4816,6 +4816,61 @@ describe("PreToolUse hook - a PowerShell script block that does more than compar
 });
 
 // ---------------------------------------------------------------------------
+// Re-probe 7, X5 and H5 (BUG-080): a variable setter the reader does not
+// follow
+// ---------------------------------------------------------------------------
+//
+// G2b made a variable a hazard only when the same command can set it,
+// and knew `printf -v c` by the separate word -v. `printf -vc security;
+// rm -rf $c` sets c all the same, and deleted security/ for real.
+
+describe("PreToolUse hook - a variable setter in any spelling (re-probe 7, H5)", () => {
+  for (const command of [
+    "printf -vc security; rm -rf $c",
+    'printf -vc %s security; npx rimraf "$c"',
+    'printf -v"c" security; rm -rf "$c"',
+    // Held: the spellings G2 knew.
+    "printf -v c security; rm -rf $c",
+    "builtin printf -vc security; rm -rf $c",
+    "export c=security; rm -rf $c",
+    'IFS= read -r c <<< security; rm -rf "$c"',
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    "Write-Output security -OutVariable:c; Remove-Item $c -Recurse -Force",
+    "Write-Output security -ov:c; Remove-Item -Recurse -Force $c",
+    "Write-Output security -ov +c; Remove-Item -Recurse -Force $c",
+    "Get-ChildItem security -PipelineVariable:p | Select-Object -First 1; Remove-Item -Recurse -Force $p",
+    "Write-Output security | Tee-Object -Variable c; Remove-Item $c -Recurse -Force",
+    "Write-Output security | Set-Variable c; Remove-Item $c -Recurse -Force",
+  ]) {
+    stagedOnly(`asks, PowerShell tool: ${command}`, () => {
+      const out = runGuarded(command, { tool: "PowerShell" });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // printf with no -v only prints; after the format a "-v" is data.
+    "printf 'done: %s\\n' security",
+    "printf '%s\\n' -v security",
+    // No setter in the command: $BRANCH carries nothing over.
+    "git commit --allow-empty -m security && git push origin $BRANCH",
+    // A setter and no variable.
+    "export NODE_ENV=test && npm run security",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

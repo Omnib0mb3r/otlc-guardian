@@ -1475,6 +1475,18 @@ Tests: `tests/hook.test.js`, "a PowerShell script block that does more than comp
 
 Smoke test after applying: through the PowerShell tool ask Claude to run `(Get-Content README.md) -split { Remove-Item -Recurse -Force .claude\hooks }`; see a Guardian prompt; decline. In bypass mode `Get-ChildItem .claude | Where-Object { $_.Name -like '*.json' }` gets no Guardian prompt.
 
+**Re-probe 7, X5 and Lex decision H5 (2026-11-11): a variable setter the reader does not follow. Fixed in staging, not yet live.** A regression in 2cbfe7c (G2b) for the Bash form. `plainCommand()` knew `printf -v` by the separate word `-v`, and the PowerShell parameters by the whole word. Silent in both modes: `printf -vc security; rm -rf $c`, `printf -vc %s security; npx rimraf "$c"`, `printf -v"c" security; rm -rf "$c"`; through the PowerShell tool `Write-Output security -OutVariable:c; Remove-Item $c -Recurse -Force`, `-ov:c`, `-ov +c` and `Get-ChildItem security -PipelineVariable:p | ...; Remove-Item -Recurse -Force $p`. Real effect in the re-probe (`real\printfvc`, `realps\ovc`, `ovp`): `security/` deleted. With the variable not known as set, `$c` did not make the command not plain, the `printf` or `Write-Output` stage was blanked as reading, and the deleter held no guarded word.
+
+Lex's decision: variable setters fail closed. `printf -v` in every spelling, `read`, `mapfile`, `readarray`, `declare`, `typeset`, `local`, `export`, and in PowerShell every common parameter that sets a variable, with `:` or a space, plus `Set-Variable`, `New-Variable` and `sv`. Any of these in the command means a later variable can be set.
+
+Change in `staging/hooks/injection-guard-hook.mjs`: `VARIABLE_SETTERS` (`read`, `mapfile`, `readarray`, `declare`, `typeset`, `local`, `export`, `readonly`, `getopts`, `let`) and `PS_VARIABLE_SETTERS` (`Set-Variable`, `sv`, `set`, `New-Variable`, `nv`). When a word of the command is one of them, or `printf` followed by a word that starts an option cluster with `v` in it, or in PowerShell a parameter on `PS_VARIABLE_OPTION` (read before the `:`; `-Variable`, `-SessionVariable` and their prefixes added), `plainCommand()` takes every variable in the command as one it can set, so any `$name` makes it not plain. `printf` itself no longer only reads with an option in front of its format (`READ_ONLY_OPTIONS.printf`, `leading`), so `printf -vc security` is not blanked either. The four PowerShell forms already asked since H1, where `-OutVariable` stopped being a parameter that only reads.
+
+Cost, for Lex to confirm: a command with one of the setters, any variable and an exempt word asks: `export NODE_ENV=test && npm run security -- $ARGS` (silent before). `export NODE_ENV=test && npm run security` holds no variable and is silent. Lex's per-pipeline ruling on plainness (cost b) applies on top of this.
+
+Tests: `tests/hook.test.js`, "a variable setter in any spelling (re-probe 7, H5)": 13 ask (3 failed before the fix, the stuck `printf -v` forms; the others asked already), 4 stay silent in bypass mode. Staged hook suite before: 1444 passed, 3 failed. After: 1447 passed, 0 failed. Lex's regress harness: no line changed. Re-probe 7's lists (640 commands): 3 verdicts changed, the stuck `printf -v` forms, from silent to deny/ask.
+
+Smoke test after applying: at the root of a scratch project ask Claude to run `printf -vc security; rm -rf $c`; see a Guardian prompt naming security; decline. In bypass mode `printf 'done: %s\n' security` gets no prompt.
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

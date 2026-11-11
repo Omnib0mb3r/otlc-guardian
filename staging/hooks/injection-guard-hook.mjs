@@ -1712,7 +1712,14 @@ const STATEMENT_ENDS = new Set([";", "\n", "&&", "||"]);
 // parameters that name a variable to fill (-OutVariable x, -ov x, -pv x,
 // in any prefix PowerShell accepts).
 const PS_FILLED_VARIABLES = ["matches", "psitem", "input", "args", "error", "this", "foreach", "switch"];
-const PS_VARIABLE_OPTION = /^-(?:ov|pv|ev|wv|iv|outv\w*|pi\w*|errorv\w*|warningv\w*|informationv\w*)$/i;
+const PS_VARIABLE_OPTION = /^-(?:ov|pv|ev|wv|iv|sv|outv\w*|pi\w*|errorv\w*|warningv\w*|informationv\w*|va|var\w*|sessionv\w*|statuscodev\w*|responseheadersv\w*)$/i;
+// Commands that put a value in a variable the reader does not follow
+// (re-probe 7, H5): the name can be stuck to an option (printf -vc), come
+// from another variable (export "$n=x") or be read from a file (read,
+// mapfile). With one of them anywhere in a command any variable in it
+// may have been set.
+const VARIABLE_SETTERS = new Set(["read", "mapfile", "readarray", "declare", "typeset", "local", "export", "readonly", "getopts", "let"]);
+const PS_VARIABLE_SETTERS = new Set(["set-variable", "sv", "set", "new-variable", "nv"]);
 
 /**
  * Whether a command is plain: stages of a command and its arguments,
@@ -1731,6 +1738,9 @@ const PS_VARIABLE_OPTION = /^-(?:ov|pv|ev|wv|iv|outv\w*|pi\w*|errorv\w*|warningv
  *     stage names (git() { rm -rf "$3"; }; git commit -m security);
  *   - eval, source, read, mapfile and `printf -v`, which run text or put
  *     it in a variable;
+ *   - any variable at all, when the command holds a setter the reader
+ *     does not follow (VARIABLE_SETTERS, printf -v in any spelling, a
+ *     PowerShell parameter that names a variable; re-probe 7, H5);
  *   - a command word that is a variable or a substitution ($c security);
  *   - an argument or redirect target that holds a variable the same
  *     command can set (c=security; rm -rf $c, and $_ after any command).
@@ -1780,9 +1790,14 @@ function plainCommand(text, tokens, dialect) {
   // one named after -OutVariable, -PipelineVariable and their like.
   const sets = new Set(["_", ...(dialect === "powershell" ? PS_FILLED_VARIABLES : [])]);
   let positional = false;
+  let settable = false; // a setter the reader does not follow: any variable may be set (H5)
   tokens.forEach((tok, i) => {
     if (tok.word === undefined) return;
-    if (dialect === "powershell" && PS_VARIABLE_OPTION.test(tok.word)) sets.add((tokens[i + 1]?.word ?? "").toLowerCase());
+    const name = commandName(tok.word);
+    if (dialect === "powershell") {
+      // -OutVariable c, -ov:c, -ov +c: the parameter is the part before ":".
+      if (PS_VARIABLE_SETTERS.has(name) || PS_VARIABLE_OPTION.test(tok.word.split(":")[0])) settable = true;
+    } else if (VARIABLE_SETTERS.has(name) || (name === "printf" && /^-[A-Za-z]*v/.test(tokens[i + 1]?.word ?? ""))) settable = true;
     const assigned = /^([A-Za-z_]\w*)\+?=/.exec(tok.word);
     if (assigned) sets.add(assigned[1]);
     for (const m of singleQuotesOut(text.slice(tok.start, tok.end)).matchAll(/\$\{([A-Za-z_]\w*):?=/g)) sets.add(m[1]);
@@ -1790,7 +1805,7 @@ function plainCommand(text, tokens, dialect) {
     if (tok.word === "set") positional = true;
   });
   const setsOneOf = (raw) => [...singleQuotesOut(raw).matchAll(VARIABLE_REFERENCE)]
-    .some((m) => sets.has(dialect === "powershell" ? m[1].toLowerCase() : m[1]) || (positional && /^[\d@*]/.test(m[1])));
+    .some((m) => settable || sets.has(dialect === "powershell" ? m[1].toLowerCase() : m[1]) || (positional && /^[\d@*]/.test(m[1])));
   const substitution = DIALECTS[dialect].backticks ? /\$\(|`/ : /\$\(/;
 
   let first = true;
@@ -1813,7 +1828,7 @@ function plainCommand(text, tokens, dialect) {
       first = false;
       stageName = commandName(tok.word);
       if (pattern || /[$`]/.test(singleQuotesOut(raw)) || NOT_PLAIN_COMMANDS.has(stageName)) return null;
-    } else if (stageName === "printf" && tok.word === "-v") return null;
+    } else if (stageName === "printf" && /^-[A-Za-z]*v/.test(tok.word) && tokens[i - 1]?.word !== undefined && commandName(tokens[i - 1].word) === "printf") return null;
     else if (setsOneOf(raw) || (redirected && (pattern || sub))) return null;
     else if (pattern || sub) opens.push({ start: tok.start, word: tok.word, sub });
   }
@@ -2312,6 +2327,7 @@ const NULL_SINK = /^(?:\/dev\/null|nul|\$null)$/i;
 //   digits   -N is a count
 //   plus     what a word that starts with "+" must match (less runs +cmd)
 //   operand  a test every operand must pass
+//   leading  options stand before the first operand only
 // `null` marks a program whose words are all text or a test.
 const readOptions = (flags, valued = "", long = "", extra = {}) =>
   ({ flags: new Set(flags), valued: new Set(valued), long: new Set(long.split(/\s+/).filter(Boolean)), ...extra });
@@ -2380,7 +2396,9 @@ const READ_ONLY_OPTIONS = {
   popd: readOptions("n", "", "", { digits: true }),
   pwd: readOptions("LP", "", "logical physical"),
   echo: null,
-  printf: null,
+  // printf takes one option, -v NAME, which sets a variable (H5). After
+  // the format every word is data, a "-v" among them too.
+  printf: readOptions("", "", "", { leading: true }),
   test: null,
   "[": null,
   true: null,
@@ -2512,6 +2530,7 @@ function knownReadOptions(spec, args) {
   for (const a of args) {
     if (operands || a === "-" || !/^[-+]/.test(a)) {
       if (spec.operand && !spec.operand(a)) return false;
+      if (spec.leading) operands = true;
     } else if (a === "--") operands = true;
     else if (a.startsWith("+")) {
       if (spec.plus && !spec.plus.test(a)) return false;
