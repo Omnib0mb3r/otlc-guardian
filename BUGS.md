@@ -1342,6 +1342,21 @@ Cost, measured at a project root in bypass mode (each is a deny there; a command
 
 Smoke test after applying: at the root of a scratch project ask Claude to run `( echo security ) | xargs rm -rf` (a Guardian prompt; decline); in bypass mode `git commit --allow-empty -m "fix(security): test"` gets no prompt.
 
+**Re-probe 6, W8 and Lex decision G6 (2026-11-11): false asks on ordinary work. Fixed in staging, not yet live.** Denied in bypass mode at a project root in the re-probe: `cd src && rm -rf security` and `cd src && npx rimraf security` (the project's own `src/security`; the first was silent in re-probe 5), `yarn security` and `pnpm security` (the script shorthand), and `echo 'security scan done' | tee -a logs/ci.log`. Causes: the bare word counted when it reached Guardian's folder from any base `commandBases()` holds, and that set keeps the session folder beside `src`; `scriptNameSpans()` needed the word `run`; `tee` was not read-only and had no plain-sink rule.
+
+Lex's decision G6: the resolver follows the `cd`; `yarn <script>` and `pnpm <script>` are script names like `npm run`; `tee` and `tee -a` to an unguarded file not named again count as a read with a redirect. `echo "security" > notes.txt && cat notes.txt` asking is accepted.
+
+Change in `staging/hooks/injection-guard-hook.mjs`:
+- The bare word is resolved from the folder the shell is in when it reaches the word. `textByDirectory()` gives the text `bareWordText()` leaves once for each set of folders its words can be reached in (`wordsInPlace()`, from G5), with the words reached elsewhere blanked, and `guardedNameIn()` resolves the word in each copy from that copy's folders. A move can fail, so only the commands joined to it by `&&` are taken to run where it leads: after a `;`, a newline, `||`, `&` or a pipe the folder the move started from counts too (`alt`). So `cd src && rm -rf security` is `src/security` and silent, and `cd src; npx rimraf security`, `cd src || npx rimraf security` and `cd src && npm test; npx rimraf security` ask. A base the in-order reading never visits (a `chdir()` in inline code) counts for every word, as before.
+- `scriptNameSpans()`: the first plain word after `yarn` or `pnpm` is a script name when it is not a command of the manager itself (`MANAGER_COMMANDS`). `yarn rimraf security` blanks `rimraf` only, so it asks.
+- `onlyReads()`: `tee` reads when each file it writes is a null device or passes the plain-sink test (spelled out, outside Guardian's folders and `.git`, not watched, not named again).
+
+Tests: `tests/hook.test.js`, "the bare word after a cd, a script shorthand, tee (re-probe 6, G6)": 10 stay silent in bypass mode (all 10 were denied before the fix), 14 keep asking. Staged hook suite before: 1163 passed, 10 failed. After: 1173 passed, 0 failed. Lex's regress harness: no line changed.
+
+Limit, stated: the folder-above check of F3b still follows every move as if it succeeds (`cd build; cmake ..` stays silent); only the bare word takes a failed move into account.
+
+Smoke test after applying: in bypass mode at the root of a scratch project with a `src/security` folder, `cd src && rm -rf security` gets no prompt; `cd src; npx rimraf security` is denied with Guardian's message.
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

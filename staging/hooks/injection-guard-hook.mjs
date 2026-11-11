@@ -1507,18 +1507,40 @@ function messageSpans(stage) {
   return spans;
 }
 
+// The commands of yarn (1 and 2+) and pnpm themselves. Any other first
+// word is a script of package.json, or a program in node_modules/.bin,
+// which the manager runs by that name.
+const MANAGER_COMMANDS = {
+  yarn: new Set(["add", "audit", "autoclean", "bin", "cache", "check", "config", "constraints", "create", "dedupe", "dlx",
+    "exec", "explain", "generate-lock-entry", "global", "help", "import", "info", "init", "install", "licenses", "link",
+    "list", "login", "logout", "node", "npm", "outdated", "owner", "pack", "patch", "patch-commit", "plugin", "policies",
+    "publish", "rebuild", "remove", "run", "search", "set", "stage", "start", "tag", "team", "test", "unlink", "unplug",
+    "up", "upgrade", "upgrade-interactive", "version", "versions", "why", "workspace", "workspaces"]),
+  pnpm: new Set(["add", "approve-builds", "audit", "bin", "cat-file", "cat-index", "config", "create", "dedupe", "deploy",
+    "dlx", "doctor", "env", "exec", "fetch", "find-hash", "help", "i", "import", "init", "install", "install-test", "it",
+    "la", "licenses", "link", "list", "ll", "ln", "ls", "outdated", "pack", "patch", "patch-commit", "patch-remove",
+    "prune", "publish", "rb", "rebuild", "recursive", "remove", "restart", "rm", "root", "run", "run-script",
+    "self-update", "server", "setup", "start", "store", "t", "test", "un", "uninstall", "unlink", "up", "update",
+    "upgrade", "why"]),
+};
+
 /**
  * The place of the script name in `npm run NAME` (also pnpm, yarn and
- * bun, and run-script): the name of an entry in package.json, not a path
- * (F1b). Words after it are handed to the script and stay.
+ * bun, and run-script), and in the shorthand `yarn NAME` and `pnpm NAME`:
+ * the name of an entry in package.json, not a path (F1b). Words after it
+ * are handed to the script and stay.
  * @param {Array<{word: string, start: number, end: number}>} stage
  * @returns {Array<[number, number]>}
  */
 function scriptNameSpans(stage) {
-  if (!PACKAGE_MANAGERS.has(commandName(stage[0].word))) return [];
+  const manager = commandName(stage[0].word);
+  if (!PACKAGE_MANAGERS.has(manager)) return [];
   const plain = stage.slice(1).filter((tok) => !tok.word.startsWith("-"));
-  if (!/^run(?:-script)?$/.test(plain[0]?.word ?? "") || !plain[1]) return [];
-  return [[plain[1].start, plain[1].end]];
+  if (/^run(?:-script)?$/.test(plain[0]?.word ?? "")) return plain[1] ? [[plain[1].start, plain[1].end]] : [];
+  // yarn NAME and pnpm NAME run the script NAME when NAME is not a
+  // command of the manager itself (re-probe 6, G6).
+  const own = MANAGER_COMMANDS[manager];
+  return own && plain[0] && !own.has(plain[0].word) ? [[plain[0].start, plain[0].end]] : [];
 }
 
 // Commands that make a stage, and with it the whole command, not plain
@@ -1773,11 +1795,24 @@ function guardedNameIn(texts, dialect, cwd, root, watches = () => false) {
       return !guardedFolders.some((folder) => key === folder || key.startsWith(`${folder}/`)) && !watches(file) &&
         !/\/\.(?:git|husky)\//.test(key);
     });
-    for (const view of nameViews(bareWordText(text, dialect, plainSink), PATH_RUN_CHAR, dialect)) {
-      for (const { name, re } of WORD_FOLDER_PATTERNS) {
-        for (const m of view.matchAll(re)) {
-          const bare = view[m.index - 1] !== "/" && view[m.index + m[0].length] !== "/";
-          if (bare && (!certain || reaches(name, name))) return name;
+    // It is resolved from the folder the shell is in when it reaches the
+    // word, not from every folder the command passes through: after
+    // `cd src &&` the word is src/security (re-probe 6, G6). A base the
+    // in-order reading never visits (a chdir() in inline code) counts for
+    // every word.
+    const left = bareWordText(text, dialect, plainSink);
+    const places = (certain && textByDirectory(left, dialect, cwd)) || [{ from: bases, text: left }];
+    const visited = new Set(places.flatMap((place) => place.from.map(watchKey)));
+    const unwalked = bases.filter((base) => !visited.has(watchKey(base)));
+    for (const place of places) {
+      const from = [...place.from, ...unwalked];
+      const reachesFrom = (name) => from.some((base) => watchKey(path.resolve(base, name)) === guardedKey.get(name));
+      for (const view of nameViews(place.text, PATH_RUN_CHAR, dialect)) {
+        for (const { name, re } of WORD_FOLDER_PATTERNS) {
+          for (const m of view.matchAll(re)) {
+            const bare = view[m.index - 1] !== "/" && view[m.index + m[0].length] !== "/";
+            if (bare && (!certain || reachesFrom(name))) return name;
+          }
         }
       }
     }
@@ -1813,7 +1848,12 @@ function scriptDialect(shell, option) {
  * and their values are marked `moves`: they say where a command runs, not
  * what it acts on.
  *
- * @returns {{ placed: Array<{ tok: {word: string, start: number, end: number}, dir: string, moves: boolean, stage: string[] }>,
+ * A move can fail. Only the commands joined to it by `&&` are sure to
+ * run where it leads; after a `;`, a newline, `||`, `&` or a pipe the
+ * shell may still be where it was, and each word from there on carries
+ * that folder in `alt` (re-probe 6, G6).
+ *
+ * @returns {{ placed: Array<{ tok: {word: string, start: number, end: number}, dir: string, alt: string[], moves: boolean, stage: string[] }>,
  *   subs: string[], end: string, lost: boolean }} `stage` is the words of
  *   the word's stage up to and including it; `end` is the directory after
  *   the last word; `lost` is true when a move names a directory the text
@@ -1830,6 +1870,8 @@ function wordsInPlace(text, dialect, start) {
   const pushed = [];
   const outer = [];
   let stage = [];
+  let pending = [];  // where the moves of the and-list being read started from
+  const maybe = [];  // where the shell is instead when an earlier move failed
   const toStage = (from, spelled) => {
     if (UNKNOWN_DIRECTORY.test(spelled)) lost = true;
     stageDir = path.resolve(from, home(spelled));
@@ -1843,12 +1885,13 @@ function wordsInPlace(text, dialect, start) {
       if (CONTROL_OPERATORS.has(op)) {
         stage = [];
         stageDir = null;
+        if (op !== "&&" && op !== "(") maybe.push(...pending.splice(0));
       }
       continue;
     }
     stage.push(word);
     const here = stageDir ?? dir;
-    const mark = (t, moves) => placed.push({ tok: t, dir: here, moves, stage: [...stage] });
+    const mark = (t, moves) => placed.push({ tok: t, dir: here, alt: [...maybe], moves, stage: [...stage] });
     const name = commandName(word);
     if (DIRECTORY_MOVERS.has(name)) {
       mark(tok, true);
@@ -1860,10 +1903,12 @@ function wordsInPlace(text, dialect, start) {
       }
       if (name === "pushd" || name === "push-location") pushed.push(dir);
       const next = target === "-" ? previous : path.resolve(dir, home(target ?? "~"));
+      pending.push(dir);
       previous = dir;
       dir = next;
     } else if (name === "popd" || name === "pop-location") {
       mark(tok, true);
+      pending.push(dir);
       dir = pushed.pop() ?? dir;
     } else if (word === "-C" || DIRECTORY_OPTION.test(word)) {
       mark(tok, true);
@@ -1878,6 +1923,38 @@ function wordsInPlace(text, dialect, start) {
     } else mark(tok, false);
   }
   return { placed, subs, end: dir, lost };
+}
+
+/**
+ * A command's text once for each set of folders its words can be reached
+ * in: the folder the shell is in at the word (wordsInPlace()) and the
+ * ones a failed move would have left it in. In each copy the words
+ * reached elsewhere are blanked, so a bare word is resolved from where
+ * it stands: in `cd src && rm -rf security` it is src/security
+ * (re-probe 6, G6). Text that is no word of the command (a substitution,
+ * a heredoc body) stays in every copy.
+ *
+ * @returns {Array<{ from: string[], text: string }>|null} null when a move
+ *   names a directory the text does not spell out
+ */
+function textByDirectory(text, dialect, cwd) {
+  const { placed, lost } = wordsInPlace(text, dialect, cwd);
+  if (lost) return null;
+  const groups = new Map();
+  for (const p of placed) {
+    const from = [p.dir, ...p.alt];
+    const key = from.map(watchKey).join("|");
+    if (!groups.has(key)) groups.set(key, { from, words: new Set() });
+    groups.get(key).words.add(p);
+  }
+  if (groups.size === 0) return [{ from: [cwd], text }];
+  return [...groups.values()].map(({ from, words }) => {
+    let out = text;
+    for (const p of placed) {
+      if (!words.has(p)) out = `${out.slice(0, p.tok.start)}${" ".repeat(p.tok.end - p.tok.start)}${out.slice(p.tok.end)}`;
+    }
+    return { from, text: out };
+  });
 }
 
 /**
@@ -2026,6 +2103,11 @@ function onlyReads(command, dialect, depth = 0, plainSink = null) {
       return script !== null && !script.encoded && onlyReads(script.text, "powershell", depth + 1);
     }
     if (name === "find") return findOnlyReads(w.slice(1), dialect, depth);
+    // tee passes its input on and writes it to its files: a read with a
+    // redirect, when each file is one a redirect may write (re-probe 6, G6).
+    if (name === "tee") {
+      return w.slice(1).filter((x) => !x.startsWith("-")).every((file) => NULL_SINK.test(file) || (plainSink !== null && plainSink(file)));
+    }
     return READ_ONLY_COMMANDS.has(name);
   };
   for (let i = 0; i < tokens.length; i++) {

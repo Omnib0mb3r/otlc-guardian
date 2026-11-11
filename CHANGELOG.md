@@ -233,6 +233,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **The bare word `security` is resolved from where the shell is
+  (BUG-080, re-probe 6 G6).** `cd src && rm -rf security` is the
+  project's own `src/security` and was denied in bypass mode; so were
+  `yarn security`, `pnpm security` and `echo 'scan done' | tee -a
+  logs/ci.log` with the word in it. The word now counts from the folder
+  the shell is in when it reaches it, and from the folder a move started
+  in when the move is not joined by `&&` (it may have failed). The
+  script shorthand of yarn and pnpm is a script name, and `tee` into an
+  ordinary file is a read with a redirect.
+
 - **`env -C` and `env --chdir` are followed (BUG-075, re-probe 6 G5).**
   `env -C .. npx rimraf .` at the project root emptied the folder above
   it, silent: the words after `-C dir` were resolved from the session

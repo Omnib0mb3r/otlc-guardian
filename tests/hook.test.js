@@ -4110,6 +4110,73 @@ describe("PreToolUse hook - env -C and env --chdir are followed (re-probe 6, G5)
 });
 
 // ---------------------------------------------------------------------------
+// Re-probe 6, G6 (BUG-080): false asks on ordinary work
+// ---------------------------------------------------------------------------
+//
+// Denied in bypass mode in the re-probe: `cd src && rm -rf security` (the
+// project's own src/security; silent in re-probe 5), `yarn security` and
+// `pnpm security` (the script shorthand), and `echo 'security scan done'
+// | tee -a logs/ci.log`. The bare word counted when it reached Guardian's
+// folder from any folder the command passes through; it is now resolved
+// from the folder the shell is in when it reaches the word.
+
+describe("PreToolUse hook - the bare word after a cd, a script shorthand, tee (re-probe 6, G6)", () => {
+  const run = (command, { mode } = {}) => withTempProject((dir) => {
+    for (const rel of [".claude/settings.json", "security/01-injection-guard.js", "src/security/old.js", "src/a.js", "logs/ci.log", "CLAUDE.md"]) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), rel.endsWith(".json") ? "{}" : "x\n");
+    }
+    return runHook(PRE_HOOK, { tool_name: "Bash", cwd: dir, tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) },
+      { CLAUDE_PROJECT_DIR: dir });
+  });
+
+  for (const command of [
+    // After `cd src &&` the word is src/security.
+    "cd src && rm -rf security",
+    "cd src && npx rimraf security",
+    "pushd src && npx rimraf security && popd",
+    "env --chdir=src npx rimraf security",
+    "git -C src rm -r security",
+    // The script shorthand of yarn and pnpm.
+    "yarn security",
+    "pnpm security",
+    "yarn security --fix",
+    // tee into an ordinary file.
+    "echo 'security scan done' | tee -a logs/ci.log",
+    "echo security | tee notes.txt",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(run(command, { mode: "bypassPermissions" }));
+    });
+  }
+
+  for (const command of [
+    // The move may fail, or is undone, and the word is then Guardian's folder.
+    "cd src; npx rimraf security",
+    "cd src\nnpx rimraf security",
+    "cd src || npx rimraf security",
+    "cd src && npm test; npx rimraf security",
+    "cd src && cd .. && npx rimraf security",
+    "(cd src); npx rimraf security",
+    "cd security && npx rimraf .",
+    // A built-in command of the manager, or a program it runs, is handed the word.
+    "yarn rimraf security",
+    "pnpm exec rimraf security",
+    "yarn remove security",
+    // tee into a file that is watched, run by git, or read again.
+    "echo security | tee CLAUDE.md",
+    "echo \"rm -rf security\" | tee .git/hooks/pre-commit",
+    "echo security | tee l.txt; xargs rm -rf < l.txt",
+    "echo security | tee /dev/stderr | xargs rm -rf",
+  ]) {
+    stagedOnly(`asks: ${JSON.stringify(command).slice(1, -1)}`, () => {
+      const out = run(command);
+      assert.equal(decisionOf(out), "ask", `${JSON.stringify(command)} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 
