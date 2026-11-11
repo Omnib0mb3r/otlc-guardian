@@ -1508,7 +1508,21 @@ const CDPATH_IN_TEXT = /cdpath/i;
 // front of the mover (HOME=.. cd, OLDPWD=../.. cd -). "~" is spelled
 // out only while the text leaves HOME alone.
 const BARE_MOVE = /(?:^|[\s;&|(){}])(?:cd|chdir|pushd|set-location|sl|push-location)(?:\s+-)?\s*(?=$|[;&|)}\n])/;
-const HOME_IN_TEXT = /\b(?:home|userprofile)\b\s*=/;
+// HOME as the name something is given a value under: `HOME=`, and the
+// name standing as a word of its own, which is how every other setter
+// takes it (printf -v HOME, read HOME, HOME+=/.., declare HOME; re-probe
+// 8, J5). $HOME and ${HOME} read the value, and /home/me is a path.
+const HOME_IN_TEXT = /\b(?:home|userprofile)\b\s*=|(?<![$\w{/\\.-])(?:home|userprofile)(?![\w/\\.-])/;
+// Moves the text does not spell out to the end (re-probe 8, J5): popd
+// goes to wherever the stack says, and shopt can make a bare word a
+// variable (cdable_vars) or correct a misspelled folder (cdspell). A
+// popd that ends the command, with nothing after it, moves no word
+// (pushd src && npm run build && popd).
+const STACK_OR_SHOPT = /(?<![\w.\/-])(?:popd|pop-location|shopt)(?![\w.\/-])/;
+const CLOSING_POPD = /(?:\s*(?:&&|;|\n)\s*(?:popd|pop-location))+\s*$/;
+// A tilde the reader expands: ~ alone or in front of a slash. ~+ is $PWD,
+// ~- is $OLDPWD and ~name is that user's home.
+const PLAIN_TILDE = /^~(?=$|[\\/])/;
 const UNFOLLOWED_MOVE = /(?:^|\s)-(?:execdir|okdir)(?=\s|$)|(?<![\w-])cwd\s*[:=]/;
 // The options and the call of DIRECTORY_CHANGES as whole shell words. A
 // word keeps its case, so -C (a directory) is not -c (python -c "code").
@@ -1573,20 +1587,23 @@ const UNKNOWN_DIRECTORY = /[$`%*?()]/;
  *   which a directory with white space in its name is read whole
  * @returns {{ bases: string[], certain: boolean }} certain is false when a
  *   move names a directory the text does not spell out (a variable, a
- *   substitution, a glob, no target at all, "-", "~" with HOME set in
- *   the text), has an option, is one the resolver does not follow, the
- *   text holds CDPATH, or there are too many to follow
+ *   substitution, a glob, no target at all, "-", "~" with HOME named
+ *   in the text, any other tilde form), has an option, is one the
+ *   resolver does not follow, the text holds CDPATH, shopt or a popd
+ *   that does not end the command, or there are too many to follow
  */
 function commandBases(views, cwd, words) {
   const bases = [cwd];
-  let certain = !views.some((view) => UNFOLLOWED_MOVE.test(view) || CDPATH_IN_TEXT.test(view) || BARE_MOVE.test(view));
+  let certain = !views.some((view) => UNFOLLOWED_MOVE.test(view) || CDPATH_IN_TEXT.test(view) || BARE_MOVE.test(view) ||
+    STACK_OR_SHOPT.test(view.replace(CLOSING_POPD, "")));
   const homeSet = views.some((view) => HOME_IN_TEXT.test(view));
   /** Adds the directory a move names, from every base so far. False once there are too many. */
   const move = (spelled) => {
     const dir = spelled.replace(/[;&|)]+$/, "").replace(/\/+$/, "") || "/";
     // "-" is $OLDPWD, an option is not the directory (cd -P x, cd -- x),
-    // and "~" is $HOME, which the text may have set.
-    if (UNKNOWN_DIRECTORY.test(dir) || dir.startsWith("-") || (homeSet && dir.startsWith("~"))) { certain = false; return true; }
+    // "~" is $HOME, which the text may have set, and ~+, ~- and ~name
+    // are folders the text does not spell out (J5).
+    if (UNKNOWN_DIRECTORY.test(dir) || dir.startsWith("-") || (dir.startsWith("~") && (homeSet || !PLAIN_TILDE.test(dir)))) { certain = false; return true; }
     for (const base of [...bases]) {
       const next = path.resolve(base, drivePath(dir.replace(/^~(?=$|\/)/, os.homedir())));
       if (!bases.includes(next)) bases.push(next);
@@ -1977,8 +1994,10 @@ const SHELL_RUNS_TEXT_COMMANDS = new Set(["trap", "history", "fc"]);
 // ./g.sh git, enable -f ./x.so git, Set-Alias pytest Remove-Item, doskey
 // git=rd, and cmd's path, which sets PATH). `exec` with a redirect sends
 // the output of every later command to a file (exec > l.txt).
+// `shopt` changes what a later word means: with dotglob a `*` matches
+// .git, with cdable_vars a folder name is a variable (re-probe 8, J5).
 const NOT_PLAIN_COMMANDS = new Set(["case", "read", "mapfile", "readarray", "getopts", "let", "coproc", "function", "alias", "exec",
-  "hash", "enable", "set-alias", "sal", "new-alias", "nal", "doskey", "path"]);
+  "hash", "enable", "shopt", "set-alias", "sal", "new-alias", "nal", "doskey", "path"]);
 // The name of a `for` or `select` loop that is known to be no variable
 // bash or a program reads: lowercase letters and digits. Any other name
 // is judged as an assignment to it (re-probe 8, J2): PATH, HOME, an
@@ -2989,7 +3008,13 @@ function wordsInPlace(text, dialect, start) {
         if (UNKNOWN_DIRECTORY.test(target)) lost = true;
       }
       if (name === "pushd" || name === "push-location") pushed.push(dir);
-      const next = target === "-" ? previous : path.resolve(dir, home(target ?? "~"));
+      // ~+ is the folder the shell is in and ~- the one before it; ~name
+      // is a home the text does not spell out (re-probe 8, J5).
+      const tilde = /^~([+-])(?=$|[\\/])/.exec(target ?? "");
+      if (target?.startsWith("~") && !tilde && !PLAIN_TILDE.test(target)) lost = true;
+      const next = target === "-" ? previous
+        : tilde ? path.resolve(tilde[1] === "+" ? dir : previous, `.${target.slice(2)}`)
+          : path.resolve(dir, home(target ?? "~"));
       pending.push(dir);
       previous = dir;
       dir = next;

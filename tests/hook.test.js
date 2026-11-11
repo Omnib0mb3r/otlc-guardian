@@ -6180,6 +6180,102 @@ describe("PreToolUse hook - a test runner earns the exemption only with options 
 });
 
 // ---------------------------------------------------------------------------
+// RE-PROBE 8, J5 (staged): the reader followed a cd the shell takes
+// elsewhere. ~+ is $PWD and ~- is $OLDPWD, and both were read as folders
+// of that name; popd goes where the stack says; shopt can make a folder
+// name a variable; and HOME can be set by any setter. With one of these
+// the location is uncertain and the bare word counts wherever it stands.
+
+describe("PreToolUse hook - a tilde form, popd, shopt or a HOME setter leaves the location uncertain (re-probe 8, J5)", () => {
+  for (const command of [
+    // The re-probe's forms.
+    "cd src && cd ~+/.. && rm -rf security",
+    "cd src && cd ~+ && cd .. && rm -rf security",
+    "cd src/a && cd ~+/../.. && rm -rf security",
+    "cd src && cd ~- && rm -rf security",
+    "cd src && printf -v HOME %s .. && cd ~ && rm -rf security",
+    "cd src && read HOME <<< .. && cd ~ && rm -rf security",
+    "cd src && HOME+=/... && cd ~ && rm -rf security",
+    "cd src && shopt -s cdable_vars && x=.. && cd x && rm -rf security",
+    "cd src && pushd . && cd .. && popd && cd .. && rm -rf security",
+    "cd src && cd ~+/.. && npx rimraf security",
+    "cd src && cd ~- && npx rimraf security",
+    // The other movers and tilde forms.
+    "cd src && pushd ~+/.. && rm -rf security",
+    "cd src && pushd ~- && rm -rf security",
+    "cd src && cd ~root/.. && rm -rf security",
+    "cd src; cd ~+/..; rm -rf security",
+    // Any shopt, any popd.
+    "cd src && shopt -s cdspell && cd ../srcc && rm -rf security",
+    "cd src && shopt -s autocd && .. && rm -rf security",
+    "shopt -s cdable_vars; x=..; cd src && cd x && rm -rf security",
+    "cd src && pushd .. && pushd src && popd && rm -rf security",
+    "cd src && pushd .. && cd src && popd && rm -rf security",
+    "pushd src; popd; rm -rf security",
+    // HOME named to any setter.
+    "cd src && mapfile -t HOME < f && cd ~ && rm -rf security",
+    "cd src && declare HOME && cd ~ && rm -rf security",
+    "cd src && export HOME && cd ~/.. && rm -rf security",
+    "cd src && getopts a HOME && cd ~ && rm -rf security",
+    // shopt -s dotglob lets * match .git, so nothing after it is plain.
+    "shopt -s dotglob; cp g.sh */hooks/commit-msg; git commit -m security",
+    // The folder above the project, reached through ~+ and ~-.
+    "cd ~+/.. && npx rimraf .",
+    "cd src && cd ~+/../.. && npx rimraf .",
+    "cd src && cd ~-/.. && npx rimraf .",
+    // A popd with a command after it, in a group or in a loop.
+    "pushd src && { rm -rf security; popd; }",
+    "pushd src; for i in 1 2; do rm -rf security; popd; done",
+    "pushd src && popd || rm -rf security",
+    // The cost: asking now.
+    "shopt -s globstar && git commit -m security",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const [tool, command] of [
+    ["PowerShell", "cd src; $env:USERPROFILE = '..'; cd ~; Remove-Item -Recurse security"],
+    ["PowerShell", "cd src; Pop-Location; Remove-Item -Recurse security"],
+  ]) {
+    stagedOnly(`asks (${tool}): ${command}`, () => {
+      const out = runGuarded(command, { tool });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // G6 stands for a move the text spells out.
+    "cd src && rm -rf security",
+    "cd src && cd ~/proj && rm -rf security",
+    "cd ~/proj/src && rm -rf security",
+    "pushd src && rm -rf security",
+    // HOME read, or part of a path, is no setter.
+    "cd /home/me/proj/src && rm -rf security",
+    "cd src && cat /home/me/x && rm -rf security",
+    "cd src && echo $HOME && rm -rf security",
+    "cd src && ls ${HOME}/x && rm -rf security",
+    "cd docs && ls home.html && rm -rf security",
+    // A popd that ends the command moves no word.
+    "pushd src && npx rimraf security && popd",
+    "pushd src && rm -rf security; popd",
+    "pushd src && pushd a && rm -rf security && popd && popd",
+    // popd and shopt with no bare word to place.
+    "pushd src && npm run build && popd",
+    "pushd src && pytest -k security && popd",
+    "shopt -s globstar && ls **/*.ts",
+    // ~+ is the folder the shell is in.
+    "cd ~+ && npx rimraf .",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

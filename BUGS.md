@@ -1758,6 +1758,27 @@ Tests: `tests/hook.test.js`, "a test runner earns the exemption only with option
 
 Smoke test after applying: at the root of a scratch project ask Claude to run `pytest --basetemp=security`; see a Guardian prompt naming security; decline. In bypass mode `pytest -x -k security --tb=short` gets no Guardian prompt.
 
+**J5 (re-probe 8, Y5), Lex's decision of 2026-11-11: a tilde form, popd, shopt or a HOME setter leaves the location uncertain. Fixed in staging, not yet live.** After `cd src &&` the bare word is `src/security` (G6). The reader then followed a second `cd` to a place the shell does not go. Silent at c3f3d6d, each run for real by the re-probe with `security/` deleted (real\tplus, tplus2, tminus, pushpop): `cd src && cd ~+/.. && rm -rf security`, `cd src && cd ~+ && cd .. && rm -rf security`, `cd src/a && cd ~+/../.. && rm -rf security`, `cd src && cd ~- && rm -rf security` and `cd src && pushd . && cd .. && popd && cd .. && rm -rf security`, with `npx rimraf` in place of `rm -rf` as well. The re-probe's other Y5 forms (`printf -v HOME`, `read HOME`, `HOME+=`, `shopt -s cdable_vars` with an assignment) asked since 4e20d7f through `unplaced`, because each sets a variable. They now ask for the reason J5 gives.
+
+Cause: `~` was expanded only alone or in front of a slash, so `~+` (`$PWD`) and `~-` (`$OLDPWD`) were folders named `~+` and `~-` under `src`. HOME counted as set only when the text held `HOME=`. `shopt` and `popd` were not looked at.
+
+Worker findings of the same class, silent at c3f3d6d and fixed here (hook verdicts only): `cd src && pushd ~+/.. && rm -rf security`, `cd src && pushd ~- && rm -rf security`, `cd src && cd ~root/.. && rm -rf security`, `cd src && shopt -s cdspell && cd ../srcc && rm -rf security`, `cd src && shopt -s autocd && .. && rm -rf security`, `cd src && pushd .. && pushd src && popd && rm -rf security`, `cd src && declare HOME && cd ~ && rm -rf security`, `cd src && export HOME && cd ~/.. && rm -rf security`, `shopt -s dotglob; cp g.sh */hooks/commit-msg; git commit -m security` (with dotglob `*` matches `.git`, which `hasGitRunFolder()` takes as impossible), and for the folder above the project `cd ~+/.. && npx rimraf .`, `cd src && cd ~+/../.. && npx rimraf .` and `cd src && cd ~-/.. && npx rimraf .`.
+
+Change in `staging/hooks/injection-guard-hook.mjs`:
+
+- `commandBases()`: `certain` is false for a move whose target starts with a tilde that `PLAIN_TILDE` does not match (`~+`, `~-`, `~name`, `~0`), and when a view holds `shopt` or a `popd` or `Pop-Location` that does not end the command (`STACK_OR_SHOPT`, `CLOSING_POPD`).
+- `HOME_IN_TEXT` also matches `HOME` or `USERPROFILE` standing as a name of its own: not after `$` or `{`, and not as part of a path or a file name. That is how every setter but `NAME=` takes it.
+- `shopt` joins `NOT_PLAIN_COMMANDS`, so nothing after it earns an exemption.
+- `wordsInPlace()`, which `wordAboveProject()` reads moves from, follows `~+` as the folder the shell is in and `~-` as the one before it. A `~name` target is lost, as a variable is.
+
+Built narrower than the decision's words, with the reason: J5 says any `popd`. A `popd` that ends the command, with nothing after it but another `popd`, cannot move a word that came before it, and `pushd src && npx rimraf security && popd` is an existing silent test of ordinary work. So only a `popd` with something after it counts: `pushd src && { rm -rf security; popd; }`, a `popd` inside a loop and `pushd src && popd || rm -rf security` ask. For Lex to confirm.
+
+Cost. Asking now, silent at c3f3d6d: a bare word after a move in a command that holds `shopt` (`shopt -s globstar && cd src && rm -rf security`), an exempt stage after `shopt` (`shopt -s globstar && git commit -m security`), a bare word after `cd ~+` although the folder is the same (`cd src && cd ~+ && npx rimraf security`), and a bare word after a move to `~/path` when `HOME` stands in the command as a word (`echo HOME; cd ~/proj/src && rm -rf security`). `$HOME`, `${HOME}` and `/home/me` do not count.
+
+Tests: `tests/hook.test.js`, "a tilde form, popd, shopt or a HOME setter leaves the location uncertain (re-probe 8, J5)": 35 ask (2 through the PowerShell tool), 16 silent. Against the hook at c3f3d6d, 22 failed. Staged hook suite before: 2240 passed, 22 failed. After: 2262 passed, 0 failed. Re-probe 7's 640 commands: 0 verdicts changed. Re-probe 8's 851: 10 changed, all Y5 forms, silent to deny. Everyday commands: 0 changed in the 75 and in the 197. Lex's regress harness: no line changed.
+
+Smoke test after applying: from the root of a scratch project with a `src` folder ask Claude to run `cd src && cd ~+/.. && rm -rf security`; see a Guardian prompt naming security; decline. In bypass mode `pushd src && npx rimraf security && popd` gets no Guardian prompt (it removes `src/security` if there is one).
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

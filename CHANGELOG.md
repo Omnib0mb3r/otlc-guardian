@@ -233,6 +233,14 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A tilde form, `popd`, `shopt` or a HOME setter leaves the location
+  uncertain (BUG-080, re-probe 8 J5).** `cd src && cd ~+/.. && rm -rf
+  security` was silent: `~+` is the folder the shell is in, and the
+  hook read it as a folder named `~+` under `src`. A move to `~+`,
+  `~-` or `~name`, any `shopt`, a `popd` that does not end the
+  command, and HOME named to any setter (`printf -v HOME`, `read
+  HOME`, `HOME+=`) now make the bare word count wherever it stands.
+
 - **A test runner earns the exemption only with options known to
   choose tests (BUG-080, re-probe 8 J4).** `pytest --basetemp=security`
   empties the folder before a run, and the hook blanked a test run's
