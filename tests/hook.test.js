@@ -3168,6 +3168,62 @@ describe("PreToolUse hook - the guarded-name resolver fails closed (re-probe 5, 
 });
 
 // ---------------------------------------------------------------------------
+// Re-probe 5, F3 (BUG-075): "." and ".." after a guarded folder
+// ---------------------------------------------------------------------------
+//
+// A guarded name followed by "/" and a further name is a different path
+// (.claude/agents), so the name patterns do not match there. But
+// ".claude/agents/.." is .claude itself and "security/." is security.
+// Real effect in the re-probe: `npx -y rimraf .claude/agents/..` deleted
+// the settings and the hook, `npx -y rimraf security/.` the scanner.
+
+describe("PreToolUse hook - dot segments after a guarded folder (re-probe 5, F3)", () => {
+  const run = (command, { sub = "", mode } = {}) => withTempProject((dir) => {
+    for (const rel of [".claude/settings.json", ".claude/agents/a.md", ".claude/hooks/injection-guard-hook.mjs", "security/01-injection-guard.js",
+      "src/security/old.js", "src/a.js", "scripts/clean.js"]) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), rel.endsWith(".json") ? "{}" : "x\n");
+    }
+    return runHook(PRE_HOOK, { tool_name: "Bash", cwd: path.join(dir, sub), tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) },
+      { CLAUDE_PROJECT_DIR: dir });
+  });
+
+  for (const [command, sub] of [
+    ["npx rimraf .claude/agents/..", ""],
+    ["npx rimraf .claude/hooks/x/..", ""],
+    ["npx rimraf security/x/..", ""],
+    ["npx rimraf security/.", ""],
+    ["npx rimraf .claude/hooks/.", ""],
+    ["npx rimraf ./.claude/.", ""],
+    ["node scripts/clean.js .claude/x/..", ""],
+    ["npx rimraf security/x/y/../..", ""],
+    ["npx rimraf .claude/./hooks/./", ""],
+    ["npx rimraf 'security/my dir/..'", ""],
+    ["node -e \"require('fs').rmSync('.claude/agents/..',{recursive:true})\"", ""],
+    ["npx rimraf ../security/x/..", "src"],
+    ["npx rimraf ../.claude/agents/..", "src"],
+  ]) {
+    stagedOnly(`asks${sub ? ` from ${sub}/` : ""}: ${command}`, () => {
+      const out = run(command, { sub });
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    });
+  }
+
+  // The same segments on the project's own folders.
+  for (const command of [
+    "npx rimraf src/security/.",
+    "npx rimraf src/security/x/..",
+    "npx rimraf .claude/agents/x/..",
+    "npx rimraf security/../build",
+    "npx rimraf src/./a.js",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(run(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

@@ -1167,23 +1167,43 @@ function expandBraces(text) {
   return text;
 }
 
+const DOT_SEGMENT = /(?:^|\/)\.{1,2}(?:\/|$)/;
+
 /**
  * The text spelled one way for name matching: $'...' decoded, quote,
  * backtick and caret characters removed (split quotes, PowerShell and cmd
  * escapes), lower case, NTFS stream suffixes (::$INDEX_ALLOCATION) and
  * "/./" dropped, brace groups expanded. A backslash is either a path
  * separator or a bash escape, so there are two views.
+ *
+ * Each is given a second time with every path that holds a "." or ".."
+ * part spelled without it (re-probe 5, F3): ".claude/agents/.." is
+ * ".claude/", "security/x/.." and "security/." are "security/", which
+ * the name patterns then find. Without it a guarded name followed by "/"
+ * and more reads as a different path.
+ *
+ * @param {RegExp} runChar - the characters a path runs over (PATH_RUN_CHAR,
+ *   or WORD_PATH_RUN_CHAR for one shell word, where a space is part of it)
  */
-function nameViews(text) {
+function nameViews(text, runChar = PATH_RUN_CHAR) {
   const t = text
     .replace(/\$'((?:[^'\\]|\\[\s\S])*)'/g, (m, body) => decodeAnsiC(body))
     .replace(/['"`^]/g, "")
     .toLowerCase();
-  return [t.replace(/\\/g, "/"), t.replace(/\\([\s\S])/g, "$1")].map((v) => expandBraces(v
+  const paths = new RegExp(`${runChar.source}+`, "g");
+  // What is left stays a path to the eye ("security/x/.." is "security/"),
+  // so it is resolved as one and not read as the bare word.
+  const withoutDotSegments = (view) => view.replace(paths, (run) => {
+    if (!run.includes("/") || !DOT_SEGMENT.test(run)) return run;
+    const plain = path.posix.normalize(run);
+    return plain.includes("/") ? plain : `${plain}/`;
+  });
+  const views = [t.replace(/\\/g, "/"), t.replace(/\\([\s\S])/g, "$1")].map((v) => expandBraces(v
     .replace(/:[a-z0-9_.-]*:\$data\b/g, "")
     .replace(/:{1,2}\$[a-z_]+/g, "")
     .replace(/\/(?:\.\/)+/g, "/")
     .replace(/\/{2,}/g, "/")));
+  return [...new Set(views.flatMap((view) => [view, withoutDotSegments(view)]))];
 }
 
 /** A shell glob as an anchored regex over a lower-case posix path, or null. */
@@ -1477,7 +1497,8 @@ function guardedNameIn(texts, dialect, cwd, root) {
     // its spaces, and a string in code ends at its own quotes.
     for (const word of words.filter((w) => /\s/.test(w))) {
 
-      for (const view of nameViews(word.replace(/['"`]/g, "\0"))) {
+      for (const view of nameViews(word.replace(/['"`]/g, "\0"), WORD_PATH_RUN_CHAR)) {
+
         for (const { name, re } of GUARDED_NAME_PATTERNS) {
           for (const m of view.matchAll(re)) if (counts(view, name, m, WORD_PATH_RUN_CHAR)) return name;
         }

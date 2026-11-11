@@ -233,6 +233,13 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A guarded folder followed by `/.` or `/x/..` is found (BUG-075,
+  re-probe 5 F3).** `npx rimraf .claude/agents/..` is `.claude` and
+  `npx rimraf security/.` is `security`, but the name check read a name
+  followed by `/` and more as a different path, so both were silent; the
+  first deleted the settings and the hook in the re-probe. The name views
+  now also carry every path with its `.` and `..` parts resolved.
+
 - **The guarded-name resolver fails closed (BUG-080, re-probe 5 F2).** E8
   resolved three kinds of real path wrongly, so the name did not count: a
   Git Bash drive path (`rm -rf /c/Users/.../.claude/hooks`, read as

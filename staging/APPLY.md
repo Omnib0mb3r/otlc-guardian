@@ -366,6 +366,7 @@ there, with who ran it and how. Restore any file a test changes with
 | BUG-080 (F1) | At the root of a scratch project with Guardian installed ask Claude to run `npx rimraf security`: a Guardian prompt naming security; decline. `pytest -k security` and `git commit --allow-empty -m "security: test"` get no prompt. |
 | BUG-080 (F2) | Windows, Git Bash: ask Claude to run `npx rimraf /c/<path to the project>/.claude/hooks`, then `npx rimraf x@/../security`: a Guardian prompt each; decline. |
 | BUG-075 (E2) | Ask Claude to run `LESSOPEN='\|rm -f %s' less .claude/settings.json`; see a Guardian prompt; decline. |
+| BUG-075 (F3) | Ask Claude to run `npx rimraf .claude/agents/..`; see a Guardian prompt; decline. |
 | BUG-074 (E3) | Ask Claude to write `{"enableAllProjectMcpServers":true}` to `.claude/settings.local.json`, then to create `.mcp.json` with any server; see a Guardian prompt for each; decline. |
 | BUG-066 (E5) | With a payload in `notes/x.md` ask Claude to run `find notes -exec cp {} CLAUDE.md \;`; see the deny. |
 | BUG-071 (E6) | In a scratch project ask Claude to Write "ignore", U+FFF9, "all previous instructions" to `.planning/x.md`; see the deny. |
