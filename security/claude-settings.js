@@ -6,10 +6,10 @@
  * ============================================================
  *
  * One reading of .claude/settings.json and settings.local.json for the
- * two places that judge them after the fact: `guardian check`
- * (bin/guardian.js) and audit rule AGT-003 (03-audit.js). The PreToolUse
- * hook judges a change before it lands, from its own copy of the type
- * tables (see SETTINGS_KEY_TYPES).
+ * three places that judge them: `guardian check` (bin/guardian.js) and
+ * audit rule AGT-003 (03-audit.js) after the fact, and the PreToolUse
+ * hook before a change lands (staged; it imports this file the way it
+ * imports the scanner, and guards it as one of Guardian's own files).
  *
  * No dependencies, no side effects on import.
  * ============================================================
@@ -27,7 +27,7 @@ export const REQUIRED_HOOK_REGISTRATIONS = [
 // allowed; anything else is an unanchored JavaScript regex, and an
 // invalid one matches nothing. The staged hook reads matchers the same
 // way (BUG-045).
-const EXACT_MATCHER = /^[A-Za-z0-9_\-\s,|]*$/;
+export const EXACT_MATCHER = /^[A-Za-z0-9_\-\s,|]*$/;
 export function matcherCovers(matcher, tool) {
   const m = typeof matcher === "string" ? matcher.trim() : "";
   if (m === "" || m === "*") return true;
@@ -68,10 +68,6 @@ export function missingRegistrations(layers, required = REQUIRED_HOOK_REGISTRATI
 // hooks and permission rules included, and says so only in its startup
 // notice (re-probe 3, D2). A key not listed is allowed: Claude Code
 // ignores an unknown key. "strings" is an array of strings.
-//
-// The staged PreToolUse hook is installed self-contained and carries its
-// own copy of these three tables; a parity test in tests/init.test.js
-// fails when the two differ (BUG-073).
 export const SETTINGS_KEY_TYPES = Object.fromEntries(Object.entries({
   boolean: "agentPushNotifEnabled allowAllClaudeAiMcps allowManagedHooksOnly allowManagedMcpServersOnly " +
     "allowManagedPermissionRulesOnly alwaysThinkingEnabled autoCompactEnabled autoConnectIde autoInstallIdeExtension " +
@@ -152,7 +148,10 @@ function jsonTypeWord(value) {
  */
 export function settingsTypeProblems(settings) {
   const problems = [];
-  const printable = (key) => String(key).replace(/[^\x20-\x7E]/g, "?").slice(0, 80);
+  // A hook event name comes from the file and is echoed into messages a
+  // model reads (the PreToolUse hook's prompt), so it is cut short and
+  // stripped of anything that could act as markup there.
+  const printable = (key) => String(key).replace(/[^\x20-\x7E]/g, "?").replace(/[<>[\]{}`]/g, "").slice(0, 40);
   const check = (where, value, types) => {
     if (types.some((t) => jsonTypeIs(value, t))) return true;
     problems.push(`"${where}" is ${jsonTypeWord(value)} where Claude Code expects ${types.map((t) => TYPE_WORDS[t]).join(" or ")}`);

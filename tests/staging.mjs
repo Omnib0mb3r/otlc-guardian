@@ -53,6 +53,10 @@ try {
   // Not a protected file, so it is not staged: the live copy pins the
   // staged scanner to ES modules the way an install does (BUG-063).
   copyFileSync(path.join(ROOT, "security", "package.json"), path.join(install, "security", "package.json"));
+  // The settings reader the staged hook imports (BUG-073). It is live and
+  // read by guardian check and the audit too; the live hook does not
+  // guard it yet, so there is no staged copy.
+  copyFileSync(path.join(ROOT, "security", "claude-settings.js"), path.join(install, "security", "claude-settings.js"));
 
   process.stdout.write(`[OTLC GUARDIAN] testing the STAGED enforcement files from ${STAGING} (not the live ones)\n`);
   for (const suite of SUITES) {

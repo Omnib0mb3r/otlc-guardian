@@ -2882,6 +2882,75 @@ describe("PreToolUse hook - archive extraction asks where unzip and tar do (re-p
 });
 
 // ---------------------------------------------------------------------------
+// BUG-073: the hook reads settings types from security/claude-settings.js
+// ---------------------------------------------------------------------------
+//
+// guardian check and audit rule AGT-003 read Claude Code's settings types
+// from security/claude-settings.js. The hook carried its own copy, kept in
+// step by a parity test. It now imports the module the way it imports the
+// scanner, and the file is one of Guardian's guarded files.
+
+describe("PreToolUse hook - the settings reader module is imported and guarded (BUG-073)", () => {
+  const MODULE_REL = "security/claude-settings.js";
+
+  stagedOnly("the hook holds no settings type table of its own", () => {
+    const source = readFileSync(PRE_HOOK, "utf8");
+    assert.ok(!/const SETTINGS_KEY_TYPES\b/.test(source), "the hook still defines SETTINGS_KEY_TYPES");
+    assert.ok(source.includes("claude-settings.js"), "the hook does not import claude-settings.js");
+  });
+
+  const run = (tool, input, mode) => withTempProject((dir) => {
+    for (const rel of [".claude/settings.json", MODULE_REL, "src/a.js"]) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), rel.endsWith(".json") ? "{}" : "export {};\n");
+    }
+    const tool_input = input.rel ? { file_path: path.join(dir, input.rel), content: input.content ?? "", ...input.extra } : { command: input.command };
+    return runHook(PRE_HOOK, { tool_name: tool, cwd: dir, tool_input, ...(mode ? { permission_mode: mode } : {}) });
+  });
+
+  for (const [name, tool, input] of [
+    ["a Write of security/claude-settings.js", "Write", { rel: MODULE_REL, content: "export const settingsTypeProblems = () => [];\n" }],
+    ["an Edit of security/claude-settings.js", "Edit", { rel: MODULE_REL, extra: { old_string: "export {};", new_string: "export const x = 1;" } }],
+    ["rm security/claude-settings.js", "Bash", { command: "rm security/claude-settings.js" }],
+    ["a redirect into it", "Bash", { command: "echo 'export {}' > security/claude-settings.js" }],
+    ["inline code that names it", "Bash", { command: `node -e "require('fs').rmSync('security/claude-settings.js')"` }],
+    ["a PowerShell write of it", "PowerShell", { command: "Set-Content security\\claude-settings.js 'export {}'" }],
+    ["find -delete by its name", "Bash", { command: "find . -name 'claude-settings.js' -delete" }],
+  ]) {
+    stagedOnly(`asks, denied in bypass: ${name}`, () => {
+      const out = run(tool, input);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+      assert.equal(decisionOf(run(tool, input, "bypassPermissions")), "deny");
+    });
+  }
+
+  test("reading it is silent", () => {
+    expectSilent(run("Bash", { command: "cat security/claude-settings.js" }, "bypassPermissions"));
+  });
+
+  // Like a missing scanner: the hook cannot judge a settings change without
+  // it, so it stops with an error Claude Code shows, and says how to fix it.
+  stagedOnly("without security/claude-settings.js the hook reports a hook error naming the file", () => {
+    const install = mkdtempSync(path.join(os.tmpdir(), "guardian-hook-nomodule-"));
+    try {
+      for (const rel of [".claude/hooks/injection-guard-hook.mjs", "security/01-injection-guard.js", "security/package.json"]) {
+        mkdirSync(path.dirname(path.join(install, rel)), { recursive: true });
+        writeFileSync(path.join(install, rel), readFileSync(path.join(ENFORCEMENT_ROOT, rel)));
+      }
+      const result = spawnSync("node", [path.join(install, ".claude", "hooks", "injection-guard-hook.mjs")], {
+        input: JSON.stringify({ tool_name: "Write", cwd: install, tool_input: { file_path: path.join(install, "x.md"), content: "x" } }),
+        encoding: "utf8", timeout: HOOK_SPAWN_TIMEOUT_MS, cwd: install, env: HOOK_ENV,
+      });
+      assert.equal(result.status, 1, result.stderr.slice(0, 300));
+      assert.match(result.stderr, /claude-settings\.js/);
+      assert.match(result.stderr, /guardian update/);
+    } finally {
+      rmSync(install, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

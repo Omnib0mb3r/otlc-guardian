@@ -227,6 +227,14 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **The hook reads settings types from `security/claude-settings.js`
+  (BUG-073).** The staged hook carried its own copy of the Claude Code
+  settings type tables, kept in step with `guardian check` by a parity
+  test. It now imports the module the way it imports the scanner, so the
+  hook, `check` and audit rule AGT-003 share one copy, and the file is
+  guarded like the scanner: a change to it asks. Without it the hook
+  reports a hook error that names the file.
+
 - **Unpacking an archive with `Expand-Archive` or Python asks where
   `unzip` and `tar` do (BUG-065, re-probe 4 E7).** An archive can hold
   `.claude/settings.local.json` and a `CLAUDE.md`. `Expand-Archive

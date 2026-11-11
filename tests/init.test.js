@@ -1137,26 +1137,6 @@ describe("BUG-073: guardian check reads settings value types the way Claude Code
     });
   }
 
-  // The hook asks before a change leaves a wrong type (re-probe 3, D2) and
-  // check reports one already there; both must read the same tables. The
-  // tables are compared as source text, from SETTINGS_KEY_TYPES up to
-  // TYPE_WORDS, "export " aside. check (and audit rule AGT-003) read them
-  // from security/claude-settings.js. The staged hook is the source: after
-  // the apply it equals the live one.
-  test("check's settings type tables are the hook's", () => {
-    const tables = (file) => {
-      const source = readFileSync(file, "utf8").replace(/\r\n/g, "\n");
-      const from = source.indexOf("const SETTINGS_KEY_TYPES");
-      const to = source.indexOf("const TYPE_WORDS");
-      assert.ok(from !== -1 && to > from, `no type tables in ${file}`);
-      return source.slice(from, to).replace(/^export /gm, "");
-    };
-    const repo = path.join(path.dirname(GUARDIAN_CLI), "..");
-    const hook = tables(path.join(repo, "staging", "hooks", "injection-guard-hook.mjs"));
-    assert.equal(tables(path.join(repo, "security", "claude-settings.js")), hook);
-    assert.ok(hook.includes("disableAllHooks") && hook.includes("HOOK_FIELD_TYPES"));
-  });
-
   test("an unknown key of any type and known keys of the right types pass check", () => {
     withTempDir((dir) => {
       runCli(dir, "init");

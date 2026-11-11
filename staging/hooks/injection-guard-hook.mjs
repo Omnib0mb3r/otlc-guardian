@@ -101,6 +101,37 @@ try {
 if (!scan || !scanChange) failOpenLoudly("scanner module does not export scan() and scanChange() (run: guardian update)");
 
 // ---------------------------------------------------------------------------
+// SETTINGS READER IMPORT: one reading of Claude Code's settings
+// ---------------------------------------------------------------------------
+//
+// Which value types Claude Code accepts for each settings key, and how
+// it reads a hook matcher, live in security/claude-settings.js beside
+// the scanner. `guardian check` and audit rule AGT-003 read the same
+// file, so the three cannot drift (BUG-073). Without it a settings
+// change cannot be judged, so the hook stops as it does without the
+// scanner.
+const settingsModulePath = path.join(path.dirname(guardModulePath), "claude-settings.js");
+
+let settingsTypeProblems = null;
+let matcherCovers = null;
+let EXACT_MATCHER = null;
+
+if (!existsSync(settingsModulePath)) {
+  failOpenLoudly(`settings reader missing at ${settingsModulePath} (run: guardian update)`);
+}
+try {
+  const mod = await import(pathToFileURL(settingsModulePath).href);
+  settingsTypeProblems = typeof mod.settingsTypeProblems === "function" ? mod.settingsTypeProblems : null;
+  matcherCovers        = typeof mod.matcherCovers === "function" ? mod.matcherCovers : null;
+  EXACT_MATCHER        = mod.EXACT_MATCHER instanceof RegExp ? mod.EXACT_MATCHER : null;
+} catch (err) {
+  failOpenLoudly(`settings reader failed to load (${err?.message ?? "unknown error"})`);
+}
+if (!settingsTypeProblems || !matcherCovers || !EXACT_MATCHER) {
+  failOpenLoudly("settings reader module does not export settingsTypeProblems(), matcherCovers() and EXACT_MATCHER (run: guardian update)");
+}
+
+// ---------------------------------------------------------------------------
 // DEFAULT WATCH LIST
 // ---------------------------------------------------------------------------
 //
@@ -143,6 +174,9 @@ const GUARDIAN_SCANNER_FILE = path.join("security", "01-injection-guard.js");
 // says. Changed to "commonjs", or removed in a CommonJS project, the
 // scanner no longer loads and this hook fails open (BUG-063).
 const GUARDIAN_SCANNER_PACKAGE = path.join("security", "package.json");
+// How Claude Code reads settings: value types and matchers. The hook
+// imports it, so a change to it changes what the hook lets through.
+const GUARDIAN_SETTINGS_READER = path.join("security", "claude-settings.js");
 const SETTINGS_FILE_PATTERN = /(?:^|\/)\.claude\/settings(?:\.local)?\.json$/i;
 
 // ---------------------------------------------------------------------------
@@ -418,7 +452,7 @@ function winCopyWrites(name, args, dir, ctx) {
 const FIND_GUARDED = [
   ".claude/settings.json", ".claude/settings.local.json",
   ...GUARDIAN_HOOK_FILES.map((f) => `.claude/hooks/${f}`),
-  GUARDIAN_SCANNER_FILE.replace(/\\/g, "/"), GUARDIAN_SCANNER_PACKAGE.replace(/\\/g, "/"),
+  GUARDIAN_SCANNER_FILE.replace(/\\/g, "/"), GUARDIAN_SCANNER_PACKAGE.replace(/\\/g, "/"), GUARDIAN_SETTINGS_READER.replace(/\\/g, "/"),
   ".claude", ".claude/hooks", "security",
 ];
 const FIND_WATCHED_NAMES = ["CLAUDE.md", "AGENTS.md", "GEMINI.md", ".cursorrules", ".windsurfrules", ".aider.conf.yml",
@@ -1035,6 +1069,7 @@ const GUARD_ENDINGS = [
   "/.claude/settings.json", "/.claude/settings.local.json",
   ...GUARDIAN_HOOK_FILES.map((f) => `/.claude/hooks/${f}`),
   `/${GUARDIAN_SCANNER_FILE.replace(/\\/g, "/")}`, `/${GUARDIAN_SCANNER_PACKAGE.replace(/\\/g, "/")}`,
+  `/${GUARDIAN_SETTINGS_READER.replace(/\\/g, "/")}`,
 ];
 const namesGuardFile = (absPath) => GUARD_ENDINGS.some((e) => watchKey(absPath).endsWith(e));
 
@@ -1056,7 +1091,7 @@ const namesGuardFile = (absPath) => GUARD_ENDINGS.some((e) => watchKey(absPath).
 const GUARDED_NAMES = [
   ".claude/settings.local.json", ".claude/settings.json",
   ...GUARDIAN_HOOK_FILES.map((f) => `.claude/hooks/${f}`),
-  GUARDIAN_SCANNER_FILE.replace(/\\/g, "/"), GUARDIAN_SCANNER_PACKAGE.replace(/\\/g, "/"),
+  GUARDIAN_SCANNER_FILE.replace(/\\/g, "/"), GUARDIAN_SCANNER_PACKAGE.replace(/\\/g, "/"), GUARDIAN_SETTINGS_READER.replace(/\\/g, "/"),
   ".claude/hooks", ".claude", "security",
 ];
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -2202,7 +2237,7 @@ const GUARDIAN_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "P
 // Claude Code reads a matcher of only these characters as a list of exact
 // names separated by | or , (spaces allowed); anything else is an
 // unanchored JavaScript regex. "*" and "" match every tool.
-const EXACT_MATCHER = /^[A-Za-z0-9_\-\s,|]*$/;
+// (EXACT_MATCHER and matcherCovers() come from security/claude-settings.js.)
 const PROJECT_DIR_VAR = /^(?:\$\{CLAUDE_PROJECT_DIR\}|\$CLAUDE_PROJECT_DIR)/;
 
 /** @returns {object | null} the settings object, or null when the text is not one */
@@ -2212,138 +2247,6 @@ function parseSettings(text) {
     return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
   } catch (err) {
     return null; // not valid JSON
-  }
-}
-
-// Base types of Claude Code's top-level settings keys, taken from the
-// schemastore claude-code-settings schema (2026-11-10). Claude Code loads
-// nothing from a settings file in which one of these has another type,
-// hooks and permission rules included, and says so only in its startup
-// notice (re-probe 3, D2). A key not listed is allowed: Claude Code
-// ignores an unknown key. "strings" is an array of strings.
-const SETTINGS_KEY_TYPES = Object.fromEntries(Object.entries({
-  boolean: "agentPushNotifEnabled allowAllClaudeAiMcps allowManagedHooksOnly allowManagedMcpServersOnly " +
-    "allowManagedPermissionRulesOnly alwaysThinkingEnabled autoCompactEnabled autoConnectIde autoInstallIdeExtension " +
-    "autoMemoryEnabled autoScrollEnabled awaySummaryEnabled axScreenReader channelsEnabled disableAgentView " +
-    "disableAllHooks disableArtifact disableBrowserExternalNavigation disableBundledSkills disableClaudeAiConnectors " +
-    "disableMobileSimulatorTools disableRemoteControl disableSideloadFlags disableSkillShellExecution disableWorkflows " +
-    "emojiCompletionEnabled enableAllProjectMcpServers enableArtifact enforceAvailableModels externalEditorContext " +
-    "fastMode fastModePerSessionOptIn fileCheckpointingEnabled forceRemoteSettingsRefresh includeCoAuthoredBy " +
-    "includeGitInstructions inputNeededNotifEnabled permissionExplainerEnabled prefersReducedMotion " +
-    "remoteControlAtStartup requireCoworkFullVmSandbox respectGitignore respondToBashCommands " +
-    "showClearContextOnPlanAccept showThinkingSummaries showTurnDuration skipDangerousModePermissionPrompt " +
-    "skipWebFetchPreflight spinnerTipsEnabled syntaxHighlightingDisabled terminalProgressBarEnabled " +
-    "useAutoModeDuringPlan verbose voiceEnabled wheelScrollAccelerationEnabled workflowKeywordTriggerEnabled " +
-    "wslInheritsWindowsSettings",
-  string: "$schema advisorModel agent apiKeyHelper askUserQuestionTimeout autoMemoryDirectory autoUpdatesChannel " +
-    "awsAuthRefresh awsCredentialExport browserExternalPageTools claudeMd defaultShell diffTool disableAutoMode " +
-    "disableDeepLinkRegistration editorMode effortLevel forceLoginGatewayUrl forceLoginMethod gcpAuthRefresh language " +
-    "minimumVersion model otelHeadersHelper outputStyle parentSettingsBehavior plansDirectory pluginTrustMessage " +
-    "prUrlTemplate preferredNotifChannel processWrapper requiredMaximumVersion requiredMinimumVersion teammateMode " +
-    "theme tui viewMode workflowSizeGuideline",
-  integer: "cleanupPeriodDays skillListingMaxDescChars",
-  number: "feedbackSurveyRate skillListingBudgetFraction",
-  object: "attribution autoMode enabledPlugins env extraKnownMarketplaces fileSuggestion hooks modelOverrides " +
-    "permissions pluginConfigs policyHelper sandbox skillOverrides spinnerTipsOverride spinnerVerbs statusLine " +
-    "subagentStatusLine vimInsertModeRemaps voice worktree",
-  strings: "allowedHttpHookUrls availableModels claudeMdExcludes companyAnnouncements disabledMcpjsonServers " +
-    "enabledMcpjsonServers fallbackModel httpHookAllowedEnvVars pluginSuggestionMarketplaces skippedMarketplaces " +
-    "skippedPlugins sshHostAllowlist",
-  array: "allowedChannelPlugins allowedMcpServers blockedMarketplaces deniedMcpServers footerLinksRegexes " +
-    "managedMcpServers sshConfigs strictKnownMarketplaces",
-  "boolean|strings": "strictPluginOnlyCustomization",
-  "string|strings": "forceLoginOrgUUID",
-  "null|string": "teammateDefaultModel",
-}).flatMap(([types, keys]) => keys.split(" ").map((key) => [key, types.split("|")])));
-
-// The fields inside the settings objects that carry Guardian's standing.
-const SETTINGS_FIELD_TYPES = {
-  permissions: { allow: "strings", deny: "strings", ask: "strings", additionalDirectories: "strings",
-    defaultMode: "string", disableBypassPermissionsMode: "string", disableAutoMode: "string" },
-  statusLine: { type: "string", command: "string", padding: "number", refreshInterval: "integer", hideVimModeIndicator: "boolean" },
-};
-// Every field of a hook entry, across the command, prompt, agent, http and mcp kinds.
-const HOOK_FIELD_TYPES = { type: "string", command: "string", timeout: "number", async: "boolean", asyncRewake: "boolean",
-  shell: "string", if: "string", statusMessage: "string", args: "strings", prompt: "string", model: "string",
-  continueOnBlock: "boolean", url: "string", headers: "object", allowedEnvVars: "strings", server: "string",
-  tool: "string", input: "object" };
-
-const TYPE_WORDS = { boolean: "a boolean", string: "a string", integer: "an integer", number: "a number", null: "null",
-  object: "an object", array: "an array", strings: "an array of strings" };
-
-function jsonTypeIs(value, type) {
-  switch (type) {
-    case "boolean":
-    case "string":  return typeof value === type;
-    case "number":  return typeof value === "number" && Number.isFinite(value);
-    case "integer": return Number.isInteger(value);
-    case "null":    return value === null;
-    case "object":  return value !== null && typeof value === "object" && !Array.isArray(value);
-    case "array":   return Array.isArray(value);
-    case "strings": return Array.isArray(value) && value.every((v) => typeof v === "string");
-    default:        return true;
-  }
-}
-
-function jsonTypeWord(value) {
-  if (value === undefined) return "missing";
-  if (value === null) return "null";
-  if (Array.isArray(value)) return "an array";
-  if (Number.isInteger(value)) return "an integer";
-  return TYPE_WORDS[typeof value] ?? typeof value;
-}
-
-/**
- * Known settings keys whose value has a type Claude Code rejects.
- * @param {object} settings - a parsed settings object
- * @returns {string[]} one line per wrong value, naming where it is
- */
-function settingsTypeProblems(settings) {
-  const problems = [];
-  const check = (where, value, types) => {
-    if (types.some((t) => jsonTypeIs(value, t))) return true;
-    problems.push(`"${where}" is ${jsonTypeWord(value)} where Claude Code expects ${types.map((t) => TYPE_WORDS[t]).join(" or ")}`);
-    return false;
-  };
-  for (const [key, types] of Object.entries(SETTINGS_KEY_TYPES)) {
-    if (Object.hasOwn(settings, key)) check(key, settings[key], types);
-  }
-  for (const [key, fields] of Object.entries(SETTINGS_FIELD_TYPES)) {
-    if (!jsonTypeIs(settings[key], "object")) continue;
-    for (const [field, type] of Object.entries(fields)) {
-      if (Object.hasOwn(settings[key], field)) check(`${key}.${field}`, settings[key][field], [type]);
-    }
-  }
-  if (!jsonTypeIs(settings.hooks, "object")) return problems;
-  for (const [event, blocks] of Object.entries(settings.hooks)) {
-    // Only an event name comes from the file; the rest of a place is ours.
-    const name = `hooks.${safeEcho(event, 40)}`;
-    if (!check(name, blocks, ["array"])) continue;
-    blocks.forEach((block, i) => {
-      const at = `${name}[${i}]`;
-      if (!check(at, block, ["object"])) return;
-      if (Object.hasOwn(block, "matcher")) check(`${at}.matcher`, block.matcher, ["string"]);
-      if (!check(`${at}.hooks`, block.hooks, ["array"])) return;
-      block.hooks.forEach((h, j) => {
-        if (!check(`${at}.hooks[${j}]`, h, ["object"])) return;
-        for (const [field, type] of Object.entries(HOOK_FIELD_TYPES)) {
-          if (Object.hasOwn(h, field)) check(`${at}.hooks[${j}].${field}`, h[field], [type]);
-        }
-      });
-    });
-  }
-  return problems;
-}
-
-/** Whether Claude Code runs a block with this matcher for `tool`. */
-function matcherCovers(matcher, tool) {
-  const m = typeof matcher === "string" ? matcher.trim() : "";
-  if (m === "" || m === "*") return true;
-  if (EXACT_MATCHER.test(m)) return m.split(/[|,]/).some((name) => name.trim() === tool);
-  try {
-    return new RegExp(m).test(tool);
-  } catch (err) {
-    return false; // an invalid pattern matches no tool
   }
 }
 
@@ -2769,10 +2672,12 @@ process.stdin.on("end", () => {
       ...GUARDIAN_HOOK_FILES.map((f) => path.join(projectRoot, ".claude", "hooks", f)),
       path.join(projectRoot, GUARDIAN_SCANNER_FILE),
       path.join(projectRoot, GUARDIAN_SCANNER_PACKAGE),
+      path.join(projectRoot, GUARDIAN_SETTINGS_READER),
       hookPath,
       ...GUARDIAN_HOOK_FILES.map((f) => path.join(__dirname, f)),
       guardModulePath,
       path.join(path.dirname(guardModulePath), "package.json"),
+      settingsModulePath,
     ].filter((f, i, all) => all.findIndex((g) => watchKey(g) === watchKey(f)) === i);
     const guardFileHit = (target) => guardFiles.find((f) => covers(target, f));
     const guardTargets = write.kind === "file" ? write.targets.map(resolve) : bashWrites;
