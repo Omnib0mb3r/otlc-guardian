@@ -1457,6 +1457,13 @@ const DIRECTORY_CHANGES = [
 // -Path): the word after the mover is then not the directory, and the
 // resolver does not parse each shell's options (re-probe 6, G3).
 const CDPATH_IN_TEXT = /cdpath/i;
+// A move the text does not spell out to the end (re-probe 7, H3): cd,
+// pushd or Set-Location with no target goes to $HOME (or swaps the
+// stack), and "cd -" to $OLDPWD, and a value for either can be set in
+// front of the mover (HOME=.. cd, OLDPWD=../.. cd -). "~" is spelled
+// out only while the text leaves HOME alone.
+const BARE_MOVE = /(?:^|[\s;&|(){}])(?:cd|chdir|pushd|set-location|sl|push-location)(?:\s+-)?\s*(?=$|[;&|)}\n])/;
+const HOME_IN_TEXT = /\b(?:home|userprofile)\b\s*=/;
 const UNFOLLOWED_MOVE = /(?:^|\s)-(?:execdir|okdir)(?=\s|$)|(?<![\w-])cwd\s*[:=]/;
 // The options and the call of DIRECTORY_CHANGES as whole shell words. A
 // word keeps its case, so -C (a directory) is not -c (python -c "code").
@@ -1509,18 +1516,20 @@ const UNKNOWN_DIRECTORY = /[$`%*?()]/;
  *   which a directory with white space in its name is read whole
  * @returns {{ bases: string[], certain: boolean }} certain is false when a
  *   move names a directory the text does not spell out (a variable, a
- *   substitution, a glob), has an option, is one the resolver does not
- *   follow, the text holds CDPATH, or there are too many to follow
+ *   substitution, a glob, no target at all, "-", "~" with HOME set in
+ *   the text), has an option, is one the resolver does not follow, the
+ *   text holds CDPATH, or there are too many to follow
  */
 function commandBases(views, cwd, words) {
   const bases = [cwd];
-  let certain = !views.some((view) => UNFOLLOWED_MOVE.test(view) || CDPATH_IN_TEXT.test(view));
+  let certain = !views.some((view) => UNFOLLOWED_MOVE.test(view) || CDPATH_IN_TEXT.test(view) || BARE_MOVE.test(view));
+  const homeSet = views.some((view) => HOME_IN_TEXT.test(view));
   /** Adds the directory a move names, from every base so far. False once there are too many. */
   const move = (spelled) => {
     const dir = spelled.replace(/[;&|)]+$/, "").replace(/\/+$/, "") || "/";
-    if (dir === "-") return true; // back to a directory already in the set
-    // An option (cd -P x, cd -- x): `cd -` alone is handled above.
-    if (UNKNOWN_DIRECTORY.test(dir) || dir.startsWith("-")) { certain = false; return true; }
+    // "-" is $OLDPWD, an option is not the directory (cd -P x, cd -- x),
+    // and "~" is $HOME, which the text may have set.
+    if (UNKNOWN_DIRECTORY.test(dir) || dir.startsWith("-") || (homeSet && dir.startsWith("~"))) { certain = false; return true; }
     for (const base of [...bases]) {
       const next = path.resolve(base, drivePath(dir.replace(/^~(?=$|\/)/, os.homedir())));
       if (!bases.includes(next)) bases.push(next);

@@ -233,6 +233,13 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A cd with no target, to `-`, or to a home the command sets is not
+  followed (BUG-080, re-probe 7 H3).** `cd src && HOME=.. cd && npx rimraf
+  security` was silent: the reader went to the real home folder while the
+  shell went back to the project root. Such a move now makes the
+  command's location uncertain, and a guarded name counts wherever it
+  stands.
+
 - **A directory option moves the bare word only for a program known to
   run there (BUG-080, re-probe 7 H2).** `npm --prefix src exec rimraf
   security` was silent: the word was resolved from `src`, and npm runs

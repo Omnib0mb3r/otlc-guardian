@@ -1451,6 +1451,18 @@ Tests: `tests/hook.test.js`, "a directory option on a program not known to run t
 
 Smoke test after applying: at the root of a scratch project with a `src` folder ask Claude to run `npm --prefix src exec rimraf security`; see a Guardian prompt naming security; decline. In bypass mode `git -C src clean -fdx security` gets no Guardian prompt.
 
+**Re-probe 7, X2 and Lex decision H3 (2026-11-11): a cd the text does not spell out. Fixed in staging, not yet live.** A regression in 74b8ea1 (G6). The in-order reader sent a mover with no target to the home folder and `cd -` to the folder before the last move, and `commandBases()` called both certain. A word in front of the mover sets the variable either one reads. Silent in both modes at the project root: `cd src && HOME=.. cd && npx rimraf security`, the same with `rm -rf`, `cd src && cd a && OLDPWD=../.. cd - && npx rimraf security`, `HOME=. cd && npx rimraf security`. Real effect in the re-probe (`real\homecd`, `homecd2`, `oldpwd`): `security/` deleted.
+
+Lex's decision: a `cd`, `pushd` or `Set-Location` whose target is bare, `-`, or holds any variable or substitution makes the location uncertain, as G3 did for an option and CDPATH.
+
+Change in `staging/hooks/injection-guard-hook.mjs`: in `commandBases()` a mover with no target or with `-` (`BARE_MOVE`) makes the bases not certain, and so does a `~` target when the text sets `HOME` or `USERPROFILE` (`HOME_IN_TEXT`). A guarded name and the bare word then count wherever they stand. A target with a variable, a substitution or a glob already did (`UNKNOWN_DIRECTORY`). Also silent before and asking now: `cd src && HOME=.. cd ~ && npx rimraf security`, `cd src && export HOME=.. && cd ~ && npx rimraf security`, `cd src && pushd && npx rimraf security`, `cd src && cd && npx rimraf security`.
+
+Cost, for Lex to confirm: the mark is for the whole command, so a bare `cd` or a `cd -` after the word counts too: `cd src && rm -rf security && cd -` asks. `cd src && cd ~ && npx rimraf security` stays silent while the text leaves HOME alone. The folder-above check (`wordAboveProject()`) is unchanged: it still follows a bare `cd` to the home folder and `cd -` back, so `cd - && npx rimraf ..` asks as before.
+
+Tests: `tests/hook.test.js`, "a cd with no target, to - or to a home the text sets (re-probe 7, H3)": 9 ask (8 failed before the fix; `cd src && cd; npx rimraf security` asked already), 6 stay silent in bypass mode. Staged hook suite before: 1402 passed, 8 failed. After: 1410 passed, 0 failed. Lex's regress harness: no line changed. Re-probe 7's lists (640 commands): 4 verdicts changed, the four X2 forms, from silent to deny/ask.
+
+Smoke test after applying: at the root of a scratch project with a `src` folder ask Claude to run `cd src && HOME=.. cd && npx rimraf security`; see a Guardian prompt naming security; decline. In bypass mode `cd src && rm -rf security` gets no Guardian prompt.
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

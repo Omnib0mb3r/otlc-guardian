@@ -4721,6 +4721,50 @@ describe("PreToolUse hook - a directory option on a program not known to run the
 });
 
 // ---------------------------------------------------------------------------
+// Re-probe 7, X2 and H3 (BUG-080): a cd the text does not spell out
+// ---------------------------------------------------------------------------
+//
+// G6 followed a cd with no target to the home folder and `cd -` to the
+// folder before. Both read a variable (HOME, OLDPWD) that a word in front
+// of the mover can set: `cd src && HOME=.. cd && npx rimraf security` is
+// back at the root when rimraf runs, and deleted security/ for real.
+
+describe("PreToolUse hook - a cd with no target, to - or to a home the text sets (re-probe 7, H3)", () => {
+  for (const command of [
+    "cd src && HOME=.. cd && npx rimraf security",
+    "cd src && HOME=.. cd && rm -rf security",
+    "cd src && cd a && OLDPWD=../.. cd - && npx rimraf security",
+    "HOME=. cd && npx rimraf security",
+    "cd src && HOME=.. cd ~ && npx rimraf security",
+    "cd src && export HOME=.. && cd ~ && npx rimraf security",
+    "cd src && pushd && npx rimraf security",
+    "cd src && cd && npx rimraf security",
+    // Held: a move that may have failed.
+    "cd src && cd; npx rimraf security",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    "cd src && rm -rf security",
+    // HOME is not set in the text, so ~ is the home folder.
+    "cd src && cd ~ && npx rimraf security",
+    "cd ~/projects/x && rm -rf security",
+    // Nothing of Guardian's is named, or the command only reads.
+    "cd src && npm test && cd - && npm run build",
+    "cd - && git status",
+    "cd && ls security",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 
