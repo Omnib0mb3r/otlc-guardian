@@ -233,6 +233,18 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **An option value stuck to its option is read (BUG-074, BUG-075,
+  BUG-065, BUG-066; re-probe 6 G7).** `claude mcp add -sproject` wrote
+  `.mcp.json` without a prompt. The same gap was in every reader that
+  takes a value from an option: `env -C.. npx rimraf .`, `python
+  -c"..."`, `node --eval=...`, `perl -ne`, `unzip a.zip -d.`, `tar
+  -xfa.tar`, `curl -o.mcp.json`, `cp -t.cursor/rules` and `patch
+  -ifix.patch` were silent where the spaced form asks or denies. They
+  are read now, `bsdtar` and `gtar` are read as `tar`, and `rsync -t`
+  no longer takes its source for the destination. `git commit -m"fix
+  security"` and `python -mpytest -k security` were denied in bypass
+  mode and are silent. Cost: `gcc -I.. -c a.c` at a project root asks.
+
 - **The bare word `security` is resolved from where the shell is
   (BUG-080, re-probe 6 G6).** `cd src && rm -rf security` is the
   project's own `src/security` and was denied in bypass mode; so were

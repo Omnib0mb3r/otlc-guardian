@@ -1018,6 +1018,8 @@ Housekeeping in the same commit: five blank lines that the worker's edit script 
 
 Smoke test after applying: with any tar in a scratch project ask Claude to run `python -c "import tarfile; tarfile.open('x.tar').extractall(filter='data')"` (a Guardian prompt; decline).
 
+**Re-probe 6, G7 and G8 (2026-11-11), staged:** the archive readers take a value stuck to its option: `unzip a.zip -d.`, `tar -xfa.tar`, `tar -xzfa.tar.gz`, `python -mzipfile -e a.zip .` and `python -c"...extractall('.')"` ask, and `bsdtar` and `gtar` are read as `tar`, so `bsdtar -xf evil.zip` asks (re-probe 6, W10 had it silent). Inline code that runs an extraction command as a string (`node -e "require('child_process').execSync('tar -xf evil.tar')"`) is still silent and is now listed in SECURITY.md under Archives, Not seen. The full account is in the BUG-074 block.
+
 ### BUG-066: Copy forms the content check does not read
 
 **Status:** IN-PROGRESS · **Found:** 2026-11-10
@@ -1053,6 +1055,8 @@ Tests: `tests/hook.test.js`, "a copy through a group, a subshell or a process su
 Limit that stays: the sources are a superset. Every command in a group counts, also one whose own output is redirected away (`( cat notes/x.md > /dev/null; cat docs/a.md ) > CLAUDE.md` is denied), and a `<(cmd)` given to a program as an argument is treated as read by it.
 
 Smoke test after applying: with a payload in `notes/x.md` ask Claude to run `{ cat notes/x.md; } > CLAUDE.md`; see the deny.
+
+**Re-probe 6, G7 (2026-11-11), staged:** a copy whose destination or patch file is stuck to its option is judged: `cp -t.cursor/rules notes/x.md`, `mv -t.cursor/rules notes/x.md`, `cp -rt .cursor/rules notes/x.md`, `patch -p1 -ifix.patch` and `patch -p1 --input=fix.patch` are denied on a payload. `rsync -t notes/x.md CLAUDE.md` is denied too: `-t` was read as a target-folder option for every copy command, and for rsync it keeps times. The full account is in the BUG-074 block.
 
 ### BUG-067: PowerShell parameter prefixes and encoded command payloads
 
@@ -1158,6 +1162,28 @@ Not read: a global option before `mcp` (`claude --debug mcp add ...`), and `clau
 
 Smoke test after applying: ask Claude to run `claude mcp add -s project e -- node -e 1` (a Guardian prompt naming .mcp.json; decline).
 
+**Re-probe 6, W9 and Lex decision G7 (2026-11-11): an option value stuck to its option. Fixed in staging, not yet live.** `claude mcp add -sproject e -- node -e 1` was silent; in the re-probe the CLI wrote `.mcp.json` with the stdio server (`real\mcpS`). `writesProjectMcp()` took the scope as a word of its own or after `=`. Lex's decision: option values attached to their flag are read for `claude mcp add` and for every option the hook reads.
+
+The probe for "every option" at 74b8ea1 found the same gap in each reader that takes a value from an option. All of these were silent, in the live 1.5.0 hook too, where the spaced form asks or denies: `env -C.. npx rimraf .` and `env -Csrc/a npx rimraf ../../security`; `python -c"import shutil; shutil.rmtree('..')"`, `python -Bc "..."`, `node -e"..."`, `node --eval="..."`, `node -pe "..."`, `perl -e'...'`, `perl -ne '...'`, `python -mzipfile -e a.zip .`, `deno eval "..."`; `unzip a.zip -d.`, `tar -xfa.tar`, `tar -xzfa.tar.gz`; `curl -o.mcp.json URL`, `wget -O.mcp.json URL`; `cp -t.cursor/rules notes/x.md` and `cp -rt .cursor/rules notes/x.md` with a payload in the source; `patch -p1 -ifix.patch`. Two readings were wrong in the other direction: `ruby -rfileutils -e CODE` and `perl -Mstrict -e CODE` were taken for an in-place edit because the stuck value holds the letter `i`, and the code was then not read; `rsync -t SRC CLAUDE.md` took SRC for the destination, since `-t` names a target folder only for cp, mv, install and ln. False asks: `git commit -m"fix security"` and `python -mpytest -k security` were denied in bypass mode.
+
+Change in `staging/hooks/injection-guard-hook.mjs`:
+- `writesProjectMcp()` accepts `-sproject` beside `-s=project`, `--scope=project` and the separate word.
+- `inlineCode(name, args)` replaces the exact-word list `INLINE_CODE_FLAGS`: the first argument that starts a short cluster holding `c`, `E`, `e`, `p` or `r` (`INLINE_CODE_SHORT`), or is `--eval` or `--print` with or without `=`, gives what is stuck to it and every word after it as the code; `deno eval CODE` gives its words. Which letters of a cluster are options differs by interpreter, so the reading is the wide one. A script on stdin is read as well whenever no script file is named. The in-place branch is for `sed` alone; for perl and ruby `-i` adds the files and the code is still read.
+- `archiveDestinations()` and `isTestRun()` read the module of `-m` stuck to it (`-mzipfile`, `-mpytest`).
+- `DIRECTORY_STUCK` (`-C` followed by anything but a digit or a dash): `commandBases()` adds the folder, and `wordsInPlace()` moves the rest of the stage there. To another program the same word is a cluster of its own options (`rsync -Cavz`), so the folder the stage was in still counts: for the bare word through `alt`, for the folder-above check through the new `unmoved` list.
+- `wordAboveProject()` reads a path stuck to a one-letter option as a word (`STUCK_PATH_OPTION`: `-t..`, `-d../..`), as it reads the value of `--name=value`.
+- `tarWrites()` takes what follows a value letter in a dashed cluster as its value (`-xfa.tar`, `-C.claude`), and `bsdtar` and `gtar` are read as `tar` (`TAR_COMMANDS`). `unzipWrites()` reads `-dDIR`, also at the end of a cluster.
+- The copy reader finds `-t` alone, at the end of a cluster, stuck (`-tDIR`) and as `--target-directory=DIR`, for cp, mv, install and ln only. `patch` reads `-iFILE` and `--input=FILE`. `curl` and `wget` read `-oFILE` and `-OFILE`.
+- `messageSpans()` takes a word that starts with a message option and holds its value (`-m"..."`, `-am"..."`, gh `-t"..."`) as a message.
+
+Tests: `tests/hook.test.js`, "an option value stuck to its option (re-probe 6, G7)": 27 ask, 6 deny, 17 stay silent in bypass mode. Staged hook suite before: 1188 passed, 35 failed (the 27 asks, the 6 denies and the two false asks). After: 1223 passed, 0 failed. Lex's regress harness: no line changed. 75 everyday commands compared at 74b8ea1 and after: one changed, below.
+
+Cost, for Lex to confirm or overrule: a path stuck to a one-letter option counts for the folder-above check, so at a project root `gcc -I.. -c a.c` is denied in bypass mode (silent before). It is the same kind of cost as `tsc --outDir ..` in the F3b list. Dropping `STUCK_PATH_OPTION` removes it and leaves `npx cpx 'src/**' -t..` silent.
+
+Limits, stated: a digit after `-C` is taken for a count, so `env -C2024 ...` is not followed. git itself does not accept `-Cdir` in one word, and `gitWrites()` does not read it. Inline code that runs a command string (`node -e "require('child_process').execSync('tar -xf evil.tar')"`) is not read as that command; SECURITY.md lists it.
+
+Smoke test after applying: ask Claude to run `claude mcp add -sproject e -- node -e 1` (a Guardian prompt naming .mcp.json; decline). In bypass mode `git commit --allow-empty -m"fix security"` gets no prompt.
+
 ### BUG-075: Shell forms the readers do not parse change Guardian's files silently
 
 **Status:** IN-PROGRESS · **Found:** 2026-11-10
@@ -1219,6 +1245,8 @@ Tests: `tests/hook.test.js`, "env -C and env --chdir are followed (re-probe 6, G
 Limit that stays: a move to a variable, a substitution or a glob (`env -C "$D" npx rimraf ..`) is not counted for F3b, as SECURITY.md says. The value stuck to its option (`env -C.. npx rimraf .`) is G7.
 
 Smoke test after applying: in a scratch folder `parent/proj` with Guardian installed in `proj`, ask Claude to run `env -C .. npx rimraf .` from `proj` (a Guardian prompt that says "a folder above this project"; decline).
+
+**Re-probe 6, G7 (2026-11-11), staged:** a directory stuck to `-C` is followed (`env -C.. npx rimraf .` and `env -Csrc/a npx rimraf ../../security` ask), a path stuck to a one-letter option is read by the folder-above check, and inline code is read when it is stuck to its option, follows a cluster or `=`, or comes after a value that holds the letter `i` (`python -c"..."`, `python -Bc`, `node --eval=...`, `perl -Mstrict -e`, `ruby -rfileutils -e`). The full account, the tests and the cost (`gcc -I.. -c a.c` at a project root) are in the BUG-074 block.
 
 ### BUG-076: Runtime GUARD-SEC-008 and -009 miss a quoted JSON key
 

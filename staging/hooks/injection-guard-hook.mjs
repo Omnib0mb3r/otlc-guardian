@@ -712,10 +712,11 @@ const CLAUDE_PACKAGE = /^(?:claude|@anthropic-ai\/claude-code(?:@\S*)?)$/i;
  * Whether a command changes the project's MCP servers through Claude
  * Code's own CLI: `claude mcp add`, `add-json`, `add-from-claude-desktop`
  * or `remove` with `-s project` or `--scope project`, run directly or
- * through npx, pnpx or bunx (re-probe 5, F7). That scope is stored in
- * .mcp.json at the project root; the user and local scopes are stored in
- * the user's own ~/.claude.json. Words after "--" belong to the server's
- * command, not to claude.
+ * through npx, pnpx or bunx (re-probe 5, F7). The scope may be stuck to
+ * its option: `-sproject`, `-s=project`, `--scope=project` (re-probe 6,
+ * G7). That scope is stored in .mcp.json at the project root; the user
+ * and local scopes are stored in the user's own ~/.claude.json. Words
+ * after "--" belong to the server's command, not to claude.
  */
 function writesProjectMcp(name, args) {
   let rest = args;
@@ -727,7 +728,7 @@ function writesProjectMcp(name, args) {
   if (rest[0] !== "mcp" || !CLAUDE_MCP_WRITERS.has(rest[1])) return false;
   const end = rest.indexOf("--");
   const own = end < 0 ? rest : rest.slice(0, end);
-  return own.some((a, k) => /^(?:-s|--scope)=project$/i.test(a) || (/^(?:-s|--scope)$/.test(a) && own[k + 1]?.toLowerCase() === "project"));
+  return own.some((a, k) => /^(?:-s=?|--scope=)project$/i.test(a) || (/^(?:-s|--scope)$/.test(a) && own[k + 1]?.toLowerCase() === "project"));
 }
 
 /**
@@ -745,7 +746,29 @@ function runWrapped(words) {
   const first = known >= 0 ? known : rest.findIndex((w) => !w.startsWith("-"));
   return first >= 0 ? rest.slice(first) : null;
 }
-const INLINE_CODE_FLAGS = new Set(["-c", "-e", "-p", "-r", "--eval", "--print"]);
+// The options that hand an interpreter its program as text: -c (python),
+// -e (node, perl, ruby), -E (perl), -p (node), -r (php), --eval and
+// --print. A short one is read alone, at the end of a cluster (python
+// -Bc, perl -ne) and with the code stuck to it (python -c"code"); a long
+// one with the code after "=" as well (re-probe 6, G7).
+const INLINE_CODE_SHORT = /^-[A-Za-z]*?[cEepr]/;
+const INLINE_CODE_LONG  = /^--(?:eval|print)(?:=|$)/;
+
+/**
+ * The inline code an interpreter is given, or null when it is given none:
+ * what is stuck to the first inline-code option and every word after it.
+ * Which letters of a cluster are options and which are the value of one
+ * differs by interpreter, so the reading is the wide one: `ruby
+ * -rfileutils -e CODE` gives "fileutils -e CODE", which holds the code.
+ * `deno eval CODE` names its code by a subcommand.
+ */
+function inlineCode(name, args) {
+  if (name === "deno" && args[0] === "eval") return args.slice(1).join(" ");
+  const k = args.findIndex((a) => INLINE_CODE_SHORT.test(a) || INLINE_CODE_LONG.test(a));
+  if (k < 0) return null;
+  const stuck = args[k].startsWith("--") ? args[k].split("=").slice(1).join("=") : args[k].replace(INLINE_CODE_SHORT, "");
+  return [stuck, ...args.slice(k + 1)].join(" ");
+}
 const POWERSHELLS       = new Set(["powershell", "pwsh"]);
 const COPY_COMMANDS     = new Set(["cp", "mv", "install", "ln", "rsync", "scp"]);
 // Options of the copy commands that take the next word as their value
@@ -1140,10 +1163,12 @@ const archiveFolder = (dest) => dest.replace(WORKING_FOLDER_EXPRESSION, ".");
  */
 function archiveDestinations(args, code) {
   const dests = [];
-  // python -m zipfile -e ARCHIVE DIR; python -m tarfile -e ARCHIVE [DIR]
-  const m = args.indexOf("-m");
-  if (m >= 0 && /^(?:zipfile|tarfile)$/.test(args[m + 1] ?? "")) {
-    const e = args.findIndex((a, k) => k > m + 1 && /^(?:-e|--extract)$/.test(a));
+  // python -m zipfile -e ARCHIVE DIR; python -m tarfile -e ARCHIVE [DIR];
+  // the module may be stuck to the option (-mzipfile).
+  const m = args.findIndex((a) => /^-m/.test(a));
+  const module = m < 0 ? "" : args[m].slice(2) || (args[m + 1] ?? "");
+  if (/^(?:zipfile|tarfile)$/.test(module)) {
+    const e = args.findIndex((a, k) => k > m && /^(?:-e|--extract)$/.test(a));
     if (e >= 0) dests.push(args[e + 2] ?? ".");
   }
   const namesModule = PY_ARCHIVE_MODULE.test(code);
@@ -1360,6 +1385,9 @@ const UNFOLLOWED_MOVE = /(?:^|\s)-(?:execdir|okdir)(?=\s|$)|(?<![\w-])cwd\s*[:=]
 // word keeps its case, so -C (a directory) is not -c (python -c "code").
 const DIRECTORY_OPTION = /^(?:--prefix|--cwd|--chdir|--directory|--git-dir|--work-tree|-workingdirectory|-wd)$/i;
 const DIRECTORY_OPTION_VALUE = /^(?:--prefix|--cwd|--chdir|--directory|--git-dir|--work-tree)=/i;
+// -C with the directory stuck to it (env -C.., make -Csrc, tar -C.claude;
+// re-probe 6, G7). A digit after it is a count (grep -C3, diff -C3).
+const DIRECTORY_STUCK = /^-C[^\d-]/;
 const QUOTED_CHDIR = /chdir\(\s*(['"])(.*?)\1/gi;
 const MAX_COMMAND_BASES = 32;
 const UNKNOWN_DIRECTORY = /[$`%*?()]/;
@@ -1410,7 +1438,10 @@ function commandBases(views, cwd, words) {
     } else if (word === "-C" || DIRECTORY_OPTION.test(word)) dirs.push(words[k + 1]);
     else if (DIRECTORY_OPTION_VALUE.test(word)) dirs.push(word.slice(word.indexOf("=") + 1));
     else if (spaced(word)) for (const m of word.matchAll(QUOTED_CHDIR)) dirs.push(m[2]);
-    for (const dir of dirs.filter(spaced)) if (!move(dir.replace(/\\/g, "/"))) return tooMany();
+    // The views read a value after white space or "="; one stuck to -C is
+    // read here, with or without a space in it.
+    const stuck = DIRECTORY_STUCK.test(word) ? [word.slice(2)] : [];
+    for (const dir of [...dirs.filter(spaced), ...stuck]) if (!move(dir.replace(/\\/g, "/"))) return tooMany();
   }
   return { bases, certain };
 }
@@ -1462,7 +1493,7 @@ function isTestRun(words) {
   if (TEST_RUNNERS.has(name)) return true;
   if (name === "manage.py") return plain[0] === "test";
   if (name === "python" || name === "python3" || name === "py") {
-    if (args[0] === "-m") return PYTHON_TEST_MODULES.has(args[1]);
+    if (/^-m/.test(args[0] ?? "")) return PYTHON_TEST_MODULES.has(args[0].slice(2) || args[1]);
     return commandName(plain[0] ?? "") === "manage.py" && plain[1] === "test";
   }
   if (PACKAGE_RUNNERS.has(name)) return TEST_RUNNERS.has(plain[0]);
@@ -1480,14 +1511,16 @@ function isTestRun(words) {
 // notes (-m, --message; -F and --file name a file that is only read), and
 // the title, body, notes, subject and comment of gh pr, issue and release.
 const MESSAGE_OPTIONS = {
-  git: { commands: new Set(["commit", "tag", "merge", "stash", "notes"]), long: /^--(?:message|file)$/, short: /^-[a-zA-Z]*[mF]$/ },
-  gh:  { commands: new Set(["pr", "issue", "release"]), long: /^--(?:title|body|notes|subject|comment)$/, short: /^-[tbnc]$/ },
+  git: { commands: new Set(["commit", "tag", "merge", "stash", "notes"]), long: /^--(?:message|file)$/, short: /^-[a-zA-Z]*[mF]$/, stuck: /^-[a-zA-Z]*?[mF]./ },
+  gh:  { commands: new Set(["pr", "issue", "release"]), long: /^--(?:title|body|notes|subject|comment)$/, short: /^-[tbnc]$/, stuck: /^-[tbnc]./ },
 };
 
 /**
  * The places in a stage that hold a message: the value of an option of
  * MESSAGE_OPTIONS, given after it or after "=" (also at the end of a
- * short cluster, git commit -am).
+ * short cluster, git commit -am), or stuck to the short option (git
+ * commit -m"fix security"; re-probe 6, G7), where the whole word is the
+ * place.
  * @param {Array<{word: string, start: number, end: number}>} stage
  * @returns {Array<[number, number]>}
  */
@@ -1502,7 +1535,7 @@ function messageSpans(stage) {
     else if ((options.long.test(word) || options.short.test(word)) && stage[k + 1]) {
       spans.push([stage[k + 1].start, stage[k + 1].end]);
       k++;
-    }
+    } else if (options.stuck.test(word)) spans.push([start, end]);
   }
   return spans;
 }
@@ -1827,6 +1860,9 @@ function guardedNameIn(texts, dialect, cwd, root, watches = () => false) {
 // often than the root of the disk; and a single letter after a slash
 // (/c, /s), which is a switch.
 const NOT_A_FOLDER = /[$`*?[\]{}=]|^\/+$|^[\\/][A-Za-z]$/;
+// A short option with a path stuck to it: one letter, then ".", "..", a
+// slash or "~".
+const STUCK_PATH_OPTION = /^-[A-Za-z](?=\.{1,2}(?:[\\/]|$)|[\\/~])/;
 
 /** The dialect of the script that follows `option` in a stage run by `shell` (bash -c, cmd /c, pwsh -Command), or null. */
 function scriptDialect(shell, option) {
@@ -1851,9 +1887,12 @@ function scriptDialect(shell, option) {
  * A move can fail. Only the commands joined to it by `&&` are sure to
  * run where it leads; after a `;`, a newline, `||`, `&` or a pipe the
  * shell may still be where it was, and each word from there on carries
- * that folder in `alt` (re-probe 6, G6).
+ * that folder in `alt` (re-probe 6, G6). So does each word after a
+ * directory stuck to -C (env -C.., make -Csrc; G7): to another program
+ * the same word is a cluster of its own options (rsync -Cavz), and the
+ * stage then runs where it was.
  *
- * @returns {{ placed: Array<{ tok: {word: string, start: number, end: number}, dir: string, alt: string[], moves: boolean, stage: string[] }>,
+ * @returns {{ placed: Array<{ tok: {word: string, start: number, end: number}, dir: string, alt: string[], unmoved: string[], moves: boolean, stage: string[] }>,
  *   subs: string[], end: string, lost: boolean }} `stage` is the words of
  *   the word's stage up to and including it; `end` is the directory after
  *   the last word; `lost` is true when a move names a directory the text
@@ -1866,6 +1905,7 @@ function wordsInPlace(text, dialect, start) {
   let dir = start;
   let previous = start;
   let stageDir = null; // set by a directory option, for the rest of its stage
+  let stageAlt = [];   // where the stage is instead when a stuck -C was no directory
   let lost = false;
   const pushed = [];
   const outer = [];
@@ -1885,13 +1925,14 @@ function wordsInPlace(text, dialect, start) {
       if (CONTROL_OPERATORS.has(op)) {
         stage = [];
         stageDir = null;
+        stageAlt = [];
         if (op !== "&&" && op !== "(") maybe.push(...pending.splice(0));
       }
       continue;
     }
     stage.push(word);
     const here = stageDir ?? dir;
-    const mark = (t, moves) => placed.push({ tok: t, dir: here, alt: [...maybe], moves, stage: [...stage] });
+    const mark = (t, moves) => placed.push({ tok: t, dir: here, alt: [...maybe, ...stageAlt], unmoved: stageAlt, moves, stage: [...stage] });
     const name = commandName(word);
     if (DIRECTORY_MOVERS.has(name)) {
       mark(tok, true);
@@ -1920,6 +1961,10 @@ function wordsInPlace(text, dialect, start) {
     } else if (DIRECTORY_OPTION_VALUE.test(word)) {
       mark(tok, true);
       toStage(here, word.slice(word.indexOf("=") + 1));
+    } else if (DIRECTORY_STUCK.test(word)) {
+      mark(tok, true);
+      stageAlt = [...stageAlt, here];
+      toStage(here, word.slice(2));
     } else mark(tok, false);
   }
   return { placed, subs, end: dir, lost };
@@ -1998,7 +2043,7 @@ function wordAboveProject(texts, dialect, cwd, root) {
   const walk = (text, start, inDialect, depth) => {
     const { placed, subs, end, lost: unknown } = wordsInPlace(text, inDialect, start);
     if (unknown) lost = true;
-    for (const { tok, dir, moves, stage } of placed) {
+    for (const { tok, dir, unmoved, moves, stage } of placed) {
       if (moves) continue;
       const script = stage.length > 2 ? scriptDialect(commandName(stage[0]), stage.at(-2)) : null;
       if (script) {
@@ -2008,8 +2053,12 @@ function wordAboveProject(texts, dialect, cwd, root) {
         }
         continue;
       }
-      const value = tok.word.replace(/^--?[A-Za-z][\w-]*=/, "");
-      if (value !== "" && !value.startsWith("-") && !NOT_A_FOLDER.test(value) && isAbove(dir, value)) return { found: value, dir: end };
+      // The value of --name=value, and a path stuck to a short option
+      // (-t.., -d../..; re-probe 6, G7), is a word of its own.
+      const value = tok.word.replace(/^--?[A-Za-z][\w-]*=/, "").replace(STUCK_PATH_OPTION, "");
+      if (value !== "" && !value.startsWith("-") && !NOT_A_FOLDER.test(value) && [dir, ...unmoved].some((from) => isAbove(from, value))) {
+        return { found: value, dir: end };
+      }
     }
     // A substitution runs where its command does; the start and the end
     // of this text bound that.
@@ -2634,7 +2683,7 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   } else if (name === "find") {
     // What -exec cat and the like print is find's stdout (re-probe 4, E5).
     return { dir, out: [...out, ...findWrites(args, dir, ctx)] };
-  } else if (name === "tar") {
+  } else if (TAR_COMMANDS.has(name)) {
     tarWrites(args, dir, ctx);
   } else if (name === "unzip") {
     unzipWrites(args, dir, ctx);
@@ -2667,28 +2716,44 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     for (const p of operands) add(dir, p, stdin, append);
   } else if (DELETE_COMMANDS.has(name)) {
     for (const p of operands) add(dir, p);
-  } else if ((name === "sed" || name === "perl" || name === "ruby") && args.some((a) => /^-[a-zA-Z]*i/.test(a) || a.startsWith("--in-place"))) {
+  } else if (name === "sed" && editsInPlace(args)) {
     for (const p of operands) add(dir, p);
   } else if (INTERPRETERS.has(name)) {
-    const flag = args.findIndex((a) => INLINE_CODE_FLAGS.has(a));
-    // With no inline code and no script file the program comes from
-    // stdin, and is judged by its text like -c (re-probe 5, F5).
-    const fromStdin = flag < 0 && (operands.length === 0 || operands[0] === "-");
-    const code = flag >= 0 ? args.slice(flag + 1).join(" ") : fromStdin ? scripts.join("\n") : "";
+    // perl -i and ruby -i rewrite the files they are given. The letter is
+    // also found in a value stuck to another option (ruby -rfileutils,
+    // perl -Mstrict), so the inline code is read either way (G7).
+    if ((name === "perl" || name === "ruby") && editsInPlace(args)) for (const p of operands) add(dir, p);
+    const inline = inlineCode(name, args);
+    // With no script file the program comes from stdin, and is judged by
+    // its text like -c (re-probe 5, F5).
+    const fromStdin = operands.length === 0 || operands[0] === "-";
+    const code = [inline ?? "", fromStdin ? scripts.join("\n") : ""].filter((part) => part !== "").join("\n");
     const writes = INLINE_WRITE_CALLS.some((re) => re.test(code));
     for (const p of pathLikeWords(code)) {
       if (!ROOT_WORD.test(p) && (writes || namesGuardFile(abs(dir, p)))) add(dir, p);
     }
     for (const dest of archiveDestinations(args, code)) add(dir, dest);
   } else if (COPY_COMMANDS.has(name)) {
-    const t = args.findIndex((a) => a === "-t" || a === "--target-directory");
-    const inline = args.find((a) => a.startsWith("--target-directory="));
     const valued = new Set(COPY_VALUE_OPTIONS[name] ?? []);
     const paths = args.filter((a, k) => !a.startsWith("-") && !valued.has(args[k - 1]));
-    const dest = inline ? inline.split("=")[1] : t >= 0 ? args[t + 1] : paths[paths.length - 1];
+    // cp, mv, install and ln name the destination folder with -t DIR,
+    // also at the end of a cluster (-rt DIR), stuck to it (-tDIR) and as
+    // --target-directory=DIR (G7). A letter that takes a value ends the
+    // cluster before a "t" is reached (cp -Stmp). For rsync -t keeps
+    // times and for scp it is not a user option.
+    let target;
+    if (name !== "rsync" && name !== "scp") {
+      const valueLetters = [...valued].filter((o) => /^-[A-Za-z]$/.test(o)).map((o) => o[1]).join("");
+      const short = new RegExp(`^-[^-t${valueLetters}]*t(.*)$`);
+      for (let k = 0; k < args.length && target === undefined; k++) {
+        const m = /^--target-directory(?:=(.*))?$/.exec(args[k]) ?? short.exec(args[k]);
+        if (m) target = m[1] || args[k + 1];
+      }
+    }
+    const dest = target ?? paths[paths.length - 1];
     const sources = paths.filter((p) => p !== dest);
     // Into a directory each source keeps its name; onto a file the sources replace it.
-    const intoDir = Boolean(inline) || t >= 0 || sources.length > 1 || /[\\/]$/.test(dest ?? "")
+    const intoDir = target !== undefined || sources.length > 1 || /[\\/]$/.test(dest ?? "")
       || Boolean(dest && statSync(abs(dir, dest), { throwIfNoEntry: false })?.isDirectory());
     const recursive = name === "mv" || args.some((a) => /^-[a-zA-Z]*[rRa]/.test(a) || a === "--recursive" || a === "--archive");
     if (dest) {
@@ -2712,15 +2777,19 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   } else if (name === "git") {
     gitWrites(args, dir, ctx);
   } else if (name === "patch") {
-    const file = args.findIndex((a) => a === "-i" || a === "--input");
-    const patches = file >= 0 && args[file + 1] ? [abs(dir, args[file + 1])] : input.reads;
+    // -i FILE, -iFILE, --input FILE or --input=FILE; else the patch is stdin.
+    const named = args.map((a, k) => (a === "-i" || a === "--input" ? args[k + 1] : /^(?:--input=|-i)(.+)$/.exec(a)?.[1])).find(Boolean);
+    const patches = named ? [abs(dir, named)] : input.reads;
     for (const p of patches) patchWrites(p, dir, ctx);
   } else if (name === "dd") {
     for (const a of args) if (a.startsWith("of=")) add(dir, a.slice(3), [...stdin, ...args.filter((x) => x.startsWith("if=")).map((x) => abs(dir, x.slice(3)))]);
   } else if (name === "curl" || name === "wget") {
-    const outFlag = name === "curl" ? /^(?:-[a-zA-Z]*o|--output)$/ : /^(?:-[a-zA-Z]*O|--output-document)$/;
+    // curl -o FILE and wget -O FILE, alone or in a cluster (-sSLo FILE),
+    // with the file stuck to the letter (-oFILE; G7) or after "=".
+    const outFlag = name === "curl" ? /^(?:-[a-zA-Z]*?o(.*)|--output)$/ : /^(?:-[a-zA-Z]*?O(.*)|--output-document)$/;
     args.forEach((a, k) => {
-      if (outFlag.test(a)) add(dir, args[k + 1]);
+      const m = outFlag.exec(a);
+      if (m) add(dir, m[1] || args[k + 1]);
       else if (/^--output(?:-document)?=/.test(a)) add(dir, a.slice(a.indexOf("=") + 1));
     });
   }
@@ -2780,6 +2849,10 @@ function gitWrites(args, dir, ctx) {
 
 // Options of tar that take a value, in a cluster ("-xzf a.tar") or alone.
 const TAR_VALUE_LETTERS = new Set(["f", "C", "T", "X", "b", "H", "K", "N", "V", "g", "F", "L"]);
+// GNU tar and bsdtar (the tar.exe of Windows) under their own names.
+const TAR_COMMANDS = new Set(["tar", "bsdtar", "gtar"]);
+/** Whether sed, perl or ruby is told to rewrite the files it is given: -i in a short cluster, or --in-place. */
+const editsInPlace = (args) => args.some((a) => /^-[a-zA-Z]*i/.test(a) || a.startsWith("--in-place"));
 
 /**
  * What `tar` extracts: the members it names, under -C/--directory or the
@@ -2797,13 +2870,18 @@ function tarWrites(args, dir, ctx) {
       if (long[1] === "extract" || long[1] === "get") extract = true;
       const value = long[2] ?? (["file", "directory", "files-from", "exclude-from"].includes(long[1]) ? args[++k] : undefined);
       if (long[1] === "directory" && value !== undefined) into = archiveFolder(value);
-    } else if (/^-[a-zA-Z]+$/.test(a) || (k === 0 && /^[a-zA-Z]+$/.test(a))) {
-      // Short options, or the old style "tar xzf a.tar" first word.
-      for (const letter of a.replace(/^-/, "")) {
-        if (letter === "x") extract = true;
-        if (!TAR_VALUE_LETTERS.has(letter)) continue;
-        const value = args[++k];
-        if (letter === "C" && value !== undefined) into = archiveFolder(value);
+    } else if (/^-[a-zA-Z]/.test(a) || (k === 0 && /^[a-zA-Z]+$/.test(a))) {
+      // Short options, or the old style "tar xzf a.tar" first word. After
+      // a dash, what follows a value letter in the same word is its value
+      // (-xfa.tar, -C.claude; G7); else the value is the next word.
+      const letters = a.replace(/^-/, "");
+      for (let j = 0; j < letters.length; j++) {
+        if (letters[j] === "x") extract = true;
+        if (!TAR_VALUE_LETTERS.has(letters[j])) continue;
+        const stuck = a.startsWith("-") ? letters.slice(j + 1) : "";
+        const value = stuck || args[++k];
+        if (letters[j] === "C" && value !== undefined) into = archiveFolder(value);
+        if (stuck) break;
       }
     } else {
       members.push(a);
@@ -2815,8 +2893,8 @@ function tarWrites(args, dir, ctx) {
 }
 
 /**
- * What `unzip` extracts: the members it names, under -d or the working
- * directory, or that whole directory when it names none. Listing and
+ * What `unzip` extracts: the members it names, under -d (also -dDIR) or
+ * the working directory, or that whole directory when it names none. Listing and
  * testing (-l, -t, -v, -Z) and extracting to stdout (-p) write nothing.
  */
 function unzipWrites(args, dir, ctx) {
@@ -2826,10 +2904,13 @@ function unzipWrites(args, dir, ctx) {
   const members = [];
   for (let k = 0; k < args.length; k++) {
     const a = args[k];
-    if (a === "-d") into = archiveFolder(args[++k] ?? into);
-    else if (a === "-x") excluding = true;
-    else if (/^-[a-zA-Z]+$/.test(a)) {
-      if (/[ltvZp]/.test(a.slice(1))) return;
+    if (a === "-x") excluding = true;
+    else if (/^-[a-zA-Z]/.test(a)) {
+      // A cluster of options. -d takes the rest of the word as the
+      // folder (-d., -qdout; G7), else the next word.
+      const d = a.indexOf("d", 1);
+      if (/[ltvZp]/.test(d < 0 ? a.slice(1) : a.slice(1, d))) return;
+      if (d >= 0) into = archiveFolder(a.slice(d + 1) || args[++k] || into);
     } else if (archive === null) archive = a;
     else if (!excluding) members.push(a);
   }
