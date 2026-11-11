@@ -2245,7 +2245,7 @@ function wordAboveProject(texts, dialect, cwd, root) {
 const READ_ONLY_COMMANDS = new Set([
   "cat", "less", "more", "head", "tail", "grep", "egrep", "fgrep", "rg", "ls", "dir", "stat", "wc", "file", "diff",
   "cmp", "jq", "md5sum", "sha1sum", "sha256sum", "cd", "pushd", "popd", "pwd", "echo", "printf", "test", "[", "true",
-  "realpath", "readlink", "basename", "dirname", "type",
+  "realpath", "readlink", "basename", "dirname", "type", "du", "df",
   "get-content", "gc", "get-childitem", "gci", "get-item", "gi", "test-path", "select-string", "sls",
   "get-filehash", "set-location", "sl", "resolve-path", "rvpa", "write-output", "write-host",
   "select-object", "where-object", "measure-object", "format-list", "format-table", "convertfrom-json", "out-string",
@@ -2327,6 +2327,10 @@ function onlyReads(command, dialect, depth = 0, plainSink = null) {
       return script !== null && !script.encoded && onlyReads(script.text, "powershell", depth + 1);
     }
     if (name === "find") return findOnlyReads(w.slice(1), dialect, depth);
+    // tree lists, unless -o names a file to write or -R writes one in
+    // each folder; sort prints, unless -o or --output names a file.
+    if (name === "tree") return !w.slice(1).some((x) => /^-[A-Za-z]*[oR]/.test(x));
+    if (name === "sort") return !w.slice(1).some((x) => /^-[A-Za-z]*o/.test(x) || x.startsWith("--output"));
     // tee passes its input on and writes it to its files: a read with a
     // redirect, when each file is one a redirect may write (re-probe 6, G6).
     if (name === "tee") {

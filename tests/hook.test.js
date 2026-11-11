@@ -4476,6 +4476,63 @@ describe("PreToolUse hook - a later command is not downstream (G2b)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// F3b read-only (BUG-075): a program that only reads a folder above the
+// project
+// ---------------------------------------------------------------------------
+//
+// Lex's ruling on the F3b cost: `du -sh ..` and `tree ..` at a project
+// root were denied in bypass mode. They only read. du, tree and df were
+// not on the read-only list.
+
+describe("PreToolUse hook - a program that only reads a folder above the project (F3b read-only)", () => {
+  const run = (command, { mode } = {}) => withTempProject((dir) => {
+    const root = path.join(dir, "proj");
+    for (const rel of [".claude/settings.json", ".claude/hooks/injection-guard-hook.mjs", "security/01-injection-guard.js", "src/a.js"]) {
+      mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      writeFileSync(path.join(root, rel), rel.endsWith(".json") ? "{}" : "x\n");
+    }
+    return runHook(PRE_HOOK, { tool_name: "Bash", cwd: root, tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) },
+      { CLAUDE_PROJECT_DIR: root });
+  });
+
+  for (const command of [
+    "du -sh ..",
+    "tree ..",
+    "tree -L 2 -a ..",
+    "df -h ..",
+    "du -sh .. | sort -h | head -5",
+    "ls -la ..",
+    "stat ..",
+    "find .. -maxdepth 1 -name '*.md'",
+    // Guardian's own folders are read the same way.
+    "du -sh security",
+    "tree .claude",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(run(command, { mode: "bypassPermissions" }));
+    });
+  }
+
+  for (const command of [
+    // tree writes a file with -o, and one per folder with -R.
+    "tree -o .claude/settings.json",
+    "tree -R -H . ..",
+    "tree -ao out.txt ..",
+    "du -sh .. | xargs rm -rf",
+    "find .. -name '*.log' -delete",
+    "du -sh .. > security/01-injection-guard.js",
+    // The rest of the F3b cost stands.
+    "code ..",
+    "npx prettier --write ..",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = run(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

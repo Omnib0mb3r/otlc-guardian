@@ -1258,6 +1258,14 @@ Smoke test after applying: in a scratch folder `parent/proj` with Guardian insta
 
 **Re-probe 6, G7 (2026-11-11), staged:** a directory stuck to `-C` is followed (`env -C.. npx rimraf .` and `env -Csrc/a npx rimraf ../../security` ask), a path stuck to a one-letter option is read by the folder-above check, and inline code is read when it is stuck to its option, follows a cluster or `=`, or comes after a value that holds the letter `i` (`python -c"..."`, `python -Bc`, `node --eval=...`, `perl -Mstrict -e`, `ruby -rfileutils -e`). The full account, the tests and the cost (`gcc -I.. -c a.c` at a project root) are in the BUG-074 block.
 
+**F3b read-only, Lex's ruling on the F3b cost (2026-11-11). Fixed in staging, not yet live.** At a project root `du -sh ..` and `tree ..` were denied in bypass mode by the folder-above check. Lex's ruling: a program that only reads, given a folder above the project, stays silent; the rest of the F3b cost list (`cp` or `mv` to `..`, `docker build ..`, `prettier --write ..`, `git add ..`, `tsc --outDir ..`, `code ..`) is accepted as stated. The check already passed over a command that only reads (`onlyReads()`); `du`, `tree` and `df` were not on the list, and `sort` was not either, so `du -sh .. | sort -h` would still have asked.
+
+Change in `staging/hooks/injection-guard-hook.mjs`: `du` and `df` join `READ_ONLY_COMMANDS`. In `onlyReads()` `tree` reads unless an option cluster holds `o` (`-o FILE` writes the listing to a file) or `R` (with `-H` it writes a `00Tree.html` in each folder), and `sort` reads unless it has `-o` or `--output`. The list is shared with the name check, so `du -sh security` and `tree .claude` are silent as well, and `tree -o .claude/settings.json` asks.
+
+Tests: `tests/hook.test.js`, "a program that only reads a folder above the project (F3b read-only)": 10 stay silent in bypass mode (7 were denied before the fix), 8 ask. Staged hook suite before: 1313 passed, 7 failed. After: 1320 passed, 0 failed. Lex's regress harness: no line changed.
+
+Smoke test after applying: in bypass mode at a project root `du -sh ..` and `tree ..` get no Guardian prompt; `npx rimraf ..` is denied with "a folder above this project".
+
 ### BUG-076: Runtime GUARD-SEC-008 and -009 miss a quoted JSON key
 
 **Status:** IN-PROGRESS · **Found:** 2026-11-10

@@ -233,6 +233,12 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A program that only reads a folder above the project is silent
+  (BUG-075, F3b read-only).** `du -sh ..` and `tree ..` at a project root
+  were denied in bypass mode. `du`, `df`, `tree` (without `-o` or `-R`)
+  and `sort` (without `-o`) are read-only commands now, for the
+  folder-above check and for Guardian's own folders alike.
+
 - **A later command no longer takes an exemption away (BUG-080, G2b).**
   `git commit -m security && git push origin $BRANCH`, the same with
   `"$(git branch --show-current)"`, and PowerShell `(Get-Content
