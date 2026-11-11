@@ -1144,6 +1144,8 @@ Found while fixing BUG-072. `GUARD-SEC-008` and `-009` require `:` or `=` right 
 
 **Observed once more, not explained (2026-11-10).** With the 30 s wait in place, one staged run reported three failures in the D1 group (`awk 'BEGIN{system(...)}'`, `if true; then rm ...; fi`, `f() { rm ...; }; f` "asks (D1)") while the machine was at 100% CPU; the messages were not captured, and four reruns under the same load passed 706 of 706. If it was the harness wait, the new message would have said so; if not, it is another effect of load. Stays SMOKE-TESTING; the next failure of this kind must be captured with its message.
 
+**Captured failure under load (2026-11-10, gate run for eef45c4).** The first gate run failed in the init suite, a test this session had not touched: `a wrong type in settings.local.json fails check and names the value` with `guardian init exited null: ` and `null !== 0`, stderr empty. That is `tests/init.test.js` line 540, a `spawnSync` of `guardian init` with `timeout: 60_000`: the child was killed at 60 s. `Win32_Processor.LoadPercentage` read 100 right after (top CPU holders: AdskIdentityManager, llama-server, EOSOverlayRenderer, ms-teams, Code). The rerun passed every suite with no change (it took over ten minutes), and the three later gate runs of the session passed first time. So the load failure is not limited to the hook spawns that 2329b8f moved to `HOOK_SPAWN_TIMEOUT_MS`: the CLI spawns in the init suite keep their own fixed 60 s limit and report a kill as "exited null" with no mention of the harness. Not changed here; the harness limit and message for those spawns is the open part of this bug.
+
 ### BUG-078: A guarded-name ask replaces a payload deny
 
 **Status:** IN-PROGRESS · **Found:** 2026-11-10
