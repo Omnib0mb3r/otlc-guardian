@@ -201,6 +201,29 @@ function loadSettings(projectRoot) {
 // PATH MATCHING
 // ---------------------------------------------------------------------------
 
+// What marks a folder as a project's root: Claude Code's own folder, or a
+// git repository (a folder, or the file a worktree has).
+const PROJECT_ROOT_MARKERS = [".claude", ".git"];
+
+/**
+ * The project root for a session folder when CLAUDE_PROJECT_DIR is not
+ * set: the nearest folder, from the session's upward, that holds .claude
+ * or .git, and the session folder itself when none does (re-probe 5, F6).
+ * A session in src/ then has the project's .mcp.json and Guardian's files
+ * where they are, one level up. The user's home folder is passed over:
+ * its .claude is Claude Code's own, not a project's.
+ */
+function projectRootAbove(sessionDir) {
+  const start = path.resolve(sessionDir);
+  const home = watchKey(os.homedir());
+  for (let dir = start; ;) {
+    if (watchKey(dir) !== home && PROJECT_ROOT_MARKERS.some((marker) => existsSync(path.join(dir, marker)))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return start;
+    dir = parent;
+  }
+}
+
 /**
  * The file a path names, spelled one way (BUG-064):
  *   - forward slashes, `..` and `.` collapsed;
@@ -2895,9 +2918,11 @@ process.stdin.on("end", () => {
     if (!write) process.exit(0);
 
     // Project root: Claude Code exports CLAUDE_PROJECT_DIR to hooks and
-    // also sends the session cwd in the payload. process.cwd() is the
-    // last resort; it is wrong whenever the session has changed directory.
-    const projectRoot = process.env.CLAUDE_PROJECT_DIR || (typeof data.cwd === "string" && data.cwd) || process.cwd();
+    // also sends the session cwd in the payload. Without the variable the
+    // root is looked for from the session's folder upward (re-probe 5,
+    // F6). process.cwd() is the last resort; it is wrong whenever the
+    // session has changed directory.
+    const projectRoot = process.env.CLAUDE_PROJECT_DIR || projectRootAbove((typeof data.cwd === "string" && data.cwd) || process.cwd());
     const settings    = loadSettings(projectRoot);
     const resolve     = (p) => {
       const file = canonicalPath(p);

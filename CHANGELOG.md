@@ -233,6 +233,14 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Without `CLAUDE_PROJECT_DIR` the project root is found, not assumed
+  (BUG-084, re-probe 5 F6).** The hook took the session folder as the
+  root, so a session in `src/` did not see the project's `.mcp.json` or
+  Guardian's files one level up (`npx rimraf ../../security` was silent).
+  The root is now the nearest folder upward that holds `.claude` or
+  `.git`. Claude Code always sets the variable; this matters for other
+  launchers.
+
 - **Archive extraction forms that stayed silent ask (BUG-065, re-probe 5
   F5).** `extractall(filter='data')` (the keyword was taken for the
   destination), a Python script on a heredoc or a here-string,

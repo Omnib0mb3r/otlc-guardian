@@ -95,6 +95,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-081 | SMOKE-TESTING | Audit walks every checkout under `.claude/worktrees/`, so each finding is reported once per worktree (bridger-base-camp: 95 extra `SEC-005`) |
 | BUG-082 | SMOKE-TESTING | Audit `INJ-002` (innerHTML) fires on a comparison (`a.innerHTML === b.innerHTML`) and misses `innerHTML +=` |
 | BUG-083 | IN-PROGRESS | Audit `SEC-001b` (legacy OpenAI key) fires on any word ending in `sk-` plus 20 alphanumerics, e.g. `task-<32 hex>` |
+| BUG-084 | IN-PROGRESS | Hook without `CLAUDE_PROJECT_DIR` takes the session folder as the project root: from `src/` the project's `.mcp.json` and Guardian's files one level up are not judged |
 
 <!-- INDEX END -->
 
@@ -1271,5 +1272,24 @@ Found by the silent sample for SEC-001b (gate plan step 0 item 2).
 **Audit half fixed (2026-11-10); runtime half waits on staging.** SEC-001b in `security/03-audit.js` is `/(?<![a-zA-Z0-9])sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}/`: the key must start a word. The id, severity and description are unchanged, and the `SECRET_PARITY` sample still fires. Tests in `tests/audit.test.js`: the known-bug test became three real tests (`task-`, `disk-`, `risk-` plus 32 hex digits, silent), with three firing tests for a key after a space, an equals sign and a colon; the three silent tests failed before the fix, all pass after (403 passed, 0 failed, 0 known). Docs: manual chapters 01 and 02, CHANGELOG.
 
 Still open, which is why the status stays IN-PROGRESS: the runtime pattern `GUARD-SEC-001b` in `security/01-injection-guard.js` (and its copies in `staging/security/01-injection-guard.js` and `security/injection_guard.py`) has no left boundary either. The scanner is a protected file and `staging/` is frozen for re-probe 5, so none of the three was changed; the same boundary goes into staging and the Python port together once Lex names the re-probe report. Until then the audit and the runtime differ on `task-<32 hex>`: the audit is silent, `guardOutput()` still throws.
+
+### BUG-084: Without `CLAUDE_PROJECT_DIR` the hook's project root is the session folder
+
+**Status:** IN-PROGRESS · **Found:** 2026-11-10
+
+Re-probe 5, V6 (`C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-11-guardian-1.5.0-reprobe5.md`), LOW. With `CLAUDE_PROJECT_DIR` removed from the environment and the session in `src` or `src/a`:
+
+- A Write of `../.mcp.json` with a stdio server, and `echo {} > ../.mcp.json`, are silent: the `.mcp.json` check (E3) compares against `<root>/.mcp.json` and the root was `src`.
+- `npx rimraf ../../security` and `npx rimraf ../../.claude/settings.json` from `src/a` are silent: the name check resolves against the same root.
+- Found while reproducing: the wrong root also gives a false ask. `npx rimraf security` from `src` asked, because `src/security` was read as Guardian's folder.
+- Held in the re-probe: writes to the hook, the scanner, the settings reader and `security/package.json`, `rm -rf ../../.claude/hooks`, settings changes and payload copies into `../../CLAUDE.md` (they match by ending or by the hook's own location).
+
+Cause: the main handler's `projectRoot = CLAUDE_PROJECT_DIR || data.cwd || process.cwd()`. Reach is limited: Claude Code always exports `CLAUDE_PROJECT_DIR` to hooks and the anchored hook command needs it. It matters for another launcher and for a hook started by an absolute path.
+
+**Fix in staging (2026-11-10), not yet live. Lex decision F6.** `staging/hooks/injection-guard-hook.mjs`: `projectRootAbove(sessionDir)` walks from the session folder upward and returns the first folder that holds `.claude` or `.git` (`PROJECT_ROOT_MARKERS`; `.git` may be the file a worktree has), and the session folder when none does. The main handler uses it when `CLAUDE_PROJECT_DIR` is absent. One addition to the decision as written, for Lex to confirm: the user's home folder is passed over, because every Claude Code user has `~/.claude`, and a project under the home folder with neither marker would otherwise get the home folder as its root.
+
+Tests: `tests/hook.test.js`, "the project root without CLAUDE_PROJECT_DIR (re-probe 5, F6)": for a project marked by `.claude` and one marked by `.git`, a Write of `../.mcp.json` and `echo {} > ../.mcp.json` from `src/`, `npx rimraf ../../security` from `src/a/` and `npx rimraf security` from the root ask; `npx rimraf ../../.claude/settings.json` from `src/a/` asks; `npx rimraf security` from `src/` and a Write of `src/.mcp.json` are silent; with neither marker above, the session folder stays the root. 9 failed before the fix (864 passed); 873 passed, 0 failed after. Lex's regress harness: no line changed.
+
+Smoke test after applying: start the hook by hand with `CLAUDE_PROJECT_DIR` unset and `cwd` set to a project's `src` folder, with a Write of `../.mcp.json` as the payload; the output is an ask.
 
 <!-- DETAILS END -->

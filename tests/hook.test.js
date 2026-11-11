@@ -3303,6 +3303,70 @@ describe("PreToolUse hook - dot segments after a guarded folder (re-probe 5, F3)
 });
 
 // ---------------------------------------------------------------------------
+// Re-probe 5, F6 (BUG-084): the project root without CLAUDE_PROJECT_DIR
+// ---------------------------------------------------------------------------
+//
+// Claude Code exports CLAUDE_PROJECT_DIR to its hooks. Another launcher, or
+// a hook started by an absolute path, may not. The hook then took the
+// session's folder as the project root, so from src/ the project's
+// .mcp.json and Guardian's files one level up were not the project's.
+// The root is now the nearest folder, from the session's upward, that
+// holds .claude or .git.
+
+describe("PreToolUse hook - the project root without CLAUDE_PROJECT_DIR (re-probe 5, F6)", () => {
+  // No CLAUDE_PROJECT_DIR: runHook() never passes the session's own.
+  const run = (marker, sub, toolCall, mode) => withTempProject((dir) => {
+    for (const rel of ["security/01-injection-guard.js", "src/a/x.txt", "src/a.js"]) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), "x\n");
+    }
+    if (marker === ".claude") {
+      mkdirSync(path.join(dir, ".claude"), { recursive: true });
+      writeFileSync(path.join(dir, ".claude", "settings.json"), "{}");
+    } else if (marker === ".git") mkdirSync(path.join(dir, ".git"), { recursive: true });
+    const cwd = path.join(dir, sub);
+    const { tool, rel, ...input } = toolCall;
+    const tool_input = rel ? { file_path: path.resolve(cwd, rel), ...input } : input;
+    return runHook(PRE_HOOK, { tool_name: tool, cwd, tool_input, ...(mode ? { permission_mode: mode } : {}) });
+  });
+  const SERVER = JSON.stringify({ mcpServers: { e: { command: "node", args: ["-e", "1"] } } });
+
+  for (const marker of [".claude", ".git"]) {
+    for (const [label, sub, toolCall] of [
+      ["Write ../.mcp.json from src/", "src", { tool: "Write", rel: "../.mcp.json", content: SERVER }],
+      ["echo {} > ../.mcp.json from src/", "src", { tool: "Bash", command: "echo {} > ../.mcp.json" }],
+      ["npx rimraf ../../security from src/a/", "src/a", { tool: "Bash", command: "npx rimraf ../../security" }],
+      ["npx rimraf security from the root", "", { tool: "Bash", command: "npx rimraf security" }],
+    ]) {
+      stagedOnly(`asks in a project marked by ${marker}: ${label}`, () => {
+        const out = run(marker, sub, toolCall);
+        assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+      });
+    }
+  }
+  stagedOnly("asks: npx rimraf ../../.claude/settings.json from src/a/", () => {
+    const out = run(".claude", "src/a", { tool: "Bash", command: "npx rimraf ../../.claude/settings.json" });
+    assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+  });
+
+  // In src/ the word security is no longer the root's folder, and a
+  // .mcp.json there is not the project's.
+  stagedOnly("silent: npx rimraf security from src/ (src/security is the project's own)", () => {
+    expectSilent(run(".claude", "src", { tool: "Bash", command: "npx rimraf security" }, "bypassPermissions"));
+  });
+  stagedOnly("silent: Write src/.mcp.json (not the project's .mcp.json)", () => {
+    expectSilent(run(".claude", "src", { tool: "Write", rel: ".mcp.json", content: SERVER }, "bypassPermissions"));
+  });
+
+  // Neither marker anywhere above: the session's folder is the root, as before.
+  stagedOnly("with no .claude or .git above, the session folder is the root", () => {
+    const out = run(null, "src", { tool: "Write", rel: ".mcp.json", content: SERVER });
+    assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    expectSilent(run(null, "src", { tool: "Write", rel: "../.mcp.json", content: SERVER }, "bypassPermissions"));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 
