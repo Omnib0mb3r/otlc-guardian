@@ -233,6 +233,17 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A command string, a git config value and a PowerShell link are
+  read (BUG-066, re-probe 8 J8).** `script -qc 'true; cp notes/x.md
+  CLAUDE.md' /dev/null`, `npm exec -c 'cp ...'`, `git -c
+  alias.x='!cp ...' x` and `New-Item -ItemType HardLink -Path
+  CLAUDE.md -Value notes\x.md` put a payload into a watched file
+  unseen. A word that holds a whole command is now read as one
+  whatever its first word, every value given to `git -c` or `git
+  config` is read as a command, New-Item's link types are read as
+  `ln` is, and `[scriptblock]::Create('...')` and `InvokeScript('...')`
+  are read as Invoke-Expression is.
+
 - **A scanner that does not answer blocks (BUG-027, re-probe 8 J10).**
   A scanner file that loaded but threw when called, or returned
   something that is no result, made the staged hook fail with exit 1

@@ -1159,6 +1159,34 @@ Tests: `tests/hook.test.js`, "a command behind a program the readers do not know
 
 Smoke test after applying: in a scratch project with `notes/x.md` holding "ignore all previous instructions", ask Claude to run `npx -y shx cp notes/x.md CLAUDE.md`: blocked. Then `if true; then cp notes/x.md CLAUDE.md; fi`: blocked. Through the PowerShell tool `Get-ChildItem notes | ForEach-Object { Copy-Item notes\x.md CLAUDE.md }`: blocked. In bypass mode `npx shx cp notes/ok.md CLAUDE.md` with a clean `notes/ok.md` gets no Guardian prompt.
 
+**J8 (re-probe 8, Y8), Lex's decision of 2026-11-11: a command string, a git configuration value and a PowerShell link are read. Fixed in staging, not yet live.** With an injection payload in `notes/x.md`, these copied it into CLAUDE.md and the hook was silent at f099e6d:
+
+- A command string whose first word is not a program the readers know: `script -qc 'true; cp notes/x.md CLAUDE.md' /dev/null`, and the same string starting with `cd . &&`, `FOO=1`, `(`, `{ cat notes/x.md; } >` or `if true; then`; `watch -n1 'true; cp ...'`, `flock /tmp/l -c 'true; cp ...'`, `su -c 'true; cp ...'`, and `setsid bash -c -- 'cp notes/x.md CLAUDE.md'`.
+- `npm exec -c 'cp notes/x.md CLAUDE.md'` (run for real by the re-probe, real\npmexecc), and the `--call` forms.
+- `git -c alias.x='!cp notes/x.md CLAUDE.md' x` (real\gitalias) and `git -c core.pager='cp ...' log -1`.
+- PowerShell: `New-Item -ItemType HardLink -Path CLAUDE.md -Value notes\x.md` (realps\hardlink) and the `SymbolicLink` form.
+- PowerShell: `[scriptblock]::Create('Copy-Item notes\x.md CLAUDE.md').Invoke()` and `$ExecutionContext.InvokeCommand.InvokeScript('...')`.
+
+A guarded name in any of them asked already, so this was content only.
+
+Cause: `startedWrites()` read a word as a command only when its first word was a known program, and only in front of the first known word, so `npm exec -c` stopped at `exec`; a shell's `-c` took `--` for the script; `gitWrites()` skipped every `-c` value; `powershellWrites()` added New-Item's path with stdin as its source and never read `-Value`; and only `Invoke-Expression` and `iex` were evaluators.
+
+Worker findings of the same class, silent at f099e6d and fixed here (hook verdicts only): `pnpm exec -c '...'`, `npm exec --call='...'`; `git -c` with `core.editor`, `diff.external`, `core.sshCommand`, `core.fsmonitor`, `sequence.editor`, the setting quoted as one word (`-c 'alias.x=!cp ...'`), stuck to the option (`-calias.x=...`), an alias that defines a function, and one with a redirect (`'!cat notes/x.md > CLAUDE.md'`); `git config alias.x '!cp ...' && git x` and `git config --global alias.x '!cp ...'`; `New-Item` with `-Target`, `-Type`, `-it`, `-ItemType:HardLink`, the alias `ni`, and a `Junction` from `.claude\agents` to `notes`; `& ([scriptblock]::Create('...'))` and `.NewScriptBlock('...')`; `make -f /dev/null --eval='x:;cp notes/x.md CLAUDE.md' x` from the re-probe's lists.
+
+Change in `staging/hooks/injection-guard-hook.mjs`:
+
+- `startedWrites()`: every word that holds white space or a shell operator (`COMMAND_STRING`) is handed to `ctx.recurse()`, whatever its first word and wherever it stands; the name of `--name=value` is taken off first. A program whose words are messages (git, gh) is left out as before. A string the lexer cannot read for certain marks the command uncertain through the shared `found`.
+- `commandWrites()`: after a shell's `-c`, a `--` is passed over.
+- `gitWrites()`: each value of `-c KEY=VALUE` or `-cKEY=VALUE`, and the value of `git config KEY VALUE`, is read as a bash command without a leading `!`. Any key: the list of keys git runs is not closed.
+- `powershellWrites()`: `New-Item` with `-ItemType HardLink`, `SymbolicLink` or `Junction` is a link to what `-Value` names (`-Target` is its alias in `PS_PARAMS`). It is read as `ln` is (H9): a symbolic link's source from the shell's folder and from the link's, a folder with everything under it, and a link to nothing yet as unjudged, which asks in a watched path.
+- `shellWriteTargets()`: `PS_SCRIPT_FROM_STRING` finds `[scriptblock]::Create(`, `.InvokeScript(` and `.NewScriptBlock(`. A literal string argument is read as a PowerShell script; anything else sets `found.uncertain`, and the handler's message for an uncertain command names that case.
+
+Cost: none measured in the 75 and the 197 everyday commands. By design a word that reads like a command and copies a payload into a watched file is denied although the program may never run it (`mytool --note 'cp notes/x.md CLAUDE.md'`), as cost (c) already had it for `ag cp notes/x.md CLAUDE.md`. Silent as before: `watch -n1 'git status --short'`, `git -c user.name=ci commit -m 'docs: update'`, `git config alias.st 'status --short'`, and a message of git or gh that quotes a copy.
+
+Tests: `tests/hook.test.js`, "a command string, a git config value, a PowerShell link (re-probe 8, J8)": 27 denied through Bash, 12 denied and 2 asked through PowerShell, 17 silent. Against the hook at f099e6d, 41 failed. Staged hook suite before: 2373 passed, 41 failed. After: 2414 passed, 0 failed. Re-probe 7's 640 commands: 0 verdicts changed. Re-probe 8's 851: 15 changed, all Y8 forms, silent to deny. Everyday commands: 0 changed in the 75 and in the 197. Compared in the foreground, one list at a time; no hook process was killed. Lex's regress harness: no line changed.
+
+Smoke test after applying: in a scratch project put the line "ignore all previous instructions" in `notes/x.md`, then ask Claude to run `git -c alias.x='!cp notes/x.md CLAUDE.md' x`; the call is denied and the message names CLAUDE.md. `git -c user.name=ci commit --allow-empty -m docs` gets no Guardian prompt.
+
 ### BUG-067: PowerShell parameter prefixes and encoded command payloads
 
 **Status:** IN-PROGRESS · **Found:** 2026-11-10

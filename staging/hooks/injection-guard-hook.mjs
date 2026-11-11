@@ -3987,6 +3987,15 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
       const literal = /^(['"])(.*)\1$/.exec(callArguments(command, m.index + m[0].length)?.[1] ?? "");
       add(cwd, literal ? literal[2] || "." : ".");
     }
+    // [scriptblock]::Create('...') and $ExecutionContext.InvokeCommand
+    // .InvokeScript('...') make or run a script from a string, as
+    // Invoke-Expression does (re-probe 8, J8). A string that is not
+    // spelled out cannot be read, and the command is then uncertain.
+    for (const m of command.matchAll(PS_SCRIPT_FROM_STRING)) {
+      const literal = /^(['"])([\s\S]*)\1$/.exec(callArguments(command, m.index + m[0].length)?.[0] ?? "");
+      if (literal) recurse(literal[2], cwd, "powershell");
+      else found.uncertain = true;
+    }
   }
 
   let dir = cwd;
@@ -4178,7 +4187,9 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     if (script !== null) recurse(script.text, dir, "powershell");
   } else if (SHELLS.has(name)) {
     const flag = args.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a));
-    if (flag >= 0 && args[flag + 1] !== undefined) recurse(args[flag + 1], dir, "bash");
+    // bash -c -- 'script': "--" ends the options, the script follows it (J8).
+    const script = flag >= 0 ? args[flag + (args[flag + 1] === "--" ? 2 : 1)] : undefined;
+    if (script !== undefined) recurse(script, dir, "bash");
     // With no script file the shell reads its script from stdin.
     else if (operands.length === 0) for (const script of scripts) recurse(script, dir, "bash");
   } else if (name === "eval") {
@@ -4344,7 +4355,7 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
  * cross-env, busybox, winpty, a cmd `if` or `for`), so the words are read
  * again from the first one that names a program the readers do know, as
  * if everything before it were a wrapper: `npx shx cp notes/x.md
- * CLAUDE.md` is read as the copy. A word before it that holds a whole
+ * CLAUDE.md` is read as the copy. Any word that holds a whole
  * command is read as that command (script -qc "cp a b", su -c "cp a b"),
  * except for a program whose words are messages (gh pr create --body).
  * A copy is judged by what it copies, so reading a command that was only
@@ -4359,12 +4370,20 @@ function startedWrites(program, args, dir, ctx, input) {
     return STARTED_PROGRAMS.has(name) || (ctx.dialect === "powershell" && PS_STARTED_PROGRAMS.has(name)) ||
       (ctx.dialect === "cmd" && CMD_STARTED_PROGRAMS.has(name));
   };
-  const at = args.findIndex(known);
-  for (const word of at < 0 ? args : args.slice(0, at)) {
-    if (!Object.hasOwn(MESSAGE_OPTIONS, program) && /\s/.test(word) && known(word.trim().split(/\s+/)[0])) ctx.recurse(word, dir);
+  // A word that holds white space or a shell operator can be a whole
+  // command, whatever its first word is and wherever it stands (script
+  // -qc 'true; cp a b', flock l -c '(cp a b)', npm exec -c 'cp a b';
+  // re-probe 8, J8). The value of --name=value is read without the name.
+  if (!Object.hasOwn(MESSAGE_OPTIONS, program)) {
+    for (const word of args) {
+      if (COMMAND_STRING.test(word)) ctx.recurse(word.replace(/^--?[A-Za-z][\w.-]*=/, ""), dir);
+    }
   }
+  const at = args.findIndex(known);
   return at < 0 ? [] : commandWrites(args.slice(at), dir, ctx, input).out;
 }
+// What tells a command string from a plain argument.
+const COMMAND_STRING = /[\s;&|<>(){}]/;
 
 /**
  * A PowerShell stage's words as the commands they hold: the stage's own,
@@ -4405,13 +4424,25 @@ function patchWrites(patchFile, dir, ctx) {
  * Working-tree paths a git command overwrites or removes: checkout and
  * restore of paths, rm, mv. A branch switch, reset, stash or merge also
  * rewrites files, but which ones is not visible in the command.
+ *
+ * A configuration value can be a command git runs: an alias that starts
+ * with "!", core.pager, core.editor, diff.external, core.sshCommand and
+ * more. Every value given with -c, or set with `git config KEY VALUE`,
+ * is read as a command too (re-probe 8, J8), as a value set in front of
+ * a command is (E2).
  */
 function gitWrites(args, dir, ctx) {
   const add = ctx.add;
   let i = 0;
   let cwd = dir;
+  const readValue = (value) => {
+    const command = (value ?? "").replace(/^!/, "");
+    if (command.trim()) ctx.recurse(command, cwd, "bash");
+  };
   while (i < args.length && args[i].startsWith("-")) {
     if (args[i] === "-C") cwd = path.resolve(cwd, args[i + 1] ?? ".");
+    const setting = args[i] === "-c" ? args[i + 1] : /^-c./.test(args[i]) ? args[i].slice(2) : null;
+    if (setting?.includes("=")) readValue(setting.slice(setting.indexOf("=") + 1));
     i += ["-C", "-c", "--git-dir", "--work-tree"].includes(args[i]) ? 2 : 1;
   }
   const sub = args[i];
@@ -4420,7 +4451,10 @@ function gitWrites(args, dir, ctx) {
   const operands = (list) => list.filter((a, k) => !a.startsWith("-") && !["-s", "--source"].includes(list[k - 1]));
 
   let paths = [];
-  if (sub === "checkout" || sub === "restore") {
+  if (sub === "config") {
+    // git config [options] KEY VALUE
+    readValue(operands(rest)[1]);
+  } else if (sub === "checkout" || sub === "restore") {
     if (dashes >= 0) paths = rest.slice(dashes + 1);
     else if (sub === "restore") paths = operands(rest);
     else {
@@ -4553,7 +4587,7 @@ const PS_PARAMS = {
   "clear-content":     { params: ["path", "literalpath", "filter", "include", "exclude", "force", "credential", "stream", "usetransaction"], aliases: LITERAL_ALIASES },
   "out-file":          { params: ["filepath", "literalpath", "encoding", "append", "force", "noclobber", "width", "nonewline", "inputobject"], aliases: { path: "filepath", ...LITERAL_ALIASES } },
   "tee-object":        { params: ["filepath", "literalpath", "append", "variable", "inputobject", "encoding"], aliases: { path: "filepath", ...LITERAL_ALIASES } },
-  "new-item":          { params: ["path", "name", "itemtype", "value", "force", "credential", "usetransaction"], aliases: { type: "itemtype" } },
+  "new-item":          { params: ["path", "name", "itemtype", "value", "force", "credential", "usetransaction"], aliases: { type: "itemtype", target: "value" } },
   "copy-item":         { params: ["path", "literalpath", "destination", "container", "force", "filter", "include", "exclude", "recurse", "passthru", "credential", "fromsession", "tosession", "usetransaction"], aliases: LITERAL_ALIASES },
   "move-item":         { params: ["path", "literalpath", "destination", "force", "filter", "include", "exclude", "passthru", "credential", "usetransaction"], aliases: LITERAL_ALIASES },
   "remove-item":       { params: ["path", "literalpath", "filter", "include", "exclude", "recurse", "force", "credential", "stream", "usetransaction"], aliases: LITERAL_ALIASES },
@@ -4594,6 +4628,7 @@ function psParam(cmdlet, typed) {
 const PS_DOWNLOADERS = new Set(["invoke-webrequest", "iwr", "invoke-restmethod", "irm", "curl", "wget"]);
 const PS_EVALUATORS  = new Set(["invoke-expression", "iex"]);
 const DOTNET_ZIP_EXTRACT = /\[(?:system\.)?io\.compression\.zipfile(?:extensions)?\]::extracttodirectory\s*\(/gi;
+const PS_SCRIPT_FROM_STRING = /\[(?:system\.management\.automation\.)?scriptblock\]::create\s*\(|\.(?:invokescript|newscriptblock)\s*\(/gi;
 const DOTNET_FILE_WRITE = /\[(?:system\.)?io\.file\]::((?:write|append|create|delete|copy|move|replace)\w*)\s*\(([^)]*)\)/gi;
 
 /**
@@ -4649,7 +4684,29 @@ function powershellWrites(name, args, dir, ctx, stdin) {
     // New-Item -Name puts the item under -Path (the current folder when absent).
     const itemName = (name === "new-item" || name === "ni") ? named.get("name")?.[0] : undefined;
     const paths = psPaths(args, name, ["path", "literalpath", "filepath"], 0);
-    for (const p of itemName ? (paths.length > 0 ? paths : ["."]).map((p) => `${p}/${itemName}`) : paths) add(dir, p, stdin, append);
+    const items = itemName ? (paths.length > 0 ? paths : ["."]).map((p) => `${p}/${itemName}`) : paths;
+    // New-Item -ItemType HardLink, SymbolicLink or Junction makes a link
+    // to what -Value (alias -Target) names, as ln does (re-probe 8, J8;
+    // H9). A symbolic link's relative source is read from the shell's
+    // folder and from the link's; a link to a folder reaches every file
+    // under it; one to nothing yet cannot be judged.
+    const link = (name === "new-item" || name === "ni") ? /^(hardlink|symboliclink|junction)$/i.exec(named.get("itemtype")?.[0] ?? "") : null;
+    if (link) {
+      const symbolic = link[1].toLowerCase() !== "hardlink";
+      for (const dest of items) {
+        const linkFolder = abs(dir, path.posix.dirname(dest.replace(/\\/g, "/")));
+        for (const src of named.get("value") ?? []) {
+          if (symbolic && !ctx.present(abs(dir, src)) && !ctx.present(abs(linkFolder, src))) {
+            add(dir, dest, [`${UNJUDGED}${abs(linkFolder, src)}`]);
+            continue;
+          }
+          for (const from of symbolic ? [src, abs(linkFolder, src)] : [src]) {
+            const folder = Boolean(statSync(abs(dir, from), { throwIfNoEntry: false })?.isDirectory());
+            addCopy(dir, ctx, from, dest, { intoDir: false, recursive: folder, slashMeansContents: false });
+          }
+        }
+      }
+    } else for (const p of items) add(dir, p, stdin, append);
   } else if (PS_COPIERS.has(name)) {
     const sources = psPaths(args, name, ["path", "literalpath"], 0);
     const dest = psPaths(args, name, ["destination"], 1)[0];
@@ -5447,8 +5504,9 @@ process.stdin.on("end", () => {
       record(confirmOrDeny,
         `${TAG} This command names ${safeEchoPath(watched[0], 120)}, which agents load as instructions, and Guardian ` +
         `could not read all of it for certain: a "#" or "<<" inside brackets, a quote inside "\${ }", or a carriage ` +
-        `return or other control character, or in PowerShell a typographic quote, dash or space, can hide ` +
-        `a command from it. Write the command without that form, or approve only if you know what it does.${bypassNote}`);
+        `return or other control character, or in PowerShell a typographic quote, dash or space, or a script made ` +
+        `from a string that is not spelled out, can hide a command from it. Write the command without that form, ` +
+        `or approve only if you know what it does.${bypassNote}`);
     }
 
     // ── Content a shell command copies into a watched file ────────────

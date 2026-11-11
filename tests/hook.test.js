@@ -6499,6 +6499,118 @@ describe("PreToolUse hook - a scanner that does not answer blocks, and the hook 
 });
 
 // ---------------------------------------------------------------------------
+// RE-PROBE 8, J8 (staged): content copies that were not read. A command
+// string was read only when its first word was a program the readers
+// know; `npm exec -c` and a git configuration value were not read at all;
+// New-Item made a link whose source was not looked at; and a script made
+// from a string was no evaluator. The payload is in notes/x.md, so each
+// of these is denied in every mode; the same with a clean source is
+// silent.
+
+describe("PreToolUse hook - a command string, a git config value, a PowerShell link (re-probe 8, J8)", () => {
+  for (const command of [
+    // A command string whose first word is not a program the readers know.
+    "script -qc 'true; cp notes/x.md CLAUDE.md' /dev/null",
+    "script -qc 'cd . && cp notes/x.md CLAUDE.md' /dev/null",
+    "script -qc 'FOO=1 cp notes/x.md CLAUDE.md' /dev/null",
+    "script -qc '(cp notes/x.md CLAUDE.md)' /dev/null",
+    "script -qc '{ cat notes/x.md; } > CLAUDE.md' /dev/null",
+    "script -qc 'if true; then cp notes/x.md CLAUDE.md; fi' /dev/null",
+    "watch -n1 'true; cp notes/x.md CLAUDE.md'",
+    "flock /tmp/l -c 'true; cp notes/x.md CLAUDE.md'",
+    "su -c 'true; cp notes/x.md CLAUDE.md'",
+    "setsid bash -c -- 'cp notes/x.md CLAUDE.md'",
+    // npm exec with a command string.
+    "npm exec -c 'cp notes/x.md CLAUDE.md'",
+    "npm exec --call 'cp notes/x.md CLAUDE.md'",
+    "npm exec --call='cp notes/x.md CLAUDE.md'",
+    "pnpm exec -c 'cp notes/x.md CLAUDE.md'",
+    // A git configuration value that git runs.
+    "git -c alias.x='!cp notes/x.md CLAUDE.md' x",
+    "git -c core.pager='cp notes/x.md CLAUDE.md' log -1",
+    "git -c core.editor='cp notes/x.md CLAUDE.md' commit",
+    "git -c diff.external='cp notes/x.md CLAUDE.md' diff",
+    "git -c core.sshCommand='cp notes/x.md CLAUDE.md' fetch",
+    "git -c 'alias.x=!cp notes/x.md CLAUDE.md' x",
+    "git -calias.x='!cp notes/x.md CLAUDE.md' x",
+    "git -c core.fsmonitor='cp notes/x.md CLAUDE.md' status",
+    "git -c sequence.editor='cp notes/x.md CLAUDE.md' rebase -i HEAD~1",
+    "git -c alias.x='!f() { cp notes/x.md CLAUDE.md; }; f' x",
+    "git -c alias.x='!cat notes/x.md > CLAUDE.md' x",
+    "git config alias.x '!cp notes/x.md CLAUDE.md' && git x",
+    "git config --global alias.x '!cp notes/x.md CLAUDE.md'",
+  ]) {
+    stagedOnly(`denies: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "deny", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // New-Item makes a link to what -Value or -Target names.
+    "New-Item -ItemType HardLink -Path CLAUDE.md -Value notes\\x.md",
+    "New-Item -ItemType SymbolicLink -Path CLAUDE.md -Value notes\\x.md",
+    "New-Item -ItemType SymbolicLink -Path CLAUDE.md -Target notes\\x.md",
+    "New-Item -ItemType Junction -Path .claude\\agents -Target notes",
+    "New-Item -Type HardLink CLAUDE.md -Value notes\\x.md",
+    "ni -ItemType HardLink -Path CLAUDE.md -Value notes\\x.md",
+    "New-Item -ItemType:HardLink -Path CLAUDE.md -Value notes\\x.md",
+    "New-Item -it hardlink -Path CLAUDE.md -Value notes\\x.md",
+    // A script made from a string.
+    "[scriptblock]::Create('Copy-Item notes\\x.md CLAUDE.md').Invoke()",
+    "$ExecutionContext.InvokeCommand.InvokeScript('Copy-Item notes\\x.md CLAUDE.md')",
+    "& ([scriptblock]::Create('Copy-Item notes\\x.md CLAUDE.md'))",
+    "$ExecutionContext.InvokeCommand.NewScriptBlock('Copy-Item notes\\x.md CLAUDE.md').Invoke()",
+  ]) {
+    stagedOnly(`denies (PowerShell): ${command}`, () => {
+      const out = runGuarded(command, { tool: "PowerShell" });
+      assert.equal(decisionOf(out), "deny", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // A link to nothing yet, and a script from a string the text does
+    // not spell out, cannot be judged.
+    "New-Item -ItemType SymbolicLink -Path CLAUDE.md -Value missing.md",
+    "$ExecutionContext.InvokeCommand.InvokeScript($s); Get-Content CLAUDE.md",
+  ]) {
+    stagedOnly(`asks (PowerShell): ${command}`, () => {
+      const out = runGuarded(command, { tool: "PowerShell" });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const [command, tool] of [
+    // The same forms with a clean source.
+    ["script -qc 'true; cp notes/ok.md CLAUDE.md' /dev/null"],
+    ["npm exec -c 'cp notes/ok.md CLAUDE.md'"],
+    ["git -c alias.x='!cp notes/ok.md CLAUDE.md' x"],
+    ["New-Item -ItemType HardLink -Path CLAUDE.md -Value notes\\ok.md", "PowerShell"],
+    // New-Item of a file or a folder is no link.
+    ["New-Item -ItemType File -Path CLAUDE.md -Value 'clean text'", "PowerShell"],
+    ["New-Item -ItemType Directory -Path docs\\new", "PowerShell"],
+    ["New-Item -ItemType SymbolicLink -Path docs\\link.md -Value notes\\x.md", "PowerShell"],
+    // A string that is a command and copies nothing into a watched file.
+    ["watch -n1 'git status --short'"],
+    ["watch -n1 'cat notes/x.md'"],
+    ["mytool --desc 'copy notes to the docs folder'"],
+    // Configuration values that are no command, or copy nothing.
+    ["git -c user.name=ci commit -m 'docs: update'"],
+    ["git -c core.pager=cat log -1"],
+    ["git config alias.st 'status --short'"],
+    ["git config user.name 'Jane Doe'"],
+    // A message is not a command string.
+    ["gh pr create --title 'copy notes' --body 'cp notes/x.md CLAUDE.md is what the bug did'"],
+    ["git commit -m 'fix: cp notes/x.md CLAUDE.md no longer runs'"],
+    ["echo 'true; cp notes/x.md CLAUDE.md'"],
+  ]) {
+    stagedOnly(`silent${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions", tool }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 
