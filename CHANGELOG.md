@@ -233,6 +233,15 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A carriage return no longer hides the rest of a command (BUG-085,
+  re-probe 6 G1).** The reader took a CR for white space, so
+  `true\r#; rm -rf .claude/hooks` looked like `true` and a comment; bash
+  reads `true\r#` as one word and runs the `rm`. PowerShell ends a
+  comment at a lone CR, the reader did not. A command that holds a CR or
+  any control character other than tab and newline is now not read for
+  certain: it is never read-only, no word in it is blanked, and it asks
+  when it names a guarded or a watched path.
+
 - **A folder above the project asks (BUG-075, F3b).** A program the
   readers do not parse could be handed a folder that holds the whole
   project without naming one of Guardian's files: `npx rimraf ..` at the

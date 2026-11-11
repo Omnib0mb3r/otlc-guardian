@@ -1913,6 +1913,9 @@ const DIALECTS = {
   cmd:        { esc: "^",  quotedEsc: null,       single: false, subs: false, backticks: false, comments: false, ansiC: false, blockComments: false },
 };
 
+// Every C0 control character and DEL, except tab and newline.
+const CONTROL_CHARACTER = /[\x00-\x08\x0B-\x1F\x7F]/;
+
 /**
  * Splits a command into words and operators.
  *
@@ -1925,7 +1928,12 @@ const DIALECTS = {
  *     what is left out there is marked: `uncertain` is true, and no
  *     caller may then take the command for one that only reads. The same
  *     mark is set when a double-quoted string ends inside ${ }, where the
- *     shell may read the quotes differently.
+ *     shell may read the quotes differently;
+ *   - a control character other than tab and newline splits the text
+ *     differently in each shell (re-probe 6, G1): to bash a carriage
+ *     return is part of a word, so `true\r#; rm x` holds no comment, and
+ *     PowerShell ends a line and a comment at a lone one. No dialect is
+ *     taught each of them; a command that holds one is `uncertain`.
  *
  * @param {"bash"|"powershell"|"cmd"} dialect - see DIALECTS
  * @returns {{ tokens: Array<{word: string, start: number, end: number}|{op: string, start: number, end: number}>, subs: string[], heredocs: Array<{text: string, start: number, end: number, expands: boolean}>, comments: Array<[number, number]>, uncertain: boolean }}
@@ -1953,7 +1961,7 @@ function lexShell(text, dialect = "bash") {
   let braces = 0;
   let brackets = 0;
   let parens = 0;
-  let uncertain = false;
+  let uncertain = CONTROL_CHARACTER.test(text);
   const nested = () => braces > 0 || brackets > 0 || parens > 0;
 
   const flush = () => {
@@ -3376,7 +3384,8 @@ process.stdin.on("end", () => {
     if (shellRead.uncertain) {
       record(confirmOrDeny,
         `${TAG} This command names ${safeEchoPath(watched[0], 120)}, which agents load as instructions, and Guardian ` +
-        `could not read all of it for certain: a "#" or "<<" inside brackets, or a quote inside "\${ }", can hide ` +
+        `could not read all of it for certain: a "#" or "<<" inside brackets, a quote inside "\${ }", or a carriage ` +
+        `return or other control character can hide ` +
         `a command from it. Write the command without that form, or approve only if you know what it does.${bypassNote}`);
     }
 
