@@ -233,6 +233,17 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **The bare word `security` is judged by what it is (BUG-080, F1b).**
+  After F1 the word asked at a project root wherever it stood, and an ask
+  is a deny in bypass mode: `echo "## Security notes" >> README.md`,
+  `gh pr create --title "security fixes"`, `git tag -m "security
+  release"`, a comment, `npm run security`, and Claude Code's own
+  heredoc commit message. The value of a message or title option of git
+  and gh, a shell comment, the script name of `npm run`, and what a
+  read-only command sends to a file that is neither Guardian's nor
+  watched are now text, not a path. `npx rimraf security` and every
+  other form that hands the word to a program still ask.
+
 - **Text the shell runs is never dropped as a comment or a heredoc body
   (BUG-085).** The command reader leaves comments and heredoc bodies out,
   and where bash read the text differently a command behind it was never

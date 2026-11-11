@@ -1240,6 +1240,23 @@ Limit that stays: a path with a space that is not inside one shell word or one q
 
 Smoke test after applying (Windows, Git Bash): in a scratch project ask Claude to run `npx rimraf /c/<path to the project>/.claude/hooks` and `npx rimraf x@/../security` (a Guardian prompt each; decline).
 
+**F1b, Lex ruling on the F1 cost (2026-11-10): the word is judged by what it is. Fixed in staging (2026-11-11), not yet live.** The false asks measured after F1 are denies in bypass mode, so they stop unattended workers on ordinary work. Reproduced first, each denied in bypass mode at a project root: `echo "## Security notes" >> README.md`, `gh pr create --title "security fixes"`, `git tag -a v1 -m "security release"`, `rm -rf build # not security`, `npm run security`, `python -c "print('security')"`. Found while reproducing, the same cause and far more common: Claude Code's own commit form, `git commit -m "$(cat <<'EOF'`, a message that says security, `EOF`, `)"`, and a file written with `cat > docs/notes.md <<EOF`.
+
+Change in `staging/hooks/injection-guard-hook.mjs`, all in what `bareWordText()` blanks before the bare word is looked for; the path reading of a name is unchanged, so `./security`, `security/` and every other guarded name ask as before:
+
+- (a) `messageSpans()` replaces `commitMessageSpans()`: the value of `-m`, `--message`, `-F`, `--file` of `git commit`, `tag`, `merge`, `stash` and `notes`, and of `--title`, `--body`, `--notes`, `--subject`, `--comment`, `-t`, `-b`, `-n`, `-c` of `gh pr`, `issue` and `release` (`MESSAGE_OPTIONS`). A value that holds a substitution is blanked only when every substitution in it only reads, so the heredoc commit form is silent and `git commit -m "$(npx rimraf security)"` asks.
+- (b) `lexShell()` returns the place of each comment and `bareWordText()` blanks it. After BUG-085 a comment the reader is not sure of marks the command uncertain, and nothing is blanked in an uncertain command.
+- (c) `onlyReads()` takes a `plainSink` test from `bareWordText()`: a stage that only reads still reads when it redirects to a file that is spelled out (no variable, substitution or glob), resolves outside `.claude` and `security` from every folder the command can be in, is not on the watch list, and is not named again in the command. The body of a heredoc fed to a reading stage is blanked with it unless the shell expands something in it (an unquoted delimiter and a `$` or a backtick in the body). The verdict test at the end of the main handler still uses the strict `onlyReads()`.
+- (d) `scriptNameSpans()`: the word after `run` or `run-script` of `npm`, `pnpm`, `yarn` and `bun`. Words after it stay.
+
+Not changed: `python -c "print('security')"` asks. Inline code keeps counting by Lex's ruling on pushback 3416e597, and none of (a) to (d) covers it.
+
+Tests: `tests/hook.test.js`, "the bare word security as text, not a file (F1b)": 27 commands silent in bypass mode (the five measured ones and 22 more under (a) to (d), two through the PowerShell tool) and 18 that must keep asking (a message or script name that runs something, words after the value, `--body-file`, `gh alias set`, a comment before or after a real delete, a redirect into `security/`, into `CLAUDE.md`, into `$OUT`, into a script that is then run, a heredoc with a substitution, a heredoc piped on or fed to `bash`). `npm run security` moved from the F1 group's asks to the silent list by the ruling. Before the fix: 945 passed, 26 failed (every silent test but the PowerShell commit, which the F1 code already passed). After: 971 passed, 0 failed. All 27 V1 commands and the other F1 asks hold unchanged. Lex's regress harness (123 lines): no line changed.
+
+Limit that stays, for Lex to confirm: a command string sent to a file by a reading command and run by a later command of the session, or run from the same command without naming the file again (`echo 'rm -rf security' > x.sh; sh *.sh`), is not seen. The Write tool has always allowed the same, and SECURITY.md lists a script file under "Not seen".
+
+Scope of (b), confirmed by Lex (2026-11-11): the comment is blanked for the bare word only. A guarded path spelled out in a comment (`rm -rf build # see .claude/hooks`) still asks, because the path reading runs over the whole command text and stays the backstop for anything the reader misplaces.
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

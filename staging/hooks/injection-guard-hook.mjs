@@ -1227,8 +1227,9 @@ const GUARDED_NAME_PATTERNS = GUARDED_NAMES.map((name) => {
 // A guarded folder whose name is also an English word ("security"). With
 // a separator it is a path and is resolved like any other. As a bare word
 // it counts where it can reach a program (re-probe 5, F1): everywhere
-// except the places bareWordText() blanks, which are a pipeline that only
-// reads, a test runner's stage and a git commit message.
+// except the places bareWordText() blanks, where it is text and not a
+// file: a pipeline that only reads, a test runner's stage, a message, a
+// script name and a comment (F1b).
 const WORD_FOLDERS = GUARDED_NAMES.filter((n) => !n.includes("/") && !n.startsWith("."));
 const WORD_FOLDER_PATTERNS = GUARDED_NAME_PATTERNS.filter(({ name }) => WORD_FOLDERS.includes(name));
 
@@ -1444,24 +1445,50 @@ function isTestRun(words) {
   return false;
 }
 
+// Options whose value is text for people to read, never a path the
+// program acts on (F1b): the message of git commit, tag, merge, stash and
+// notes (-m, --message; -F and --file name a file that is only read), and
+// the title, body, notes, subject and comment of gh pr, issue and release.
+const MESSAGE_OPTIONS = {
+  git: { commands: new Set(["commit", "tag", "merge", "stash", "notes"]), long: /^--(?:message|file)$/, short: /^-[a-zA-Z]*[mF]$/ },
+  gh:  { commands: new Set(["pr", "issue", "release"]), long: /^--(?:title|body|notes|subject|comment)$/, short: /^-[tbnc]$/ },
+};
+
 /**
- * The places in a `git commit` stage that hold its message: the value of
- * -m, --message, -F and --file (also at the end of a short cluster, -am).
+ * The places in a stage that hold a message: the value of an option of
+ * MESSAGE_OPTIONS, given after it or after "=" (also at the end of a
+ * short cluster, git commit -am).
  * @param {Array<{word: string, start: number, end: number}>} stage
  * @returns {Array<[number, number]>}
  */
-function commitMessageSpans(stage) {
-  if (commandName(stage[0].word) !== "git" || stage[1]?.word !== "commit") return [];
+function messageSpans(stage) {
+  const options = MESSAGE_OPTIONS[commandName(stage[0].word)];
+  if (!options || !options.commands.has(stage[1]?.word)) return [];
   const spans = [];
   for (let k = 2; k < stage.length; k++) {
     const { word, start, end } = stage[k];
-    if (/^--(?:message|file)=/.test(word)) spans.push([start, end]);
-    else if (/^(?:--message|--file|-[a-zA-Z]*[mF])$/.test(word) && stage[k + 1]) {
+    const eq = word.indexOf("=");
+    if (eq > 0 && options.long.test(word.slice(0, eq))) spans.push([start, end]);
+    else if ((options.long.test(word) || options.short.test(word)) && stage[k + 1]) {
       spans.push([stage[k + 1].start, stage[k + 1].end]);
       k++;
     }
   }
   return spans;
+}
+
+/**
+ * The place of the script name in `npm run NAME` (also pnpm, yarn and
+ * bun, and run-script): the name of an entry in package.json, not a path
+ * (F1b). Words after it are handed to the script and stay.
+ * @param {Array<{word: string, start: number, end: number}>} stage
+ * @returns {Array<[number, number]>}
+ */
+function scriptNameSpans(stage) {
+  if (!PACKAGE_MANAGERS.has(commandName(stage[0].word))) return [];
+  const plain = stage.slice(1).filter((tok) => !tok.word.startsWith("-"));
+  if (!/^run(?:-script)?$/.test(plain[0]?.word ?? "") || !plain[1]) return [];
+  return [[plain[1].start, plain[1].end]];
 }
 
 /**
@@ -1472,41 +1499,74 @@ function commitMessageSpans(stage) {
  *     docs; npm audit | grep -i security). A later stage that does
  *     anything else may be handed the word (echo security | xargs rm -rf);
  *   - a test runner's stage (isTestRun()), unless it holds a substitution;
- *   - the message of a git commit.
- * Everything else stays, heredoc bodies and command strings included: a
- * function body, a trap, a git config value and inline code all run.
+ *   - a message (messageSpans()) and the script name of `npm run`
+ *     (scriptNameSpans()), unless a substitution in it does more than read;
+ *   - a comment.
+ * A stage that only reads may send what it says to a file (F1b): `echo "##
+ * Security" >> README.md` reads, when `plainSink` passes the file and the
+ * command does not name it again, which is how it could run it (`echo 'rm
+ * -rf security' > x.sh && sh x.sh`). The body of a heredoc fed to such a
+ * stage is what it says too, unless the shell expands something in it.
+ * Everything else stays, command strings included: a function body, a
+ * trap, a git config value, inline code and a heredoc fed to anything
+ * that does not only read all run.
+ *
+ * @param {((word: string) => boolean)|null} plainSink - whether a redirect
+ *   target, as spelled, is a file that is neither Guardian's nor watched
  */
-function bareWordText(text, dialect) {
-  const blank = [];
+function bareWordText(text, dialect, plainSink = null) {
+  const { tokens, heredocs, comments, uncertain } = lexShell(text, dialect);
+  if (uncertain) return text;
+  const blank = [...comments];
+  const namedOnce = (file) => {
+    const base = file.replace(/\\/g, "/").split("/").pop();
+    return base !== "" && tokens.filter((tok) => tok.word?.includes(base)).length === 1;
+  };
+  const sink = plainSink && ((word) => namedOnce(word) && plainSink(word));
+  const inert = (body) => !body.expands || !/[$`]/.test(body.text);
+  /** Whether every substitution in a place of the text only reads. */
+  const substitutionsRead = ([a, b]) => {
+    const inner = lexShell(text.slice(a, b), dialect);
+    return !inner.uncertain && inner.subs.every((sub) => onlyReads(sub, dialect));
+  };
   let pipeline = [];
   let stage = [];
+  let fed = []; // the heredocs of this pipeline: [{ at, body }]
+  let heredocsSeen = 0;
   const endStage = () => {
     if (stage.length > 0) pipeline.push(stage);
     stage = [];
   };
   const endPipeline = () => {
     endStage();
+    const bodies = fed;
+    fed = [];
     if (pipeline.length === 0) return;
     const to = pipeline[pipeline.length - 1].at(-1).end;
     // The first stage from which the rest of the pipeline only reads.
     const moves = (s) => DIRECTORY_MOVERS.has(commandName(s[0].word));
     let reading = pipeline.length;
-    while (reading > 0 && !moves(pipeline[reading - 1]) && onlyReads(text.slice(pipeline[reading - 1][0].start, to), dialect)) reading--;
-    if (reading < pipeline.length) blank.push([pipeline[reading][0].start, to]);
+    while (reading > 0 && !moves(pipeline[reading - 1]) && onlyReads(text.slice(pipeline[reading - 1][0].start, to), dialect, 0, sink)) reading--;
+    if (reading < pipeline.length) {
+      const from = pipeline[reading][0].start;
+      blank.push([from, to]);
+      for (const { at, body } of bodies) if (at >= from && inert(body)) blank.push([body.start, body.end]);
+    }
     for (const s of pipeline.slice(0, reading)) {
-      const [a, b] = [s[0].start, s.at(-1).end];
-      if (lexShell(text.slice(a, b), dialect).subs.length > 0) continue;
-      if (isTestRun(s.map((tok) => tok.word))) blank.push([a, b]);
-      else blank.push(...commitMessageSpans(s));
+      const whole = [s[0].start, s.at(-1).end];
+      if (isTestRun(s.map((tok) => tok.word)) && lexShell(text.slice(...whole), dialect).subs.length === 0) blank.push(whole);
+      else blank.push(...[...messageSpans(s), ...scriptNameSpans(s)].filter(substitutionsRead));
     }
     pipeline = [];
   };
-  const { tokens, uncertain } = lexShell(text, dialect);
-  if (uncertain) return text;
   for (const tok of tokens) {
     if (tok.word !== undefined) stage.push(tok);
     else if (PIPE_OPERATORS.has(tok.op)) endStage();
     else if (CONTROL_OPERATORS.has(tok.op)) endPipeline();
+    else if (tok.op === "<<" || tok.op === "<<-") {
+      const body = heredocs[heredocsSeen++];
+      if (body) fed.push({ at: tok.start, body });
+    }
   }
   endPipeline();
   let out = text;
@@ -1541,9 +1601,12 @@ function bareWordText(text, dialect) {
  * @param {string[]} texts - the command and any scripts it carries encoded
  * @param {string} cwd - the session's working directory
  * @param {string} root - the project root
+ * @param {(absPath: string) => boolean} watches - whether a file is one
+ *   agents load as instructions (the watch list)
  */
-function guardedNameIn(texts, dialect, cwd, root) {
+function guardedNameIn(texts, dialect, cwd, root, watches = () => false) {
   const guardedKey = new Map(GUARDED_NAMES.map((name) => [name, watchKey(path.join(root, name))]));
+  const guardedFolders = [".claude", ...WORD_FOLDERS].map((name) => guardedKey.get(name));
   // For globs, which are matched as text: the path as the command would spell it.
   const guardedAbs = GUARDED_NAMES.map((name) => ({ name, abs: path.join(root, name).replace(/\\/g, "/").toLowerCase() }));
   for (const text of texts) {
@@ -1596,7 +1659,14 @@ function guardedNameIn(texts, dialect, cwd, root) {
     // The bare word, wherever a program could act on it: an argument
     // (npx rimraf security), a command string (trap 'rm -rf security'
     // EXIT), a literal in inline code (rmSync('security')).
-    for (const view of nameViews(bareWordText(text, dialect))) {
+    // A redirect target that is spelled out, from every folder the
+    // command can be in, and is neither in Guardian's folders nor watched.
+    const plainSink = (word) => certain && !/[$`*?[\]{}]/.test(word) && bases.every((base) => {
+      const file = path.resolve(base, drivePath(word.replace(/^~(?=$|\/)/, os.homedir())));
+      const key = watchKey(file);
+      return !guardedFolders.some((folder) => key === folder || key.startsWith(`${folder}/`)) && !watches(file);
+    });
+    for (const view of nameViews(bareWordText(text, dialect, plainSink))) {
       for (const { name, re } of WORD_FOLDER_PATTERNS) {
         for (const m of view.matchAll(re)) {
           const bare = view[m.index - 1] !== "/" && view[m.index + m[0].length] !== "/";
@@ -1642,8 +1712,11 @@ function findOnlyReads(args, dialect, depth) {
  * Whether every stage of a command is a known read-only command with no
  * redirect to a file. A command the reader left text out of without being
  * sure the shell does too (lexShell(), `uncertain`) is not known to.
+ *
+ * @param {((word: string) => boolean)|null} plainSink - redirect targets
+ *   that still count as reading, for bareWordText(); none by default
  */
-function onlyReads(command, dialect, depth = 0) {
+function onlyReads(command, dialect, depth = 0, plainSink = null) {
   if (depth > MAX_SHELL_DEPTH) return false;
   const { tokens, subs, uncertain } = lexShell(command, dialect);
   if (uncertain || !subs.every((s) => onlyReads(s, dialect, depth + 1))) return false;
@@ -1685,7 +1758,8 @@ function onlyReads(command, dialect, depth = 0) {
       if (!stageReads()) return false;
     } else if (WRITE_REDIRECTS.has(tok.op)) {
       const next = tokens[i + 1]?.word;
-      const sink = next !== undefined && (NULL_SINK.test(next) || (tok.op === ">&" && /^\d+$/.test(next)));
+      const sink = next !== undefined &&
+        (NULL_SINK.test(next) || (tok.op === ">&" && /^\d+$/.test(next)) || (plainSink !== null && plainSink(next)));
       if (!sink) return false;
       i++;
     } else if (READ_REDIRECTS.has(tok.op) && tokens[i + 1]?.word !== undefined) i++;
@@ -1750,10 +1824,12 @@ const DIALECTS = {
  *     shell may read the quotes differently.
  *
  * @param {"bash"|"powershell"|"cmd"} dialect - see DIALECTS
- * @returns {{ tokens: Array<{word: string, start: number, end: number}|{op: string, start: number, end: number}>, subs: string[], heredocs: string[], uncertain: boolean }}
+ * @returns {{ tokens: Array<{word: string, start: number, end: number}|{op: string, start: number, end: number}>, subs: string[], heredocs: Array<{text: string, start: number, end: number, expands: boolean}>, comments: Array<[number, number]>, uncertain: boolean }}
  *   start and end are the token's place in the text; subs is the text of
  *   each $( ) and backtick substitution, for recursion; heredocs is the
- *   body of each heredoc, in the order of their << operators
+ *   body of each heredoc, in the order of their << operators, with its
+ *   place in the text and whether the shell expands it; comments is the
+ *   place of each comment
  */
 function lexShell(text, dialect = "bash") {
   const d = DIALECTS[dialect] ?? DIALECTS.bash;
@@ -1762,6 +1838,7 @@ function lexShell(text, dialect = "bash") {
   const subs = [];
   const heredocs = [];
   const bodies = [];
+  const comments = [];
   let word = null;
   let wordStart = 0; // where the current word's raw text starts
   let expectDelimiter = null;
@@ -1852,6 +1929,7 @@ function lexShell(text, dialect = "bash") {
     } else if (d.blockComments && text.startsWith("<#", i)) {
       if (word === null) {
         const end = text.indexOf("#>", i + 2);
+        comments.push([i, end < 0 ? text.length : end + 2]);
         i = end < 0 ? text.length : end + 2;
       } else {
         word += "<#";
@@ -1859,7 +1937,9 @@ function lexShell(text, dialect = "bash") {
       }
     } else if (d.comments && ch === "#" && word === null) {
       if (nested()) uncertain = true;
+      const start = i;
       while (i < text.length && text[i] !== "\n") i++;
+      comments.push([start, i]);
     } else if (ch === " " || ch === "\t" || ch === "\r") {
       flush();
       i++;
@@ -1891,22 +1971,25 @@ function lexShell(text, dialect = "bash") {
         // that program's script (re-probe 5, F5).
         for (const { delimiter, strip, expands } of heredocs.splice(0)) {
           const lines = [];
+          const start = i;
+          let end = i;
           for (;;) {
             const eol = text.indexOf("\n", i);
             const line = text.slice(i, eol < 0 ? text.length : eol);
             i = eol < 0 ? text.length : eol + 1;
             if ((strip ? line.replace(/^\t+/, "") : line) === delimiter) break;
             lines.push(line);
+            end = eol < 0 ? text.length : eol;
             if (eol < 0) break;
           }
-          bodies.push(lines.join("\n"));
-          if (expands && d.subs) expansions(bodies.at(-1));
+          bodies.push({ text: lines.join("\n"), start, end, expands });
+          if (expands && d.subs) expansions(bodies.at(-1).text);
         }
       }
     }
   }
   flush();
-  return { tokens, subs, heredocs: bodies, uncertain };
+  return { tokens, subs, heredocs: bodies, comments, uncertain };
 }
 
 /** Path-like words in text the hook cannot parse (inline interpreter code). */
@@ -2032,7 +2115,7 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
       i++;
       if (WRITE_REDIRECTS.has(tok.op)) writes.push({ word: next.word, append: tok.op === ">>" || tok.op === "&>>" });
       if (tok.op === "<" || tok.op === "<>") reads.push(next.word);
-      if (tok.op === "<<" || tok.op === "<<-") scripts.push(heredocs[heredocsSeen++] ?? "");
+      if (tok.op === "<<" || tok.op === "<<-") scripts.push(heredocs[heredocsSeen++]?.text ?? "");
       if (tok.op === "<<<") scripts.push(next.word);
     }
   }
@@ -3153,7 +3236,8 @@ process.stdin.on("end", () => {
     // A shell command that names one of those files, or a folder holding
     // one, in any spelling, and is not known to only read (re-probe 3, D1).
     if (write.kind === "bash" && selfProtected.size === 0) {
-      const named = guardedNameIn([write.content, ...shellRead.decoded], write.dialect, sessionCwd, projectRoot);
+      const named = guardedNameIn([write.content, ...shellRead.decoded], write.dialect, sessionCwd, projectRoot,
+        (file) => isWatchedPath(file, settings));
       if (named && !onlyReads(write.content, write.dialect)) {
         record(confirmOrDeny,
           `${TAG} This command names ${safeEchoPath(named, 60)}, part of Guardian's own enforcement or settings, ` +

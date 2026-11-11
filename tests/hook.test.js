@@ -3100,7 +3100,6 @@ describe("PreToolUse hook - the bare word security counts where it reaches Guard
     "pytest -k security; npx rimraf security",
     "grep -l security docs/a.md | xargs rm -f",
     "npx rimraf security | cat",
-    "npm run security",
   ]) {
     stagedOnly(`asks: ${command}`, () => {
       const out = run(command);
@@ -3519,6 +3518,100 @@ describe("PreToolUse hook - text the shell runs is never dropped as a comment or
   ]) {
     stagedOnly(`silent: ${label}`, () => {
       expectSilent(run(command, { mode: "bypassPermissions", tool }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// F1b (BUG-080): the bare word security where it is text, not a file
+// ---------------------------------------------------------------------------
+//
+// After F1 the word asked at a project root in a message, a title, a
+// comment, a script name and in text sent to an ordinary file, and an ask
+// is a deny in bypass mode. Lex's ruling: judge each word by what it is.
+// The value of a message or title option is data; a shell comment is not
+// part of the command; a read-only command whose only write is a redirect
+// to a file that is neither Guardian's nor watched reads; the argument of
+// `npm run` is a script name. Every V1 command above still asks.
+
+describe("PreToolUse hook - the bare word security as text, not a file (F1b)", () => {
+  const run = (command, { mode, tool = "Bash" } = {}) => withTempProject((dir) => {
+    for (const rel of [".claude/settings.json", "security/01-injection-guard.js", "src/a.js", "docs/a.md", "README.md", "CLAUDE.md"]) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), rel.endsWith(".json") ? "{}" : "x\n");
+    }
+    return runHook(PRE_HOOK, { tool_name: tool, cwd: dir, tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) },
+      { CLAUDE_PROJECT_DIR: dir });
+  });
+
+  for (const [command, tool] of [
+    // The five measured false asks.
+    ["echo \"## Security notes\" >> README.md"],
+    ["gh pr create --title \"security fixes\""],
+    ["git tag -a v1 -m \"security release\""],
+    ["rm -rf build # not security"],
+    ["npm run security"],
+    // (a) the value of a message or title option
+    ["gh issue create --title \"security\" --body \"security review\""],
+    ["gh pr merge 5 --subject security -b \"security\""],
+    ["gh release create v1 -t security -n \"security notes\""],
+    ["git stash push -m \"security wip\""],
+    ["git merge -m \"security branch\" feature"],
+    ["git notes add -m security"],
+    ["git tag --message=security v1"],
+    ["git commit -m \"$(cat <<'EOF'\nFix security issue\n\nDetails.\nEOF\n)\""],
+    ["git commit -m \"security\"", "PowerShell"],
+    // (b) a comment
+    ["# check security\nnpm run build"],
+    ["npm run build # then security"],
+    ["npm run build # then security", "PowerShell"],
+    // (c) a read-only command that writes an ordinary file
+    ["echo security > notes.txt"],
+    ["printf '%s\\n' security >> docs/a.md"],
+    ["cat > docs/notes.md <<EOF\n# Security\nnotes\nEOF"],
+    ["cat <<'EOF' > docs/notes.md\n$security `x`\nEOF"],
+    ["cat docs/a.md | grep -i security > out.txt; npm run build"],
+    // (d) a script name
+    ["yarn run security"],
+    ["pnpm run security"],
+    ["bun run security"],
+    ["npm run-script security"],
+    ["npm run security -- --fix"],
+  ]) {
+    stagedOnly(`silent${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      expectSilent(run(command, { mode: "bypassPermissions", tool }));
+    });
+  }
+
+  for (const command of [
+    // Inline code keeps counting (Lex's ruling on pushback 3416e597).
+    "python -c \"print('security')\"",
+    // A message or a script name that runs something.
+    "git commit -m \"$(npx rimraf security)\"",
+    "git commit -m \"$(cat <<EOF\n$(npx rimraf security)\nEOF\n)\"",
+    "npm run $(npx rimraf security)",
+    // Words after the value, and other options, are not the message.
+    "git tag -m wip security",
+    "npm run clean -- security",
+    "gh pr create --title x --body-file security",
+    "gh alias set x '!rm -rf security'",
+    // A comment hides nothing before it or on the next line.
+    "npx rimraf security # security",
+    "rm -rf build # old\nnpx rimraf security",
+    // The file written is Guardian's, watched, not spelled out, or used again.
+    "echo security > security/x",
+    "echo security >> CLAUDE.md",
+    "echo security > $OUT",
+    "echo \"rm -rf security\" > x.sh && sh x.sh",
+    "echo security >> README.md; xargs rm -rf < README.md",
+    // A heredoc the shell expands, or that feeds more than a reader.
+    "cat > x.txt <<EOF\n$(npx rimraf security)\nEOF",
+    "cat <<EOF | xargs rm -rf\nsecurity\nEOF",
+    "bash <<EOF\nnpx rimraf security\nEOF",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = run(command);
+      assert.equal(decisionOf(out), "ask", `${JSON.stringify(command)} -> ${out.slice(0, 200) || "(silent)"}`);
     });
   }
 });
