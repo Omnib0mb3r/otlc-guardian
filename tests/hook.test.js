@@ -4973,6 +4973,73 @@ describe("PreToolUse hook - a program the command can have replaced earns no exe
   }
 });
 
+describe("PreToolUse hook - a typographic quote, dash or space in PowerShell (re-probe 7, H7)", () => {
+  // The characters are built from their code points, so this file holds none of them.
+  const ch = (code) => String.fromCharCode(code);
+  const [LEFT, RIGHT, LOW, HIGH] = [0x2018, 0x2019, 0x201a, 0x201b].map(ch);
+  const [DLEFT, DRIGHT, DLOW] = [0x201c, 0x201d, 0x201e].map(ch);
+  const [EN, EM, BAR] = [0x2013, 0x2014, 0x2015].map(ch);
+  const [NEL, NBSP, EMSPACE, LINE] = [0x85, 0xa0, 0x2003, 0x2028].map(ch);
+  const show = (command) => JSON.stringify(command).replace(/[^\x20-\x7e]/g, (c) => `U+${c.charCodeAt(0).toString(16).padStart(4, "0")}`).slice(1, -1);
+  const powershell = (command, mode) => runGuarded(command, { tool: "PowerShell", mode });
+
+  for (const command of [
+    // The re-probe's forms: PowerShell ends the string at the typographic quote.
+    `Write-Output 'x${RIGHT}; Remove-Item -Recurse -Force .claude\\hooks; ${LEFT}y'`,
+    `Write-Output 'x${RIGHT}; Copy-Item notes\\x.md CLAUDE.md; ${LEFT}y'`,
+    `Write-Output "x${DRIGHT}; Remove-Item -Recurse -Force security; ${DLEFT}y"`,
+    `Write-Output ${LEFT}x'; Remove-Item -Recurse -Force .claude\\hooks; 'y${RIGHT}`,
+    // The other quotes PowerShell knows.
+    `Write-Output 'x${LOW}; Remove-Item -Recurse -Force security; ${HIGH}y'`,
+    `Write-Output "x${DLOW}; Copy-Item notes\\x.md CLAUDE.md; ${DLOW}y"`,
+    // A typographic dash starts a parameter.
+    `Copy-Item notes\\x.md ${EN}Destination CLAUDE.md`,
+    `Copy-Item ${EM}Destination CLAUDE.md ${EM}Path notes\\x.md`,
+    `Set-Content ${BAR}Path CLAUDE.md ${BAR}Value (Get-Content notes\\x.md)`,
+    // A Unicode space parts two words.
+    `Copy-Item${NBSP}notes\\x.md${NBSP}CLAUDE.md`,
+    `Copy-Item${EMSPACE}notes\\x.md${EMSPACE}CLAUDE.md`,
+    `Copy-Item notes\\x.md${NEL}CLAUDE.md`,
+    `Remove-Item${NBSP}-Recurse${NBSP}-Force${NBSP}security`,
+    `Get-Content README.md${LINE}Remove-Item -Recurse -Force security`,
+    // A read of Guardian's file is not known to only read with one in it.
+    `Get-Content .claude\\settings.json | Select-String ${DLEFT}hooks${DRIGHT}`,
+  ]) {
+    stagedOnly(`asks, PowerShell tool: ${show(command)}`, () => {
+      const out = powershell(command);
+      assert.equal(decisionOf(out), "ask", `${show(command)} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  stagedOnly("asks: a Bash command that hands PowerShell such a script", () => {
+    const command = `powershell -Command "Write-Output 'x${RIGHT}; Copy-Item notes\\x.md CLAUDE.md; ${LEFT}y'"`;
+    const out = runGuarded(command);
+    assert.equal(decisionOf(out), "ask", `${show(command)} -> ${out.slice(0, 200) || "(silent)"}`);
+  });
+
+  for (const command of [
+    // Nothing of Guardian's and nothing watched is named.
+    `Write-Output "it${RIGHT}s done"`,
+    `git commit -m "docs ${EN} tidy"`,
+    `Get-Content docs\\a.md | Select-String ${DLEFT}clean${DRIGHT}`,
+  ]) {
+    stagedOnly(`silent, PowerShell tool: ${show(command)}`, () => {
+      expectSilent(powershell(command, "bypassPermissions"));
+    });
+  }
+
+  for (const command of [
+    // To bash each of them is an ordinary character.
+    `echo "it${RIGHT}s done" >> README.md`,
+    `git commit -m "security ${EN} notes"`,
+    `grep -rn ${DLEFT}security${DRIGHT} docs`,
+  ]) {
+    stagedOnly(`silent, Bash: ${show(command)}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------

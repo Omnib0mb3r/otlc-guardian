@@ -233,6 +233,15 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **PowerShell's typographic quotes, dashes and spaces (BUG-085, re-probe 7
+  H7).** PowerShell ends a string at a typographic quote (U+2018 to
+  U+201E), starts a parameter at a typographic dash (U+2013 to U+2015)
+  and parts words at a Unicode space. The hook read none of them, so a
+  `Remove-Item` or a `Copy-Item` into `CLAUDE.md` could sit in what it
+  took for one quoted word. A PowerShell command that holds one is now
+  uncertain: never read-only, no word blanked, and it asks when it names
+  a watched file.
+
 - **An exempt program the command has replaced earns nothing (BUG-080,
   re-probe 7 H6).** `hash -p ./g.sh git; git commit -m security` and
   `PATH=./bin:/usr/bin; git commit -m security` were silent and ran a

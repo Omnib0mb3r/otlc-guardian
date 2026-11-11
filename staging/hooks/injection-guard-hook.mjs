@@ -2989,6 +2989,10 @@ const DIALECTS = {
 
 // Every C0 control character and DEL, except tab and newline.
 const CONTROL_CHARACTER = /[\x00-\x08\x0B-\x1F\x7F]/;
+// Characters PowerShell reads as a quote (U+2018 to U+201E), as the dash
+// of a parameter (U+2013 to U+2015) or as white space (U+0085, U+00A0 and
+// the Unicode spaces), and every other shell as part of a word.
+const PS_TYPOGRAPHIC = /[\u0085\u00A0\u1680\u2000-\u200A\u2013-\u2015\u2018-\u201E\u2028\u2029\u202F\u205F\u3000]/;
 
 /**
  * Splits a command into words and operators.
@@ -3007,7 +3011,12 @@ const CONTROL_CHARACTER = /[\x00-\x08\x0B-\x1F\x7F]/;
  *     differently in each shell (re-probe 6, G1): to bash a carriage
  *     return is part of a word, so `true\r#; rm x` holds no comment, and
  *     PowerShell ends a line and a comment at a lone one. No dialect is
- *     taught each of them; a command that holds one is `uncertain`.
+ *     taught each of them; a command that holds one is `uncertain`;
+ *   - PowerShell ends a string at a typographic quote, takes a
+ *     typographic dash for the start of a parameter and a Unicode space
+ *     for white space (re-probe 7, H7), so a statement can hide in what
+ *     the reader takes for one quoted word. In that dialect a command
+ *     that holds one of PS_TYPOGRAPHIC is `uncertain`.
  *
  * @param {"bash"|"powershell"|"cmd"} dialect - see DIALECTS
  * @returns {{ tokens: Array<{word: string, start: number, end: number}|{op: string, start: number, end: number}>, subs: string[], heredocs: Array<{text: string, start: number, end: number, expands: boolean}>, comments: Array<[number, number]>, uncertain: boolean }}
@@ -3035,7 +3044,7 @@ function lexShell(text, dialect = "bash") {
   let braces = 0;
   let brackets = 0;
   let parens = 0;
-  let uncertain = CONTROL_CHARACTER.test(text);
+  let uncertain = CONTROL_CHARACTER.test(text) || (dialect === "powershell" && PS_TYPOGRAPHIC.test(text));
   const nested = () => braces > 0 || brackets > 0 || parens > 0;
 
   const flush = () => {
@@ -3987,8 +3996,10 @@ function extractWrite(toolName, toolInput) {
       // Shell words, split on whitespace, quotes, and operators. Good
       // enough to see which paths a command names. This is not a shell
       // parser and does not claim to follow variables or subshells. The
-      // paths it writes come from shellWriteTargets().
-      const words = command.split(/[\s"'`;|&<>()=,]+/).filter(Boolean);
+      // paths it writes come from shellWriteTargets(). A typographic
+      // quote, dash or space ends a word here as well: PowerShell reads
+      // it that way, also in a script a Bash command hands to it (H7).
+      const words = command.replace(new RegExp(PS_TYPOGRAPHIC.source, "g"), " ").split(/[\s"'`;|&<>()=,]+/).filter(Boolean);
       return { kind: "bash", dialect: toolName === "PowerShell" ? "powershell" : "bash", targets: words, content: command };
     }
     default:
@@ -4550,7 +4561,7 @@ process.stdin.on("end", () => {
       record(confirmOrDeny,
         `${TAG} This command names ${safeEchoPath(watched[0], 120)}, which agents load as instructions, and Guardian ` +
         `could not read all of it for certain: a "#" or "<<" inside brackets, a quote inside "\${ }", or a carriage ` +
-        `return or other control character can hide ` +
+        `return or other control character, or in PowerShell a typographic quote, dash or space, can hide ` +
         `a command from it. Write the command without that form, or approve only if you know what it does.${bypassNote}`);
     }
 
