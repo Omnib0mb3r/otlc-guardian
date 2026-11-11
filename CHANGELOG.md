@@ -233,6 +233,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Archive extraction forms that stayed silent ask (BUG-065, re-probe 5
+  F5).** `extractall(filter='data')` (the keyword was taken for the
+  destination), a Python script on a heredoc or a here-string,
+  `uv run python -c ...`, and `Expand-Archive -DestinationPath $PWD` each
+  unpacked a settings file and a CLAUDE.md into the project root unseen.
+  Keyword arguments are read by name; a script on stdin is read like
+  `-c`, for interpreters and shells; `uv run`, `uvx`, `poetry run`,
+  `pipx run`, `pdm run` and `hatch run` are read through; `$PWD`,
+  `$(pwd)` and `(Get-Location)` as a destination are the working folder.
+
 - **find output past 1,000 files into a watched file asks (BUG-066,
   re-probe 5 F4).** Past the cap E5 marked only what the `-exec` clause
   itself wrote, so `find docs -name '*.md' -exec cat {} + >> CLAUDE.md`

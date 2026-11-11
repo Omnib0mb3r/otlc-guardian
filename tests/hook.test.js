@@ -2904,6 +2904,60 @@ describe("PreToolUse hook - archive extraction asks where unzip and tar do (re-p
       expectSilent(run(tool, command, { sub, mode: "bypassPermissions" }));
     });
   }
+
+  // Re-probe 5, F5: forms of the same extraction that stayed silent. Real
+  // effect in the re-probe: .claude/settings.local.json and a CLAUDE.md
+  // payload written into the project root.
+  for (const [tool, command, sub] of [
+    // a keyword argument is not the destination
+    ["Bash", `python -c "import tarfile; tarfile.open('evil.tar').extractall(filter='data')"`],
+    ["Bash", `python -c "import tarfile; tarfile.open('evil.tar').extractall(members=None, filter='data')"`],
+    ["Bash", `python -c "import zipfile; zipfile.ZipFile('evil.zip').extract('a.md', pwd=None)"`],
+    // a script on stdin is read like -c
+    ["Bash", "python - <<'EOF'\nimport zipfile\nzipfile.ZipFile('evil.zip').extractall('.')\nEOF"],
+    ["Bash", "python3 <<EOF\nimport shutil\nshutil.unpack_archive('evil.zip')\nEOF"],
+    ["Bash", `python - <<< "import zipfile; zipfile.ZipFile('evil.zip').extractall()"`],
+    ["Bash", `echo "import zipfile; zipfile.ZipFile('evil.zip').extractall()" | python`],
+    ["Bash", "bash <<'EOF'\nunzip -o evil.zip\nEOF"],
+    ["Bash", "sh -s <<< 'tar -xf evil.tar'"],
+    // a wrapper is read through to the command
+    ["Bash", `uv run python -c "import zipfile; zipfile.ZipFile('evil.zip').extractall('.')"`],
+    ["Bash", `uv run --with requests python -c "import zipfile; zipfile.ZipFile('evil.zip').extractall('.')"`],
+    ["Bash", `poetry run python -c "import shutil; shutil.unpack_archive('evil.zip')"`],
+    ["Bash", `pipx run python -c "import shutil; shutil.unpack_archive('evil.zip')"`],
+    ["Bash", "uv run bash -c 'unzip -o evil.zip'"],
+    // the working folder, however it is spelled
+    ["PowerShell", "Expand-Archive evil.zip -DestinationPath $PWD -Force"],
+    ["PowerShell", "Expand-Archive evil.zip -DestinationPath $PWD.Path -Force"],
+    ["PowerShell", "Expand-Archive evil.zip -DestinationPath (Get-Location) -Force"],
+    ["PowerShell", "Expand-Archive evil.zip -DestinationPath $(Get-Location)"],
+    ["Bash", 'unzip -o evil.zip -d "$PWD"'],
+    ["Bash", 'unzip -o evil.zip -d "$(pwd)"'],
+    ["Bash", 'tar -xf evil.tar -C "$PWD"'],
+    ["Bash", 'tar -xf evil.tar --directory="${PWD}"'],
+    ["Bash", 'unzip -o ../evil.zip -d "$PWD/.."', "src"],
+  ]) {
+    stagedOnly(`asks${sub ? ` from ${sub}/` : ""}: ${command.replace(/\n/g, " / ")}`, () => {
+      const out = run(tool, command, { sub });
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    });
+  }
+
+  for (const [tool, command, sub] of [
+    ["Bash", `python -c "import tarfile; tarfile.open('evil.tar').extractall('build', filter='data')"`],
+    ["Bash", `python -c "import tarfile; tarfile.open('evil.tar').extractall(filter='data', path='build')"`],
+    ["Bash", "python - <<'EOF'\nimport zipfile\nzipfile.ZipFile('evil.zip').extractall('build')\nEOF"],
+    ["Bash", "python - <<'EOF'\nprint('hello')\nEOF"],
+    ["Bash", `uv run python -c "import zipfile; zipfile.ZipFile('evil.zip').extractall('build')"`],
+    ["Bash", "uv run pytest -q"],
+    ["Bash", "poetry run pytest -k security"],
+    ["Bash", 'unzip -o evil.zip -d "$PWD/build"'],
+    ["PowerShell", "Expand-Archive ..\\evil.zip -DestinationPath $PWD", "src"],
+  ]) {
+    stagedOnly(`silent${sub ? ` from ${sub}/` : ""}: ${command.replace(/\n/g, " / ")}`, () => {
+      expectSilent(run(tool, command, { sub, mode: "bypassPermissions" }));
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------

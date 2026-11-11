@@ -620,7 +620,6 @@ function findWrites(args, dir, ctx) {
       // What the clause prints from those files is unjudged too, so find's
       // output redirected or piped into a watched file asks (re-probe 5, F4).
       if (commandWrites(e.clause, dir, marked).out.length > 0) out.push(marker);
-
     }
   });
   return out;
@@ -676,6 +675,27 @@ const READ_REDIRECTS    = new Set(["<", "<<", "<<-", "<<<", "<&"]);
 const COMMAND_WRAPPERS  = new Set(["sudo", "doas", "env", "command", "builtin", "exec", "nohup", "time", "nice", "timeout", "stdbuf", "xargs"]);
 const SHELLS            = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 const INTERPRETERS      = new Set(["node", "deno", "bun", "python", "python3", "py", "ruby", "perl", "php"]);
+// Programs that start another one in an environment they prepare: uv run
+// CMD, poetry run CMD, pipx run CMD, pdm run CMD, hatch run CMD, uvx CMD.
+const RUN_WRAPPERS      = new Set(["uv", "poetry", "pipx", "pdm", "hatch"]);
+// Commands whose arguments are the text they put on stdout.
+const TEXT_SAYERS       = new Set(["echo", "printf"]);
+
+/**
+ * The command a run wrapper starts, as its words, or null when the words
+ * are not a wrapper's. The wrapper's own options may take a value
+ * (uv run --with requests python), so an interpreter or shell named after
+ * them is taken as the program; failing that, the first word that is not
+ * an option.
+ */
+function runWrapped(words) {
+  const name = commandName(words[0] ?? "");
+  const rest = name === "uvx" ? words.slice(1) : RUN_WRAPPERS.has(name) && words[1] === "run" ? words.slice(2) : null;
+  if (rest === null) return null;
+  const known = rest.findIndex((w) => INTERPRETERS.has(commandName(w)) || SHELLS.has(commandName(w)));
+  const first = known >= 0 ? known : rest.findIndex((w) => !w.startsWith("-"));
+  return first >= 0 ? rest.slice(first) : null;
+}
 const INLINE_CODE_FLAGS = new Set(["-c", "-e", "-p", "-r", "--eval", "--print"]);
 const POWERSHELLS       = new Set(["powershell", "pwsh"]);
 const COPY_COMMANDS     = new Set(["cp", "mv", "install", "ln", "rsync", "scp"]);
@@ -1022,6 +1042,7 @@ const ROOT_WORD = /^(?:[\\/]+|[A-Za-z]:[\\/]*)$/;
 // writes the folder it unpacks into, as unzip and tar -x do. "extract"
 // and "extractall" are also methods of other things (pandas, re), so
 // they count only in code that names an archive module.
+const PY_KEYWORD_ARGUMENT = /^[A-Za-z_]\w*\s*=(?!=)/;
 const PY_ARCHIVE_MODULE = /\b(?:zipfile|tarfile|ZipFile|TarFile)\b/;
 const PY_ARCHIVE_CALLS = [
   { call: /\.extractall\s*\(/g, dest: 0, needsModule: true },
@@ -1054,6 +1075,16 @@ function callArguments(code, open) {
 }
 
 /**
+ * An archive destination as a path the readers can resolve. One that is
+ * the working folder spelled as an expression ($PWD, ${PWD}, $PWD.Path,
+ * $(pwd), %CD%, with or without a path after it) is "." (re-probe 5, F5);
+ * a lone "$" is what the lexer leaves of a substitution, whose result is
+ * not known, and the working folder is the reading that asks.
+ */
+const WORKING_FOLDER_EXPRESSION = /^(?:\$\{?pwd\}?(?:\.path)?|\$env:pwd|%cd%|\$)(?=$|[\\/])/i;
+const archiveFolder = (dest) => dest.replace(WORKING_FOLDER_EXPRESSION, ".");
+
+/**
  * The folders a python command unpacks an archive into: the destination
  * when it is a quoted literal, else the working folder, which is the
  * default and the safe reading of an expression this cannot evaluate.
@@ -1071,8 +1102,11 @@ function archiveDestinations(args, code) {
     if (needsModule && !namesModule) continue;
     for (const hit of code.matchAll(call)) {
       const given = callArguments(code, hit.index + hit[0].length);
+      // A keyword argument is read by its name and never fills a
+      // positional slot: extractall(filter='data') has no destination.
       const named = given?.find((a) => /^(?:path|extract_dir)\s*=/.test(a));
-      const arg = (named ?? given?.[dest])?.replace(/^[a-z_]+\s*=\s*/, "");
+      const positional = given?.filter((a) => !PY_KEYWORD_ARGUMENT.test(a));
+      const arg = (named ?? positional?.[dest])?.replace(/^[a-z_]+\s*=\s*/, "");
       const literal = /^(['"])(.*)\1$/.exec(arg ?? "");
       dests.push(arg === undefined ? "." : literal ? literal[2] || "." : ".");
     }
@@ -1332,13 +1366,16 @@ const PIPE_OPERATORS    = new Set(["|", "|&"]);
 
 /**
  * Whether a stage's words run a test runner: pytest, jest, vitest and
- * mocha (directly, or through npx, bunx, yarn, pnpm exec), python -m
+ * mocha (directly, through npx, bunx, yarn or pnpm exec, or under a run
+ * wrapper such as uv run and poetry run: runWrapped()), python -m
  * pytest or unittest, manage.py test, the test script of npm, pnpm, yarn
  * and bun, go test and cargo test. A value set in front of the command
  * can be what it runs (re-probe 4, E2), and go test -exec names a program
  * to run, so neither is a test run here.
  */
 function isTestRun(words) {
+  const started = runWrapped(words);
+  if (started) return isTestRun(started);
   const name = commandName(words[0] ?? "");
   const args = words.slice(1);
   const plain = args.filter((a) => !a.startsWith("-"));
@@ -1499,9 +1536,7 @@ function guardedNameIn(texts, dialect, cwd, root) {
     // A shell word with white space in it, read whole: a quoted path keeps
     // its spaces, and a string in code ends at its own quotes.
     for (const word of words.filter((w) => /\s/.test(w))) {
-
       for (const view of nameViews(word.replace(/['"`]/g, "\0"), WORD_PATH_RUN_CHAR)) {
-
         for (const { name, re } of GUARDED_NAME_PATTERNS) {
           for (const m of view.matchAll(re)) if (counts(view, name, m, WORD_PATH_RUN_CHAR)) return name;
         }
@@ -1520,7 +1555,6 @@ function guardedNameIn(texts, dialect, cwd, root) {
     }
   }
   return null;
-
 }
 
 // Commands that only read (and cd, which only moves). A command with a
@@ -1639,7 +1673,8 @@ const DIALECTS = {
  * @param {"bash"|"powershell"|"cmd"} dialect - see DIALECTS
  * @returns {{ tokens: Array<{word: string, start: number, end: number}|{op: string, start: number, end: number}>, subs: string[] }}
  *   start and end are the token's place in the text; subs is the text of
- *   each $( ) and backtick substitution, for recursion
+ *   each $( ) and backtick substitution, for recursion; heredocs is the
+ *   body of each heredoc, in the order of their << operators
  */
 function lexShell(text, dialect = "bash") {
   const d = DIALECTS[dialect] ?? DIALECTS.bash;
@@ -1647,6 +1682,7 @@ function lexShell(text, dialect = "bash") {
   const tokens = [];
   const subs = [];
   const heredocs = [];
+  const bodies = [];
   let word = null;
   let wordStart = 0; // where the current word's raw text starts
   let expectDelimiter = null;
@@ -1711,20 +1747,26 @@ function lexShell(text, dialect = "bash") {
       i += op.length;
       if (op === "<<" || op === "<<-") expectDelimiter = op;
       if (op === "\n") {
-        // Heredoc bodies start on the next line and are data.
+        // Heredoc bodies start on the next line and are data: no tokens.
+        // Each is kept, because fed to an interpreter or a shell it is
+        // that program's script (re-probe 5, F5).
         for (const { delimiter, strip } of heredocs.splice(0)) {
+          const lines = [];
           for (;;) {
             const eol = text.indexOf("\n", i);
             const line = text.slice(i, eol < 0 ? text.length : eol);
             i = eol < 0 ? text.length : eol + 1;
-            if ((strip ? line.replace(/^\t+/, "") : line) === delimiter || eol < 0) break;
+            if ((strip ? line.replace(/^\t+/, "") : line) === delimiter) break;
+            lines.push(line);
+            if (eol < 0) break;
           }
+          bodies.push(lines.join("\n"));
         }
       }
     }
   }
   flush();
-  return { tokens, subs };
+  return { tokens, subs, heredocs: bodies };
 }
 
 /** Path-like words in text the hook cannot parse (inline interpreter code). */
@@ -1761,7 +1803,6 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
   const spelledPath = (p) => (dialect === "bash" ? drivePath(p) : p);
   const abs = (dir, p) => path.resolve(dir, spelledPath(p.replace(/^~(?=$|[\\/])/, os.homedir()))).replace(/\\/g, "/");
   const add = (dir, p, sources = [], append = false) => {
-
     if (!p || p === "-" || /^&?\d+$/.test(p)) return;
     const key = abs(dir, p);
     const entry = targets.get(key) ?? { sources: new Set(), append: false };
@@ -1784,7 +1825,7 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
   const filter = (inputs, apply) => `filter:${found.filters.push({ inputs, apply }) - 1}`;
   const ctx = { add, abs, recurse, dialect, decoded: found.decoded, quiet: [], filter, root: found.root };
 
-  const { tokens, subs } = lexShell(command, dialect);
+  const { tokens, subs, heredocs } = lexShell(command, dialect);
   for (const sub of subs) recurse(sub, cwd);
   if (dialect === "powershell") {
     // [IO.File]::WriteAllText('CLAUDE.md', ...): the path is an argument
@@ -1810,8 +1851,14 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
   let writes = [];   // [{ word, append }] from > and >> redirections
   let reads = [];    // files read through <
   let pipeIn = [];   // sources whose content arrives on stdin through a pipe
+  // Text that arrives on stdin spelled out in the command: a heredoc body,
+  // a here-string, what an echo or printf before a pipe says. To an
+  // interpreter or a shell with no other program it is the script.
+  let scripts = [];
+  let said = [];
+  let heredocsSeen = 0;
   const finish = (op) => {
-    const stage = commandWrites(words, dir, ctx, { pipeIn, reads: reads.map((r) => abs(dir, r)) });
+    const stage = commandWrites(words, dir, ctx, { pipeIn, reads: reads.map((r) => abs(dir, r)), scripts: [...said, ...scripts] });
     // A filter pattern is left out of the scan only where it is written:
     // the token of this command that spells it, in the top-level text.
     for (const q of ctx.quiet.splice(0)) {
@@ -1823,6 +1870,8 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
     dir = stage.dir;
     // A group's output flows on: (Get-Content x) | Set-Content y, (cat a) > b (re-probe 3, D1).
     pipeIn = op === "|" || op === "|&" || op === ")" ? stage.out : [];
+    said = (op === "|" || op === "|&") && TEXT_SAYERS.has(commandName(words[0] ?? "")) ? [words.slice(1).join(" ")] : [];
+    scripts = [];
     words = [];
     stageWords = [];
     writes = [];
@@ -1840,6 +1889,8 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
       i++;
       if (WRITE_REDIRECTS.has(tok.op)) writes.push({ word: next.word, append: tok.op === ">>" || tok.op === "&>>" });
       if (tok.op === "<" || tok.op === "<>") reads.push(next.word);
+      if (tok.op === "<<" || tok.op === "<<-") scripts.push(heredocs[heredocsSeen++] ?? "");
+      if (tok.op === "<<<") scripts.push(next.word);
     }
   }
   finish(null);
@@ -1848,13 +1899,16 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
 
 /**
  * Records what one simple command writes.
- * @param {{ pipeIn: string[], reads: string[] }} input - sources of its stdin
+ * @param {{ pipeIn: string[], reads: string[], scripts?: string[] }} input -
+ *   sources of its stdin, and the text on its stdin that the command
+ *   spells out (a heredoc body, a here-string, an echo piped in)
  * @returns {{ dir: string, out: string[] }} the working directory for the
  *   commands after it, and the sources whose content its stdout carries
  */
 function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   const { add, abs, recurse } = ctx;
   const stdin = [...input.pipeIn, ...input.reads];
+  const scripts = input.scripts ?? [];
   let words = allWords.filter((w) => w !== "");
   // An environment value may be a command the program runs: less runs
   // $LESSOPEN and $LESSCLOSE on the file it opens, git runs
@@ -1880,6 +1934,12 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     if (wrapper === "timeout" && words.length > 1) words = words.slice(1); // the duration
   }
   if (words.length === 0) return { dir, out: stdin };
+  // uv run, uvx, poetry run and pipx run start another program in an
+  // environment they set up; it is read as the command (re-probe 5, F5).
+  // Their own options can take a value, so an interpreter or shell named
+  // anywhere after them is taken as that program.
+  const started = runWrapped(words);
+  if (started) return commandWrites(started, dir, ctx, input);
 
   const name = commandName(words[0]);
   const args = words.slice(1);
@@ -1921,6 +1981,8 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   } else if (SHELLS.has(name)) {
     const flag = args.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a));
     if (flag >= 0 && args[flag + 1] !== undefined) recurse(args[flag + 1], dir, "bash");
+    // With no script file the shell reads its script from stdin.
+    else if (operands.length === 0) for (const script of scripts) recurse(script, dir, "bash");
   } else if (name === "eval") {
     recurse(args.join(" "), dir);
   } else if (name === "find") {
@@ -1963,7 +2025,10 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     for (const p of operands) add(dir, p);
   } else if (INTERPRETERS.has(name)) {
     const flag = args.findIndex((a) => INLINE_CODE_FLAGS.has(a));
-    const code = flag >= 0 ? args.slice(flag + 1).join(" ") : "";
+    // With no inline code and no script file the program comes from
+    // stdin, and is judged by its text like -c (re-probe 5, F5).
+    const fromStdin = flag < 0 && (operands.length === 0 || operands[0] === "-");
+    const code = flag >= 0 ? args.slice(flag + 1).join(" ") : fromStdin ? scripts.join("\n") : "";
     const writes = INLINE_WRITE_CALLS.some((re) => re.test(code));
     for (const p of pathLikeWords(code)) {
       if (!ROOT_WORD.test(p) && (writes || namesGuardFile(abs(dir, p)))) add(dir, p);
@@ -2081,14 +2146,14 @@ function tarWrites(args, dir, ctx) {
     if (long) {
       if (long[1] === "extract" || long[1] === "get") extract = true;
       const value = long[2] ?? (["file", "directory", "files-from", "exclude-from"].includes(long[1]) ? args[++k] : undefined);
-      if (long[1] === "directory" && value !== undefined) into = value;
+      if (long[1] === "directory" && value !== undefined) into = archiveFolder(value);
     } else if (/^-[a-zA-Z]+$/.test(a) || (k === 0 && /^[a-zA-Z]+$/.test(a))) {
       // Short options, or the old style "tar xzf a.tar" first word.
       for (const letter of a.replace(/^-/, "")) {
         if (letter === "x") extract = true;
         if (!TAR_VALUE_LETTERS.has(letter)) continue;
         const value = args[++k];
-        if (letter === "C" && value !== undefined) into = value;
+        if (letter === "C" && value !== undefined) into = archiveFolder(value);
       }
     } else {
       members.push(a);
@@ -2111,7 +2176,7 @@ function unzipWrites(args, dir, ctx) {
   const members = [];
   for (let k = 0; k < args.length; k++) {
     const a = args[k];
-    if (a === "-d") into = args[++k] ?? into;
+    if (a === "-d") into = archiveFolder(args[++k] ?? into);
     else if (a === "-x") excluding = true;
     else if (/^-[a-zA-Z]+$/.test(a)) {
       if (/[ltvZp]/.test(a.slice(1))) return;
@@ -2271,7 +2336,7 @@ function powershellWrites(name, args, dir, ctx, stdin) {
   } else if (name === "expand-archive") {
     // What the archive holds lands in -DestinationPath, the working
     // folder by default, as with unzip (re-probe 4, E7).
-    add(dir, psPaths(args, name, ["destinationpath"], 1)[0] ?? ".");
+    add(dir, archiveFolder(psPaths(args, name, ["destinationpath"], 1)[0] ?? "."));
   } else if (PS_RENAMERS.has(name)) {
     const [target] = psPaths(args, name, ["path", "literalpath"], 0);
     const [newName] = psPaths(args, name, ["newname"], 1);
