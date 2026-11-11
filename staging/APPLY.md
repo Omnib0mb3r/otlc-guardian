@@ -17,7 +17,10 @@ hook still asks a person before its own files change.
 Written 2026-11-10 at the end of the 1.5.0 fix run; updated the same day for
 the second re-probe (S1 to S12), the third (D1 to D9) and the fourth (E1 to
 E8), and turned into Lex's runbook; updated on 2026-11-11 for the fifth
-(F1 to F7, then F1b and F3b) and for BUG-083 and BUG-085.
+(F1 to F7, then F1b and F3b) and for BUG-083 and BUG-085, and for the
+sixth (G1 to G7, then G2b and F3b read-only) with two findings made while
+fixing it: a string escape after a guarded name, and a wrapper option's
+value.
 
 ## Preconditions
 
@@ -32,7 +35,7 @@ E8), and turned into Lex's runbook; updated on 2026-11-11 for the fifth
 
 | Staged file | Live file | Size of the change |
 |---|---|---|
-| `staging/hooks/injection-guard-hook.mjs` | `.claude/hooks/injection-guard-hook.mjs` | 2,566 lines added, 202 removed |
+| `staging/hooks/injection-guard-hook.mjs` | `.claude/hooks/injection-guard-hook.mjs` | 3,223 lines added, 280 removed |
 | `staging/hooks/web-content-guard.mjs` | `.claude/hooks/web-content-guard.mjs` | 26 added, 21 removed |
 | `staging/security/01-injection-guard.js` | `security/01-injection-guard.js` | 433 added, 60 removed |
 | (edit) | `.claude/settings.json` (this repo only) | both hook commands anchored, web guard matcher widened |
@@ -53,7 +56,7 @@ Already live, not part of this apply:
 
 Bugs fixed by the staged files, with the commit that staged each fix. Each
 bug's detail block in `BUGS.md` describes the change and its tests; the
-re-probe items are paragraphs naming Sn, Dn or En.
+re-probe items are paragraphs naming Sn, Dn, En, Fn or Gn.
 
 | Bug | Commit | File | Change |
 |---|---|---|---|
@@ -115,10 +118,24 @@ re-probe items are paragraphs naming Sn, Dn or En.
 | BUG-085 | 7b371ff | hook | text the shell runs is never dropped by the reader; a command it cannot place for certain asks |
 | BUG-080 (F1b) | a2f07e7 | hook | the bare word `security` is text in a message, a comment, a script name and a write to an ordinary file |
 | BUG-075 (F3b) | 4085f23 | hook | a folder strictly above the project root asks unless the command only reads |
+| BUG-085 (G1) | 4dc7650 | hook | a carriage return or control character makes a command uncertain |
+| BUG-080 (G3) | a8d9ec3 | hook | a `cd` with an option, or `CDPATH`, is not followed |
+| BUG-080 (G2) | 51b1b1f | hook | an exemption is earned only by a plain command |
+| BUG-075 (escape) | 4049d5d | hook | a string escape right after a guarded name is read |
+| BUG-066 (G4) | c30a877 | hook | a copy through a group, a subshell or a process substitution is judged |
+| BUG-075 (G5) | a2a96ca | hook | `env -C` and `env --chdir` are followed |
+| BUG-080 (G6) | 74b8ea1 | hook | the bare word is resolved from where the shell is |
+| BUG-074 (G7) | 6a2470e | hook | an option value stuck to its option is read |
+| BUG-066 (wrappers) | 4cf8dba | hook | a wrapper option's value is not the program |
+| BUG-080 (G2b) | 2cbfe7c | hook | a later command is not downstream |
+| BUG-075 (F3b read-only) | 1dc67a7 | hook | `du`, `tree` and `df` only read |
 
 Documented, not fixed: an obfuscated payload moved out of a code fence
-(BUG-042, S7, f5ecc42) and `xargs cp` (S5); both are in SECURITY.md,
-"What the hook is, and what it is not".
+(BUG-042, S7, f5ecc42), `xargs cp` (S5), a copy behind a program that
+starts another and is not on the wrapper list (`setsid`, `flock`, `watch`
+and others, BUG-066) and inline code that runs an extraction command as
+a string (G8); all are in SECURITY.md, "What the hook is, and what it is
+not".
 
 Behavior a user will notice after the apply:
 
@@ -141,17 +158,32 @@ Behavior a user will notice after the apply:
   when a program is handed it: `npx rimraf security` asks (F1). It is
   text, and silent, in a stage that only reads, in a test runner's stage
   (`pytest -k security`), in a message or title of git and gh, in a
-  comment, as the script name of `npm run`, and in what a reading command
-  sends to an ordinary file (`echo "## Security notes" >> README.md`)
-  (F1, F1b). Inline code that carries the word still asks there
+  comment, as the script name of `npm run`, `yarn` and `pnpm`, and in
+  what a reading command sends to an ordinary file
+  (`echo "## Security notes" >> README.md`) (F1, F1b, G6). Inline code
+  that carries the word still asks there
   (`python -c "print('security')"`).
+- Those exemptions hold only in a plain command, one the hook can split
+  into stages for certain: `( echo security ) | xargs rm -rf` asks (G2).
+  A later command joined by `&&` or `;` takes no exemption away, so
+  `git commit -m security && git push origin $BRANCH` is silent. A stage
+  that receives the exempt stage's output does:
+  `git commit -m security | xargs rm -rf` asks (G2b).
+- The word is resolved from the folder the shell is in:
+  `cd src && rm -rf security` is the project's own `src/security` and is
+  silent; `cd src; npx rimraf security` asks (G6). A `cd` with an option,
+  or with `CDPATH` set, is not followed, so
+  `cd -P src/a && npx rimraf ../../security` asks (G3).
 - Guardian's files are found in more spellings: a Git Bash drive path
   (`/c/.../.claude/hooks`), a path with `@`, `+` or a quoted space in it,
   a project whose own folder name has a space (F2), and a guarded folder
   followed by `/.` or `/x/..` (F3).
 - A command given a folder strictly above the project root asks unless it
   only reads: `npx rimraf ..` at the root, and with it `docker build ..`,
-  `cp src/a.js ..` and `git add ..` (F3b). A session whose project root is
+  `cp src/a.js ..` and `git add ..` (F3b). `env -C .. npx rimraf .` asks
+  too (G5). `du -sh ..`, `tree ..` and `df ..` only read and are silent
+  (F3b read-only). A path stuck to a one-letter option counts, so
+  `gcc -I.. -c a.c` at a root asks (G7). A session whose project root is
   one package of a larger repository will meet this. The project root
   itself is not judged (`npx prettier --write .`, `npx rimraf .`).
 - `find` output past 1,000 files, redirected or piped into a watched
@@ -163,11 +195,27 @@ Behavior a user will notice after the apply:
   that holds `.claude` or `.git` as the project root, the home folder
   passed over (F6, BUG-084).
 - `claude mcp add`, `add-json`, `add-from-claude-desktop` and `remove`
-  with `-s project` ask (F7).
+  with `-s project` ask (F7), and with the scope stuck to the option,
+  `-sproject` (G7).
 - Text the shell runs inside an unquoted heredoc or `$'...'` is read. A
   command that names a guarded or a watched file and holds a `#` or `<<`
   inside brackets (`(( # ))`, `${x/ #/y}`) asks, because the reader
   cannot place it for certain (BUG-085).
+- A command that holds a carriage return or another control character
+  and names a guarded or a watched file asks (G1, BUG-085). CRLF line
+  ends on a command that names neither are silent.
+- A copy through a `{ }` group, a `( )` subshell or a process
+  substitution is judged by content: `{ cat notes/x.md; } > CLAUDE.md`
+  is denied when `notes/x.md` holds a payload (G4).
+- A string escape right after a guarded name is read:
+  `printf "rm -rf security\n" | sh` asks (BUG-075).
+- A value stuck to its option is read (G7): `python -c"..."`,
+  `unzip a.zip -d.`, `tar -xfa.tar`, `curl -o.mcp.json` and `cp -tDIR`
+  are judged like their spaced forms.
+- A command behind a wrapper option that takes a value is judged:
+  `nice -n 5 cp notes/x.md CLAUDE.md` is denied on a payload, and so is
+  the same copy behind `sudo -u`, `env -u`, `timeout -s`, `stdbuf -o`
+  and `xargs -I` (BUG-066). `nice -n 19 make -j8` is silent.
 - `guardOutput` and `scan(..., "secrets")` no longer report `task-`,
   `disk-` or `risk-` followed by 32 hex characters as an API key
   (BUG-083).
@@ -302,10 +350,10 @@ gone, and step 4 removes it. Its summary must read `Failed : 1` with that
 name under FAILURES. Any other failure, in that suite or another, means
 stop and roll back with the `git checkout` line above.
 
-Measured on 2026-11-11 in a scratch clone of 4085f23 with steps 1 and 2
+Measured on 2026-11-11 in a scratch clone of 1dc67a7 with steps 1 and 2
 applied: injection-guard 175 passed 1 failed (that test), init 93/0, hook
 283/0, agents-md 14/0, audit 407/0, sql-guard 40/0, test:staging exit 0
-(staged injection-guard 288/0, staged hook 1009/0), the audit exit 0,
+(staged injection-guard 288/0, staged hook 1320/0), the audit exit 0,
 check 18 passed. A hook test that fails with "The test
 harness stopped the hook after N ms" on a loaded machine is BUG-077, not
 the apply: rerun that suite.
@@ -430,3 +478,14 @@ there, with who ran it and how. Restore any file a test changes with
 | BUG-076 | In an installed project, `guardOutput('{"password": "hunter2hunter2"}')` throws; `guardOutput('{"password": "Password"}')` returns the text. |
 | BUG-083 | In an installed project, `guardOutput('const job = "task-550e8400e29b41d4a716446655440000";')` returns the text. |
 | BUG-085 | In a scratch project ask Claude to run, as one Bash command, the three lines `cat <<EOF`, `$(rm -rf .claude/hooks)`, `EOF`; see a Guardian prompt; decline. |
+| BUG-085 (G1) | Covered by the suites at hook level. A session check needs a model that emits a raw carriage return, which two `claude -p` runs did not produce; Lex decides whether to try. |
+| BUG-080 (G3) | At the root of a scratch project with a `src/a` folder ask Claude to run `cd -P src/a && npx rimraf ../../security`; see a Guardian prompt; decline. |
+| BUG-080 (G2) | At the root of a scratch project ask Claude to run `( echo security ) \| xargs rm -rf`; see a Guardian prompt; decline. In bypass mode `git commit --allow-empty -m "fix(security): test"` gets no prompt. |
+| BUG-075 (escape) | At the root of a scratch project ask Claude to run `printf "rm -rf security\n" \| sh`; see a Guardian prompt; decline. |
+| BUG-066 (G4) | With a payload in `notes/x.md` ask Claude to run `{ cat notes/x.md; } > CLAUDE.md`; see it denied. |
+| BUG-075 (G5) | In a scratch folder `parent/proj` with Guardian installed in `proj`, from `proj` ask Claude to run `env -C .. npx rimraf .`; see a Guardian prompt that says "a folder above this project"; decline. |
+| BUG-080 (G6) | Bypass mode, at the root of a scratch project with a `src/security` folder: `cd src && rm -rf security` gets no prompt; `cd src; npx rimraf security` is denied with Guardian's message. |
+| BUG-074 (G7) | Ask Claude to run `claude mcp add -sproject e -- node -e 1`; see a Guardian prompt naming `.mcp.json`; decline. In bypass mode `git commit --allow-empty -m"fix security"` gets no prompt. |
+| BUG-066 (wrappers) | With a payload in `notes/x.md` ask Claude to run `nice -n 5 cp notes/x.md CLAUDE.md`; see it denied. In bypass mode `nice -n 19 make -j8` gets no prompt. |
+| BUG-080 (G2b) | Bypass mode, at the root of a scratch git project: `git commit --allow-empty -m security && git push origin $BRANCH` gets no Guardian prompt (the push itself may fail); `git commit --allow-empty -m security \| xargs rm -rf` is denied with Guardian's message. |
+| BUG-075 (F3b read-only) | Bypass mode, at a project root: `du -sh ..` and `tree ..` get no Guardian prompt; `npx rimraf ..` is denied with "a folder above this project". |
