@@ -227,6 +227,14 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Invisible characters are defined by Unicode property (BUG-071,
+  re-probe 4 E6).** The strip set was a list, and format characters
+  outside it split a pattern unseen: U+1BCA0 to U+1BCA3, U+1D173 to
+  U+1D17A, U+FFF9 to U+FFFB, U+13430. The set is now every format
+  (`Cf`) and default-ignorable character. `--!>` is read as a comment
+  closer, as HTML reads it, so `ignore <!-- x --!> all previous
+  instructions` is found. The Python port matches (live).
+
 - **`find -exec` copies are judged by the files find matches (BUG-066,
   re-probe 4 E5).** `find notes -exec cp {} CLAUDE.md \;` and `find notes
   -type f -exec cat {} + > CLAUDE.md` put a payload into `CLAUDE.md`

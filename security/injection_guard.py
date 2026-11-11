@@ -54,7 +54,30 @@ class InjectionPattern:
     matcher: Optional[Callable[[str], Optional[str]]] = None
 
 
-def _comment_matcher(open_tok: str, close_tok: str) -> Callable[[str], Optional[str]]:
+def _nearest_closer(text: str, closers: tuple[str, ...]) -> Callable[[int], tuple[int, int]]:
+    """
+    Returns find(pos) -> (index, length) of the nearest closer at or after
+    pos, or (-1, 0). A closer that is not found is never searched again,
+    so many openers stay linear (BUG-023).
+    """
+    nxt: list[Optional[int]] = [None] * len(closers)
+
+    def find(pos: int) -> tuple[int, int]:
+        best = (-1, 0)
+        for k, tok in enumerate(closers):
+            at = nxt[k]
+            if at == -1:
+                continue
+            if at is None or at < pos:
+                at = nxt[k] = text.find(tok, pos)
+            if at >= 0 and (best[0] < 0 or at < best[0]):
+                best = (at, len(tok))
+        return best
+
+    return find
+
+
+def _comment_matcher(open_tok: str, *close_toks: str) -> Callable[[str], Optional[str]]:
     """
     Linear-time matcher for "comment containing a control word".
 
@@ -66,18 +89,19 @@ def _comment_matcher(open_tok: str, close_tok: str) -> Callable[[str], Optional[
 
     def match(text: str) -> Optional[str]:
         pos = 0
+        closer = _nearest_closer(text, close_toks)
         while True:
             start = text.find(open_tok, pos)
             if start < 0:
                 return None
-            end = text.find(close_tok, start + len(open_tok))
+            end, size = closer(start + len(open_tok))
             # No closer after this opener means no later opener can close either.
             if end < 0:
                 return None
-            comment = text[start:end + len(close_tok)]
+            comment = text[start:end + size]
             if keyword.search(comment):
                 return comment
-            pos = end + len(close_tok)
+            pos = end + size
 
     return match
 
@@ -120,7 +144,7 @@ INJECTION_PATTERNS: list[InjectionPattern] = [
     # Context poisoning via markup - lazy quantifiers + DOTALL so the
     # pattern can span lines and does not ReDoS on long inputs without
     # a closing delimiter. Mirrors the JS module's GUARD-INJ-027 / GUARD-INJ-028.
-    InjectionPattern("GUARD-INJ-027", re.compile(r"<!--"), "MEDIUM", "HTML-comment context poisoning",  _comment_matcher("<!--", "-->")),
+    InjectionPattern("GUARD-INJ-027", re.compile(r"<!--"), "MEDIUM", "HTML-comment context poisoning",  _comment_matcher("<!--", "-->", "--!>")),
     InjectionPattern("GUARD-INJ-028", re.compile(r"/\*"), "MEDIUM", "Block-comment context poisoning", _comment_matcher("/*", "*/")),
 ]
 
@@ -136,13 +160,29 @@ INVISIBLE_UNICODE_PATTERN = re.compile(
 # invisible characters that are common in honest text (variation
 # selectors after emoji, Hangul fillers), which are stripped so they
 # cannot split a keyword but do not raise a finding by themselves.
-INVISIBLE_STRIP_PATTERN = re.compile(
-    "[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u2028-\u202F\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\U000E0000-\U000E0FFF]"
+#
+# Defined by Unicode property, not by a list (re-probe 4, E6), as the Node
+# scanner's [\p{Cf}\p{Default_Ignorable_Code_Point}]: every format character
+# (General_Category Cf, read from unicodedata, so it follows the Unicode
+# data of the running Python), every Default_Ignorable code point (the
+# ranges of DerivedCoreProperties, which are reserved and do not grow),
+# plus the separators and the narrow no-break space the old list held.
+_DEFAULT_IGNORABLE = (
+    "\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164"
+    "\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFF8\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0000-\U000E0FFF"
 )
+
+
+def _format_characters() -> str:
+    import unicodedata
+    return "".join(re.escape(chr(cp)) for cp in range(0x110000) if unicodedata.category(chr(cp)) == "Cf")
+
+
+INVISIBLE_STRIP_PATTERN = re.compile("[" + _DEFAULT_IGNORABLE + _format_characters() + "\u2028\u2029\u202F]")
 # Line and paragraph separators (and NEL) read as whitespace, not as nothing;
 # an HTML comment holding only whitespace renders as nothing (BUG-071).
 LINE_SEPARATORS = re.compile("[\u0085\u2028\u2029]")
-EMPTY_HTML_COMMENT = re.compile(r"<!--\s*-->")
+EMPTY_HTML_COMMENT = re.compile(r"<!--\s*--!?>")  # "--!>" closes a comment too
 # C0 and C1 controls other than tab, newline, carriage return, vertical
 # tab and form feed, and the Braille blank: they render as nothing or as
 # a gap (re-probe 3, D7).
@@ -150,11 +190,12 @@ CONTROL_PATTERN = re.compile("[\x00-\x08\x0e-\x1f\x7f-\x9f\u2800]")
 
 
 def _without_html_comments(text: str) -> str:
-    """Every HTML comment form ("<!-->", "<!--->", "<!-- ... -->") as a space,
-    its newlines kept. Walked with find(), so the cost is linear (BUG-023);
-    an opener with no closer ends the walk (re-probe 3, D7)."""
+    """Every HTML comment form ("<!-->", "<!--->", "<!-- ... -->", "<!-- ... --!>")
+    as a space, its newlines kept. Walked with find(), so the cost is linear
+    (BUG-023); an opener with no closer ends the walk (re-probe 3, D7)."""
     out = []
     pos = 0
+    closer = _nearest_closer(text, ("-->", "--!>"))
     while True:
         start = text.find("<!--", pos)
         if start < 0:
@@ -164,10 +205,10 @@ def _without_html_comments(text: str) -> str:
         elif text.startswith("->", start + 4):
             end = start + 6
         else:
-            close = text.find("-->", start + 4)
+            close, size = closer(start + 4)
             if close < 0:
                 break
-            end = close + 3
+            end = close + size
         out.append(text[pos:start] + " " + "\n" * text.count("\n", start, end))
         pos = end
     return "".join(out) + text[pos:]

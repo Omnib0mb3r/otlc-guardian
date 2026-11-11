@@ -84,7 +84,7 @@ export const INJECTION_PATTERNS = [
   // from one comment into the next. `pattern` is kept as a cheap
   // descriptor for callers that report `pattern.source`. `matchAll`
   // yields every hit, for scanChange().
-  { pattern: /<!--/,  ...commentMatcher("<!--", "-->"), severity: "MEDIUM", id: "GUARD-INJ-027" },
+  { pattern: /<!--/,  ...commentMatcher("<!--", "-->", "--!>"), severity: "MEDIUM", id: "GUARD-INJ-027" },
   { pattern: /\/\*/,  ...commentMatcher("/*", "*/"),    severity: "MEDIUM", id: "GUARD-INJ-028" },
 ];
 
@@ -92,25 +92,36 @@ export const INJECTION_PATTERNS = [
  * Builds a linear-time matcher for "comment containing a control word".
  * `match` returns the first such comment or null; `matchAll` yields each;
  * `spans` yields each with its offset.
- * @param {string} open  - comment opener, e.g. "<!--"
- * @param {string} close - comment closer, e.g. "-->"
+ * @param {string} open - comment opener, e.g. "<!--"
+ * @param {...string} closers - what ends the comment, e.g. "-->" and "--!>"; the nearest one does
  * @returns {{ match: (text: string) => string | null, matchAll: (text: string) => Generator<string>, spans: (text: string) => Generator<{ text: string, index: number }> }}
  */
-function commentMatcher(open, close) {
+function commentMatcher(open, ...closers) {
   const keyword = /ignore|override|system/i;
   /** Each hit with its offset, for scanChange(). */
   function* spans(text) {
     let pos = 0;
+    // Where each closer next stands: -2 not looked for yet, -1 nowhere
+    // from here on. A closer that is gone is never searched again, so a
+    // flood of openers stays linear (BUG-023).
+    const next = closers.map(() => -2);
     for (;;) {
       const start = text.indexOf(open, pos);
       if (start < 0) return;
-      const end = text.indexOf(close, start + open.length);
+      const from = start + open.length;
+      let end = -1;
+      let size = 0;
+      closers.forEach((close, k) => {
+        if (next[k] === -1) return;
+        if (next[k] < from) next[k] = text.indexOf(close, from);
+        if (next[k] >= 0 && (end < 0 || next[k] < end)) { end = next[k]; size = close.length; }
+      });
       // No closer anywhere after this opener means no later opener can
       // be closed either, so the search is over.
       if (end < 0) return;
-      const comment = text.slice(start, end + close.length);
+      const comment = text.slice(start, end + size);
       if (keyword.test(comment)) yield { text: comment, index: start };
-      pos = end + close.length;
+      pos = end + size;
     }
   }
   function* matchAll(text) {
@@ -142,8 +153,15 @@ function commentMatcher(open, close) {
 const INVISIBLE_UNICODE_PATTERN =
   /[\u00AD\u061C\u180E\u200B-\u200F\u2028-\u202F\u2060-\u2064\u2066-\u206F\uFEFF\u{E0000}-\u{E007F}]/u;
 
-const INVISIBLE_STRIP_PATTERN =
-  /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u2028-\u202F\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\u{E0000}-\u{E0FFF}]/gu;
+// STRIP is defined by Unicode property, not by a list (re-probe 4, E6):
+// every format character (General_Category Cf: zero-width and bidi
+// controls, the shorthand and musical format controls, interlinear
+// annotation marks, tag characters) and every Default_Ignorable code
+// point (fillers, variation selectors, the reserved ranges), plus the
+// line and paragraph separators and the narrow no-break space the old
+// list held. A hand-kept list missed U+1BCA0 to U+1BCA3, U+1D173 to
+// U+1D17A, U+FFF9 to U+FFFB and U+13430.
+const INVISIBLE_STRIP_PATTERN = /[\p{Cf}\p{Default_Ignorable_Code_Point}\u2028\u2029\u202F]/gu;
 
 const TAG_CHAR_PATTERN = /[\u{E0020}-\u{E007E}]/gu;
 
@@ -244,7 +262,8 @@ function decodeHtmlEntities(text) {
 // and join the words around them. An HTML comment holding only whitespace
 // or invisible characters renders as nothing between two words (BUG-071).
 const LINE_SEPARATORS    = /[\u0085\u2028\u2029]/g;
-const EMPTY_HTML_COMMENT = /<!--\s*-->/g;
+// "--!>" closes a comment too (the HTML parser's comment-end-bang state).
+const EMPTY_HTML_COMMENT = /<!--\s*--!?>/g;
 // C0 and C1 controls other than tab, newline, carriage return, vertical
 // tab and form feed, and the Braille blank: they render as nothing or as
 // a gap (re-probe 3, D7).
@@ -281,7 +300,7 @@ const INVISIBLE_CLASS = INVISIBLE_STRIP_PATTERN.source.slice(1, -1) + CONTROL_PA
 // HTML comment delimiters as the base view reads them: NFKC folds the
 // full-width and small forms to "<", "!", "-" and ">", and invisible
 // characters and controls between them are deleted. In the base view
-// these are exactly "<!--", "<!-->", "<!--->" and "-->"; the raw text
+// these are exactly "<!--", "<!-->", "<!--->", "-->" and "--!>"; the raw text
 // the change window weighs may spell them any of these ways. The classes
 // are disjoint, so each expression runs in linear time.
 const COMMENT_GAP   = `[${INVISIBLE_CLASS}]*`;
@@ -291,12 +310,12 @@ const COMMENT_DASH  = "[\\-\\uFE63\\uFF0D]";
 const COMMENT_GT    = "[>\\uFE65\\uFF1E]";
 const COMMENT_OPEN  = new RegExp(`${COMMENT_LT}${COMMENT_GAP}${COMMENT_BANG}${COMMENT_GAP}${COMMENT_DASH}${COMMENT_GAP}${COMMENT_DASH}`, "gu");
 const COMMENT_EMPTY = new RegExp(`${COMMENT_GAP}(?:${COMMENT_DASH}${COMMENT_GAP})?${COMMENT_GT}`, "uy");
-const COMMENT_CLOSE = new RegExp(`${COMMENT_DASH}${COMMENT_GAP}${COMMENT_DASH}${COMMENT_GAP}${COMMENT_GT}`, "gu");
+const COMMENT_CLOSE = new RegExp(`${COMMENT_DASH}${COMMENT_GAP}${COMMENT_DASH}${COMMENT_GAP}(?:${COMMENT_BANG}${COMMENT_GAP})?${COMMENT_GT}`, "gu");
 
 /**
  * Where each HTML comment in `text` starts and ends, as [start, end)
  * pairs in order: "<!-->" and "<!--->" (which HTML reads as empty
- * comments) and any "<!-- ... -->". An opener with no closer ends the
+ * comments) and any "<!-- ... -->" or "<!-- ... --!>". An opener with no closer ends the
  * walk and the rest reads as text. Each search starts where the last
  * comment ended, so the cost is linear (BUG-023).
  */
