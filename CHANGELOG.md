@@ -233,6 +233,13 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **`GUARD-SEC-001b` needs the key to start a word (BUG-083, runtime
+  half).** The runtime twin of the audit's SEC-001b had the same flaw:
+  `task-`, `disk-` or `risk-` plus 20 letters and digits was reported
+  as a legacy OpenAI key, and `guardOutput()` threw on a job id. The
+  staged scanner requires `sk-` at the start of a word. The Python port
+  (`security/injection_guard.py`) has the same change live.
+
 - **`claude mcp add -s project` asks (BUG-074, re-probe 5 F7).** E3 asks
   on any write to the project's `.mcp.json`, but Claude Code's own CLI
   writes it without naming it, so `claude mcp add -s project e -- node -e
@@ -906,8 +913,8 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
   legacy OpenAI pattern had no left boundary, so `task-`, `disk-` or
   `risk-` followed by 20 letters and digits (a job id) was reported
   CRITICAL as a hardcoded key. The audit rule now requires `sk-` at the
-  start of a word. The runtime pattern `GUARD-SEC-001b` is unchanged
-  until the staged scanner can be edited.
+  start of a word. The runtime pattern `GUARD-SEC-001b` has the same
+  boundary in the Python port; the Node scanner's is staged (below).
 
 - **The audit no longer reads `.claude/worktrees/` (BUG-081).** Claude
   Code keeps its git worktrees there, each a second checkout of the same

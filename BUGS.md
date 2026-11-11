@@ -1283,6 +1283,10 @@ Found by the silent sample for SEC-001b (gate plan step 0 item 2).
 
 Still open, which is why the status stays IN-PROGRESS: the runtime pattern `GUARD-SEC-001b` in `security/01-injection-guard.js` (and its copies in `staging/security/01-injection-guard.js` and `security/injection_guard.py`) has no left boundary either. The scanner is a protected file and `staging/` is frozen for re-probe 5, so none of the three was changed; the same boundary goes into staging and the Python port together once Lex names the re-probe report. Until then the audit and the runtime differ on `task-<32 hex>`: the audit is silent, `guardOutput()` still throws.
 
+**Runtime half (2026-11-10): Python port fixed live, Node scanner fixed in staging, not yet live.** `GUARD-SEC-001b` in `staging/security/01-injection-guard.js` and in `security/injection_guard.py` is `(?<![a-zA-Z0-9])sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}`, the audit rule's pattern. Tests in `tests/injection-guard.test.js`, "BUG-083: GUARD-SEC-001b needs the key to start a word": `task-`, `disk-` and `risk-` plus 32 hex digits are silent (three `stagedOnly` tests); a key in quotes, after `Bearer `, after `=` and after `:` fires (four tests, live and staged); the Python port test checks the same seven lines. Before the fix: the live suite 175 passed, 1 failed (the Python test); the staged suite 284 passed, 4 failed (the three silent tests and the Python test). After: live 176 passed, 0 failed; staged 288 passed, 0 failed. The live Node scanner `security/01-injection-guard.js` is a protected file and keeps the old pattern until staging is applied, so until then the audit, the Python port and the staged scanner are silent on `task-<32 hex>` and the live `guardOutput()` still throws. Docs: manual chapters 01, 02 and 03, CHANGELOG.
+
+Smoke test after applying: `guardOutput('const job = "task-550e8400e29b41d4a716446655440000";')` returns the text.
+
 ### BUG-084: Without `CLAUDE_PROJECT_DIR` the hook's project root is the session folder
 
 **Status:** IN-PROGRESS · **Found:** 2026-11-10

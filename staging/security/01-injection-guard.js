@@ -458,7 +458,8 @@ const SECRET_PATTERNS = [
   // historical keys still in circulation. Negative lookahead excludes
   // the provider-tagged variants so they're reported under their
   // specific label above rather than this generic one.
-  { pattern: /sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}/, label: "OpenAI API Key (legacy)", id: "GUARD-SEC-001b" },
+  // The key starts a word: task-, disk- and risk- ids are not keys (BUG-083).
+  { pattern: /(?<![a-zA-Z0-9])sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}/, label: "OpenAI API Key (legacy)", id: "GUARD-SEC-001b" },
   { pattern: /AIza[0-9A-Za-z\-_]{35}/,                 label: "Google API Key",     id: "GUARD-SEC-002" },
   { pattern: /ghp_[a-zA-Z0-9]{36}/,                    label: "GitHub Token",       id: "GUARD-SEC-003" },
   { pattern: /gho_[a-zA-Z0-9]{36}/,                    label: "GitHub OAuth Token", id: "GUARD-SEC-004" },

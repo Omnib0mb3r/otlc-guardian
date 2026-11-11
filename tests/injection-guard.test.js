@@ -1206,6 +1206,35 @@ describe("BUG-076: a quoted key is still a password or API key literal", () => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// BUG-083: a legacy OpenAI key starts a word
+// ---------------------------------------------------------------------------
+//
+// GUARD-SEC-001b had no left boundary, so "task-" (or disk-, risk-) plus 20
+// letters and digits, a job id, was reported as an OpenAI key and
+// guardOutput() threw on it. The audit twin SEC-001b was fixed first; this
+// is the runtime half. Key-shaped values are built at run time so this
+// file carries none.
+
+const BUG083_HEX = "550e8400e29b41d4" + "a716446655440000";
+const BUG083_KEY = "sk-" + "a1B2c3D4e5".repeat(3);
+const BUG083_SILENT = ["task", "disk", "risk"].map((word) => `const job = "${word}-${BUG083_HEX}";`);
+const BUG083_FIRING = [`const key = "${BUG083_KEY}";`, `Authorization: Bearer ${BUG083_KEY}`, `OPENAI_API_KEY=${BUG083_KEY}`, `key:${BUG083_KEY}`];
+
+describe("BUG-083: GUARD-SEC-001b needs the key to start a word", () => {
+  const ids = (text) => scan(text, "secrets").violations.map((v) => v.id);
+  for (const line of BUG083_SILENT) {
+    stagedOnly(`silent: ${line}`, () => {
+      assert.ok(!ids(line).includes("GUARD-SEC-001b"), `GUARD-SEC-001b fired on ${line}`);
+    });
+  }
+  for (const line of BUG083_FIRING) {
+    test(`fires: ${line.replace(BUG083_KEY, "<key>")}`, () => {
+      assert.ok(ids(line).includes("GUARD-SEC-001b"), "GUARD-SEC-001b must fire");
+    });
+  }
+});
+
 describe("BUG-049 / BUG-050: the Python port agrees (security/injection_guard.py)", () => {
   // The Python port is not a protected file, so its half of these fixes is live.
   const SECURITY_DIR = new URL("../security/", import.meta.url);
@@ -1268,6 +1297,15 @@ describe("BUG-049 / BUG-050: the Python port agrees (security/injection_guard.py
     `firing = ${JSON.stringify(BUG076_FIRING)}`,
     `silent = ${JSON.stringify(BUG076_SILENT).replace(/\bnull\b/g, "null")}`,
     "bad = [t for t, i in firing if i not in ids(t)] + [t for t in silent if ids(t) & {'GUARD-SEC-008', 'GUARD-SEC-009'}]",
+    "assert not bad, bad",
+  ].join("\n"));
+
+  py("BUG-083: a legacy OpenAI key starts a word; a task id is not a key", [
+    "from injection_guard import scan",
+    "def ids(t): return {v.id for v in scan(t, mode='secrets')}",
+    `silent = ${JSON.stringify(BUG083_SILENT)}`,
+    `firing = ${JSON.stringify(BUG083_FIRING)}`,
+    "bad = [t for t in silent if 'GUARD-SEC-001b' in ids(t)] + [t for t in firing if 'GUARD-SEC-001b' not in ids(t)]",
     "assert not bad, bad",
   ].join("\n"));
 

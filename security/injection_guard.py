@@ -285,7 +285,7 @@ def _inline_value(key: str) -> re.Pattern[str]:
 SECRET_PATTERNS: list[SecretPattern] = [
     SecretPattern("GUARD-SEC-001",  re.compile(r"sk-proj-[a-zA-Z0-9_-]{20,}"),          "OpenAI Project API Key"),
     SecretPattern("GUARD-SEC-010",  re.compile(r"sk-ant-(?:api|oat|admin)\d{2}-[a-zA-Z0-9_-]{20,}"),  "Anthropic API Key"),
-    SecretPattern("GUARD-SEC-001b", re.compile(r"sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}"), "OpenAI API Key (legacy)"),
+    SecretPattern("GUARD-SEC-001b", re.compile(r"(?<![a-zA-Z0-9])sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}"), "OpenAI API Key (legacy)"),
     SecretPattern("GUARD-SEC-002",  re.compile(r"AIza[0-9A-Za-z\-_]{35}"),              "Google API Key"),
     SecretPattern("GUARD-SEC-003",  re.compile(r"ghp_[a-zA-Z0-9]{36}"),                 "GitHub Token"),
     SecretPattern("GUARD-SEC-004",  re.compile(r"gho_[a-zA-Z0-9]{36}"),                 "GitHub OAuth Token"),

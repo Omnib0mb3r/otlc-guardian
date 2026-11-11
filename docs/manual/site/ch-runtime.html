@@ -195,7 +195,7 @@
 <div class="tbl dense"><table><thead><tr><th>Id</th><th>Label</th><th>Matches</th></tr></thead><tbody>
 <tr><td><code>GUARD-SEC-001</code></td><td>OpenAI Project API Key</td><td><code>sk-proj-</code> then 20+ letters, digits, <code>_</code> or <code>-</code>.</td></tr>
 <tr><td><code>GUARD-SEC-010</code></td><td>Anthropic API Key</td><td><code>sk-ant-</code> then <code>api</code>, <code>oat</code> or <code>admin</code>, two digits, <code>-</code>, 20+ key characters.</td></tr>
-<tr><td><code>GUARD-SEC-001b</code></td><td>OpenAI API Key (legacy)</td><td><code>sk-</code> then 20+ alphanumerics, with a lookahead that skips the two tagged forms above.</td></tr>
+<tr><td><code>GUARD-SEC-001b</code></td><td>OpenAI API Key (legacy)</td><td><code>sk-</code> then 20+ alphanumerics, with a lookahead that skips the two tagged forms above. Live, the <code>sk-</code> may end a longer word, so <code>task-</code>, <code>disk-</code> or <code>risk-</code> plus 20 letters and digits (a job id) is reported as a key (BUG-083, fix staged in staging/, not yet live: the <code>sk-</code> must start a word; the Python port has the boundary live).</td></tr>
 <tr><td><code>GUARD-SEC-002</code></td><td>Google API Key</td><td><code>AIza</code> then exactly 35 key characters.</td></tr>
 <tr><td><code>GUARD-SEC-003</code></td><td>GitHub Token</td><td><code>ghp_</code> then 36 alphanumerics.</td></tr>
 <tr><td><code>GUARD-SEC-004</code></td><td>GitHub OAuth Token</td><td><code>gho_</code> then 36 alphanumerics.</td></tr>
