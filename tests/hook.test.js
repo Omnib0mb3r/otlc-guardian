@@ -3425,6 +3425,105 @@ describe("PreToolUse hook - claude mcp add for the project scope asks (re-probe 
 });
 
 // ---------------------------------------------------------------------------
+// BUG-085: the shell reader drops text that bash runs
+// ---------------------------------------------------------------------------
+//
+// lexShell() leaves comments and heredoc bodies out of its tokens. Where
+// bash reads the text differently, the command behind it was never seen,
+// and onlyReads() called the whole command read-only, so even the name
+// check was silent. Real effect of each bash form in a scratch project
+// (bash 5.2): .claude/hooks deleted. The PowerShell forms were checked
+// with Write-Output in Windows PowerShell 5.1.
+
+describe("PreToolUse hook - text the shell runs is never dropped as a comment or a heredoc body (BUG-085)", () => {
+  const run = (command, { mode, tool = "Bash" } = {}) => withTempProject((dir) => {
+    for (const rel of [".claude/settings.json", ".claude/hooks/injection-guard-hook.mjs", "security/01-injection-guard.js", "src/a.js", "x"]) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), rel.endsWith(".json") ? "{}" : "x\n");
+    }
+    mkdirSync(path.join(dir, "notes"));
+    writeFileSync(path.join(dir, "notes", "x.md"), `${CRITICAL_PAYLOAD}\n`);
+    return runHook(PRE_HOOK, { tool_name: tool, cwd: dir, tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) },
+      { CLAUDE_PROJECT_DIR: dir });
+  });
+
+  // The same forms in front of a copy into a watched file. Where the
+  // reader now sees the copy, its content is judged; where it cannot be
+  // sure what it left out, the command asks.
+  for (const [label, command, tool] of [
+    ["a copy in an unquoted heredoc's $( )", "cat <<EOF\n$(cp notes/x.md CLAUDE.md)\nEOF"],
+    ["a copy after an escaped quote inside $' '", "echo $'\\'' ; cp notes/x.md CLAUDE.md ; echo $'\\''"],
+    ["a copy after a PowerShell block comment", "Get-Content x <# c #> ; Copy-Item notes/x.md CLAUDE.md", "PowerShell"],
+  ]) {
+    stagedOnly(`denies: ${label}`, () => {
+      const out = run(command, { tool });
+      assert.equal(decisionOf(out), "deny", `${JSON.stringify(command)} -> ${out.slice(0, 200) || "(silent)"}`);
+      assert.match(out, /GUARD-INJ-001/);
+    });
+  }
+  for (const [label, command] of [
+    ["a copy after # inside (( ))", "(( # )) ; cp notes/x.md CLAUDE.md"],
+    ["a copy after # inside ${ }", "echo ${x/ #/y} ; cp notes/x.md CLAUDE.md"],
+    ["a copy after a quote inside \"${ }\"", "echo \"${x:-\"'\"}\" ; cp notes/x.md CLAUDE.md ; echo \"'\""],
+  ]) {
+    stagedOnly(`asks: ${label}`, () => {
+      const out = run(command);
+      assert.equal(decisionOf(out), "ask", `${JSON.stringify(command)} -> ${out.slice(0, 200) || "(silent)"}`);
+      assert.match(out, /could not read all of it for certain/);
+    });
+  }
+  stagedOnly("silent: the same form with no watched or guarded name", () => {
+    expectSilent(run("(( # )) ; cp src/a.js src/b.js", { mode: "bypassPermissions" }));
+  });
+
+  for (const [label, command, tool] of [
+    // An unquoted heredoc is expanded: its substitutions run.
+    ["a $( ) in an unquoted heredoc", "cat <<EOF\n$(rm -rf .claude/hooks)\nEOF"],
+    ["backticks in an unquoted heredoc", "cat <<EOF\n`rm -rf security/`\nEOF"],
+    ["a $( ) in a <<- heredoc", "cat <<-EOF\n\t$(npx rimraf .claude/hooks)\n\tEOF"],
+    ["a $( ) inside ${ } in an unquoted heredoc", "cat <<EOF\n${x:-$(rm -rf .claude/hooks)}\nEOF"],
+    // A "#" that is not a comment to bash.
+    ["# inside ${ }", "echo ${x/ #/y} ; rm -rf .claude/hooks"],
+    ["# inside ${ }, an unparsed deleter", "echo ${x/ #/y} ; npx rimraf .claude/hooks"],
+    ["# inside \"${ \" \"}\"", "echo \"${x:-\" # \"}\" ; rm -rf .claude/hooks"],
+    ["# inside (( ))", "(( # )) ; rm -rf .claude/hooks"],
+    ["# inside $' ' after an escaped quote", "echo $'\\' #' ; rm -rf .claude/hooks"],
+    ["# after an escaped backtick inside backticks", "echo `echo \\` # \\`` ; rm -rf .claude/hooks"],
+    // A "<<" that is a shift, and a quote that $'...' escapes.
+    ["<< inside $[ ]", "echo $[ 1 << 2 ]\nrm -rf .claude/hooks\n2"],
+    ["an escaped quote inside $' '", "echo $'\\'' ; rm -rf .claude/hooks ; echo $'\\''"],
+    ["a quote inside \"${ }\" that opens a string of its own", "echo \"${x:-\"'\"}\" ; rm -rf .claude/hooks ; echo \"'\""],
+    // PowerShell: a block comment ends at #>, and inside a word <# is text.
+    ["a PowerShell block comment", "Get-Content x <# c #> ; Remove-Item -Recurse .claude/hooks", "PowerShell"],
+    ["<# inside a PowerShell word", "Get-Content x<#c#> ; Remove-Item -Recurse .claude/hooks", "PowerShell"],
+  ]) {
+    stagedOnly(`asks: ${label}`, () => {
+      const out = run(command, { tool });
+      assert.equal(decisionOf(out), "ask", `${JSON.stringify(command)} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  // What bash and PowerShell really leave out stays out.
+  for (const [label, command, tool] of [
+    ["a quoted heredoc is not expanded", "cat <<'EOF'\n$(rm -rf .claude/hooks)\nEOF"],
+    ["an escaped heredoc delimiter is not expanded", "cat <<\\EOF\n$(rm -rf .claude/hooks)\nEOF"],
+    ["an escaped $( in an unquoted heredoc", "cat <<EOF\n\\$(rm -rf .claude/hooks)\nEOF"],
+    ["plain text in an unquoted heredoc", "cat <<EOF\nnotes on .claude/hooks\nEOF"],
+    ["a comment after a read", "cat .claude/settings.json # the hook settings"],
+    ["a comment after a closed ${ }", "echo \"${HOME}\" ${USER} # .claude/hooks"],
+    ["a comment in a subshell", "( cat .claude/settings.json # read it\n)"],
+    ["a comment after a test", "[ -f .claude/settings.json ] # is it there"],
+    ["$' ' with an escape, then a read", "echo $'a\\tb' && cat .claude/settings.json"],
+    ["a PowerShell line comment", "Get-Content .claude/settings.json # read it", "PowerShell"],
+    ["a PowerShell block comment after a read", "Get-Content .claude/settings.json <# read it #>", "PowerShell"],
+  ]) {
+    stagedOnly(`silent: ${label}`, () => {
+      expectSilent(run(command, { mode: "bypassPermissions", tool }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

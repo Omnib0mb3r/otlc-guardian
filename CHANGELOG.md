@@ -233,6 +233,19 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Text the shell runs is never dropped as a comment or a heredoc body
+  (BUG-085).** The command reader leaves comments and heredoc bodies out,
+  and where bash read the text differently a command behind it was never
+  seen: a `$(...)` in an unquoted heredoc (`cat <<EOF`), a `#` inside
+  `${x/ #/y}` or `(( # ))`, an escaped quote inside `$'...'`, an
+  escaped backtick, a PowerShell `<# ... #>` comment. Each hid a delete
+  of `.claude/hooks` from every check. The reader now returns the
+  substitutions of an unquoted heredoc, reads `$'...'`, backtick escapes
+  and PowerShell block comments as the shell does, and marks a command
+  as not read for certain when it leaves text out inside brackets; such
+  a command is never taken as read-only, and asks when it names a
+  watched instruction file.
+
 - **`GUARD-SEC-001b` needs the key to start a word (BUG-083, runtime
   half).** The runtime twin of the audit's SEC-001b had the same flaw:
   `task-`, `disk-` or `risk-` plus 20 letters and digits was reported

@@ -1501,7 +1501,9 @@ function bareWordText(text, dialect) {
     }
     pipeline = [];
   };
-  for (const tok of lexShell(text, dialect).tokens) {
+  const { tokens, uncertain } = lexShell(text, dialect);
+  if (uncertain) return text;
+  for (const tok of tokens) {
     if (tok.word !== undefined) stage.push(tok);
     else if (PIPE_OPERATORS.has(tok.op)) endStage();
     else if (CONTROL_OPERATORS.has(tok.op)) endPipeline();
@@ -1636,11 +1638,15 @@ function findOnlyReads(args, dialect, depth) {
   return true;
 }
 
-/** Whether every stage of a command is a known read-only command with no redirect to a file. */
+/**
+ * Whether every stage of a command is a known read-only command with no
+ * redirect to a file. A command the reader left text out of without being
+ * sure the shell does too (lexShell(), `uncertain`) is not known to.
+ */
 function onlyReads(command, dialect, depth = 0) {
   if (depth > MAX_SHELL_DEPTH) return false;
-  const { tokens, subs } = lexShell(command, dialect);
-  if (!subs.every((s) => onlyReads(s, dialect, depth + 1))) return false;
+  const { tokens, subs, uncertain } = lexShell(command, dialect);
+  if (uncertain || !subs.every((s) => onlyReads(s, dialect, depth + 1))) return false;
   let words = [];
   const stageReads = () => {
     let w = words.filter((x) => x !== "");
@@ -1704,23 +1710,47 @@ function closingParen(text, from) {
   return text.length;
 }
 
+/** Index just past the "`" that closes a backtick substitution opened before `from`. A backslash escapes. */
+function closingBacktick(text, from) {
+  for (let i = from; i < text.length; i++) {
+    if (text[i] === "\\") i++;
+    else if (text[i] === "`") return i + 1;
+  }
+  return text.length;
+}
+
 // How each dialect quotes and escapes.
 //   bash        a backslash escapes any character outside quotes, and only
-//               $ ` " \ and newline inside double quotes.
+//               $ ` " \ and newline inside double quotes. In $'...' a
+//               backslash escapes everything, the quote included.
 //   powershell  a backtick escapes everywhere; a backslash is the path
-//               separator. No backtick substitution.
+//               separator. No backtick substitution. <# ... #> is a
+//               comment where a word could start, and text inside a word.
 //   cmd         a caret escapes outside double quotes and nothing escapes
 //               inside them. A single quote is an ordinary character, and
 //               there is no command substitution and no comment character.
 const DIALECTS = {
-  bash:       { esc: "\\", quotedEsc: /[$`"\\\n]/, single: true,  subs: true,  backticks: true,  comments: true },
-  powershell: { esc: "`",  quotedEsc: /[\s\S]/,   single: true,  subs: true,  backticks: false, comments: true },
-  cmd:        { esc: "^",  quotedEsc: null,       single: false, subs: false, backticks: false, comments: false },
+  bash:       { esc: "\\", quotedEsc: /[$`"\\\n]/, single: true,  subs: true,  backticks: true,  comments: true,  ansiC: true,  blockComments: false },
+  powershell: { esc: "`",  quotedEsc: /[\s\S]/,   single: true,  subs: true,  backticks: false, comments: true,  ansiC: false, blockComments: true },
+  cmd:        { esc: "^",  quotedEsc: null,       single: false, subs: false, backticks: false, comments: false, ansiC: false, blockComments: false },
 };
 
 /**
+ * Splits a command into words and operators.
+ *
+ * Two kinds of text get no token: a comment, and a heredoc body. That is
+ * only right where the shell leaves them out too, so (BUG-085):
+ *   - a heredoc with an unquoted delimiter is expanded by the shell, and
+ *     the substitutions in its body are returned in `subs`;
+ *   - a "#" or a "<<" inside brackets may be something else: ${x/ #/y},
+ *     (( # )), a[ # ]=1, $[ 1 << 2 ]. Brackets are not parsed here, so
+ *     what is left out there is marked: `uncertain` is true, and no
+ *     caller may then take the command for one that only reads. The same
+ *     mark is set when a double-quoted string ends inside ${ }, where the
+ *     shell may read the quotes differently.
+ *
  * @param {"bash"|"powershell"|"cmd"} dialect - see DIALECTS
- * @returns {{ tokens: Array<{word: string, start: number, end: number}|{op: string, start: number, end: number}>, subs: string[] }}
+ * @returns {{ tokens: Array<{word: string, start: number, end: number}|{op: string, start: number, end: number}>, subs: string[], heredocs: string[], uncertain: boolean }}
  *   start and end are the token's place in the text; subs is the text of
  *   each $( ) and backtick substitution, for recursion; heredocs is the
  *   body of each heredoc, in the order of their << operators
@@ -1735,21 +1765,48 @@ function lexShell(text, dialect = "bash") {
   let word = null;
   let wordStart = 0; // where the current word's raw text starts
   let expectDelimiter = null;
+  let dollarAt = -1; // where the last unquoted, unescaped "$" stands
+  // Open brackets that can hold a "#" or a "<<" as ordinary text: ${ },
+  // [ ], and a "(" that is not a plain subshell ("((", or one stuck to a
+  // word: x=(, @(, f().
+  let braces = 0;
+  let brackets = 0;
+  let parens = 0;
+  let uncertain = false;
+  const nested = () => braces > 0 || brackets > 0 || parens > 0;
 
   const flush = () => {
     if (word === null) return;
     if (expectDelimiter) {
-      heredocs.push({ delimiter: word, strip: expectDelimiter === "<<-" });
+      // Any quoting in the delimiter (<<'EOF', <<\EOF) keeps the body as written.
+      heredocs.push({ delimiter: word, strip: expectDelimiter === "<<-", expands: !/['"\\]/.test(text.slice(wordStart, i)) });
       expectDelimiter = null;
     }
     tokens.push({ word, start: wordStart, end: i });
     word = null;
   };
+  // In a backtick substitution \` \\ and \$ are the character itself.
+  const backtickBody = (raw) => raw.replace(/\\([`\\$])/g, "$1");
   const substitution = (start, isBacktick) => {
-    const end = isBacktick ? (text.indexOf("`", start) < 0 ? text.length : text.indexOf("`", start) + 1) : closingParen(text, start);
-    subs.push(text.slice(start, isBacktick ? end - 1 : end - 1));
+    const end = isBacktick ? closingBacktick(text, start) : closingParen(text, start);
+    subs.push(isBacktick ? backtickBody(text.slice(start, end - 1)) : text.slice(start, end - 1));
     word = `${word ?? ""}$`;
     return end;
+  };
+  /** The substitutions the shell runs when it expands an unquoted heredoc body. */
+  const expansions = (body) => {
+    for (let k = 0; k < body.length; k++) {
+      if (body[k] === ESC) k++;
+      else if (body.startsWith("$(", k)) {
+        const end = closingParen(body, k + 2);
+        subs.push(body.slice(k + 2, end - 1));
+        k = end - 1;
+      } else if (d.backticks && body[k] === "`") {
+        const end = closingBacktick(body, k + 1);
+        subs.push(backtickBody(body.slice(k + 1, end - 1)));
+        k = end - 1;
+      }
+    }
   };
 
   let i = 0;
@@ -1759,6 +1816,12 @@ function lexShell(text, dialect = "bash") {
     if (ch === ESC) {
       if (text[i + 1] !== "\n") word = `${word ?? ""}${text[i + 1] ?? ""}`;
       i += 2;
+    } else if (d.ansiC && ch === "'" && dollarAt === i - 1 && i > 0) {
+      // $'...': the body with its escapes decoded, in place of the "$".
+      let end = i + 1;
+      while (end < text.length && text[end] !== "'") end += text[end] === "\\" ? 2 : 1;
+      word = `${word.slice(0, -1)}${decodeAnsiC(text.slice(i + 1, end))}`;
+      i = end + 1;
     } else if (d.single && ch === "'") {
       const end = text.indexOf("'", i + 1);
       const stop = end < 0 ? text.length : end;
@@ -1771,14 +1834,31 @@ function lexShell(text, dialect = "bash") {
         if (d.quotedEsc && text[i] === ESC && i + 1 < text.length && d.quotedEsc.test(text[i + 1])) { if (text[i + 1] !== "\n") word += text[i + 1]; i += 2; }
         else if (d.subs && text.startsWith("$(", i)) i = substitution(i + 2, false);
         else if (d.backticks && text[i] === "`") i = substitution(i + 1, true);
-        else word += text[i++];
+        else {
+          // ${ } may hold quotes of its own, so it can outlast this string.
+          if (text.startsWith("${", i)) braces++;
+          else if (text[i] === "}" && braces > 0) braces--;
+          word += text[i++];
+        }
       }
+      // To the shell a quote inside "${ }" opens a string of its own
+      // ("${x:-"'"}"), so this one may not have ended here.
+      if (braces > 0) uncertain = true;
       i++;
     } else if (d.subs && text.startsWith("$(", i)) {
       i = substitution(i + 2, false);
     } else if (d.backticks && ch === "`") {
       i = substitution(i + 1, true);
+    } else if (d.blockComments && text.startsWith("<#", i)) {
+      if (word === null) {
+        const end = text.indexOf("#>", i + 2);
+        i = end < 0 ? text.length : end + 2;
+      } else {
+        word += "<#";
+        i += 2;
+      }
     } else if (d.comments && ch === "#" && word === null) {
+      if (nested()) uncertain = true;
       while (i < text.length && text[i] !== "\n") i++;
     } else if (ch === " " || ch === "\t" || ch === "\r") {
       flush();
@@ -1786,20 +1866,30 @@ function lexShell(text, dialect = "bash") {
     } else {
       const op = SHELL_OPERATORS.find((o) => text.startsWith(o, i));
       if (!op) {
+        if (ch === "$") dollarAt = i;
+        else if (ch === "{" && dollarAt === i - 1 && i > 0) braces++;
+        else if (ch === "}" && braces > 0) braces--;
+        else if (ch === "[") brackets++;
+        else if (ch === "]" && brackets > 0) brackets--;
         word = `${word ?? ""}${ch}`;
         i++;
         continue;
       }
+      if (op === "(" && (word !== null || text[i + 1] === "(" || text[i - 1] === "(")) parens++;
+      else if (op === ")" && parens > 0) parens--;
       if (word !== null && /^\d+$/.test(word) && /^[<>]/.test(op)) word = null; // "2>" is one redirect
       else flush();
       tokens.push({ op, start: i, end: i + op.length });
       i += op.length;
-      if (op === "<<" || op === "<<-") expectDelimiter = op;
+      if (op === "<<" || op === "<<-") {
+        expectDelimiter = op;
+        if (nested()) uncertain = true;
+      }
       if (op === "\n") {
         // Heredoc bodies start on the next line and are data: no tokens.
         // Each is kept, because fed to an interpreter or a shell it is
         // that program's script (re-probe 5, F5).
-        for (const { delimiter, strip } of heredocs.splice(0)) {
+        for (const { delimiter, strip, expands } of heredocs.splice(0)) {
           const lines = [];
           for (;;) {
             const eol = text.indexOf("\n", i);
@@ -1810,12 +1900,13 @@ function lexShell(text, dialect = "bash") {
             if (eol < 0) break;
           }
           bodies.push(lines.join("\n"));
+          if (expands && d.subs) expansions(bodies.at(-1));
         }
       }
     }
   }
   flush();
-  return { tokens, subs, heredocs: bodies };
+  return { tokens, subs, heredocs: bodies, uncertain };
 }
 
 /** Path-like words in text the hook cannot parse (inline interpreter code). */
@@ -1829,14 +1920,16 @@ function pathLikeWords(text) {
  *
  * @param {string} command
  * @param {string} cwd - the session's working directory
- * @param {{ decoded: string[], filters: Array, quiet: string[], root?: string }} found -
+ * @param {{ decoded: string[], filters: Array, quiet: string[], root?: string, uncertain?: boolean }} found -
  *   collects, across nested shells: `decoded`, the text of each script the
  *   command carries encoded (powershell -EncodedCommand), scanned with the
  *   command text (BUG-067); `filters`, the line filters that "filter:N"
  *   sources name; `quiet`, the [start, end) places in the top-level
  *   command text of filter patterns, which never land and are left out of
  *   the command-text scan (BUG-044). `root`, the project root, is read by
- *   findWrites() (re-probe 3, D6)
+ *   findWrites() (re-probe 3, D6). `uncertain` is set when lexShell()
+ *   left text out of the command, or of a shell nested in it, without
+ *   being sure the shell does too (BUG-085)
  * @returns {Map<string, { sources: Set<string>, append: boolean }>}
  *   absolute target -> absolute source files. A source prefixed "patch:"
  *   is a patch file, of which only the added lines land; "filter:N" is
@@ -1874,7 +1967,8 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
   const filter = (inputs, apply) => `filter:${found.filters.push({ inputs, apply }) - 1}`;
   const ctx = { add, abs, recurse, dialect, decoded: found.decoded, quiet: [], filter, root: found.root };
 
-  const { tokens, subs, heredocs } = lexShell(command, dialect);
+  const { tokens, subs, heredocs, uncertain } = lexShell(command, dialect);
+  if (uncertain) found.uncertain = true;
   for (const sub of subs) recurse(sub, cwd);
   if (dialect === "powershell") {
     // [IO.File]::WriteAllText('CLAUDE.md', ...): the path is an argument
@@ -3076,6 +3170,18 @@ process.stdin.on("end", () => {
     const written = bashWrites.filter(isWatched);
     const watched = [...written, ...write.targets.filter(isWatched)];
     if (watched.length === 0) emitVerdict(findings);
+
+    // ── A command the reader could not place for certain (BUG-085) ────
+    // lexShell() left text out inside brackets, or a string ended inside
+    // ${ }, where the shell may read it otherwise. A copy into the
+    // watched path this command names can sit in that text unread, so a
+    // person confirms the command.
+    if (shellRead.uncertain) {
+      record(confirmOrDeny,
+        `${TAG} This command names ${safeEchoPath(watched[0], 120)}, which agents load as instructions, and Guardian ` +
+        `could not read all of it for certain: a "#" or "<<" inside brackets, or a quote inside "\${ }", can hide ` +
+        `a command from it. Write the command without that form, or approve only if you know what it does.${bypassNote}`);
+    }
 
     // ── Content a shell command copies into a watched file ────────────
     // cp, cat > file, tee, git apply: the payload is in the source file,

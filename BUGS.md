@@ -96,6 +96,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-082 | SMOKE-TESTING | Audit `INJ-002` (innerHTML) fires on a comparison (`a.innerHTML === b.innerHTML`) and misses `innerHTML +=` |
 | BUG-083 | IN-PROGRESS | Audit `SEC-001b` (legacy OpenAI key) fires on any word ending in `sk-` plus 20 alphanumerics, e.g. `task-<32 hex>` |
 | BUG-084 | IN-PROGRESS | Hook without `CLAUDE_PROJECT_DIR` takes the session folder as the project root: from `src/` the project's `.mcp.json` and Guardian's files one level up are not judged |
+| BUG-085 | IN-PROGRESS | HIGH (staged hook): the shell reader drops text that bash runs (a `$(...)` in a heredoc, a `#` that is no comment, an escaped quote in `$'...'`), so a delete of Guardian's files behind it is silent |
 
 <!-- INDEX END -->
 
@@ -1305,5 +1306,35 @@ Cause: the main handler's `projectRoot = CLAUDE_PROJECT_DIR || data.cwd || proce
 Tests: `tests/hook.test.js`, "the project root without CLAUDE_PROJECT_DIR (re-probe 5, F6)": for a project marked by `.claude` and one marked by `.git`, a Write of `../.mcp.json` and `echo {} > ../.mcp.json` from `src/`, `npx rimraf ../../security` from `src/a/` and `npx rimraf security` from the root ask; `npx rimraf ../../.claude/settings.json` from `src/a/` asks; `npx rimraf security` from `src/` and a Write of `src/.mcp.json` are silent; with neither marker above, the session folder stays the root. 9 failed before the fix (864 passed); 873 passed, 0 failed after. Lex's regress harness: no line changed.
 
 Smoke test after applying: start the hook by hand with `CLAUDE_PROJECT_DIR` unset and `cwd` set to a project's `src` folder, with a Write of `../.mcp.json` as the payload; the output is an ask.
+
+### BUG-085: The shell reader drops text that bash runs
+
+**Status:** IN-PROGRESS · **Found:** 2026-11-10
+
+Found by the worker while reproducing F1b (the follow-up to re-probe 5), staged hook at 99a82f7. `lexShell()` leaves a comment and a heredoc body out of its tokens, and it reads quotes its own way. Where bash reads the same text differently, a command behind it is never seen by the readers, and `onlyReads()` calls the whole command read-only, so the guarded-name check (D1) stays silent too. Each form below is silent in both modes, and each deleted `.claude/hooks` when run by bash 5.2 in a scratch project (the PowerShell forms were checked with `Write-Output` in Windows PowerShell 5.1):
+
+- A substitution in a heredoc with an unquoted delimiter, which bash expands: `cat <<EOF`, then `$(rm -rf .claude/hooks)`, then `EOF`; the same with backticks. With `<<'EOF'` bash prints the line and runs nothing.
+- A `#` that the reader takes for a comment and bash does not: `echo ${x/ #/y} ; rm -rf .claude/hooks`, `echo "${x:-" # "}" ; rm -rf .claude/hooks`, `(( # )) ; rm -rf .claude/hooks`, `echo $'\' #' ; rm -rf .claude/hooks`, and a backtick substitution that holds an escaped backtick before the `#`.
+- A `<<` that is a shift, not a heredoc: `echo $[ 1 << 2 ]` with `rm -rf .claude/hooks` on the next line is read as a heredoc body that runs to a line holding `2`.
+- An escaped quote inside `$'...'`: `echo $'\'' ; rm -rf .claude/hooks ; echo $'\''` is read as one quoted string.
+- PowerShell: `Get-Content x <# c #> ; Remove-Item -Recurse .claude/hooks` (a block comment ends at `#>`; the reader dropped the rest of the line), and `Get-Content x<#c#> ; Remove-Item -Recurse .claude/hooks` (inside a word `<#` is text).
+
+Already asking, for reference: `a[ # ]=x ; rm -rf .claude/hooks` and `echo {#,x} ; rm -rf .claude/hooks`.
+
+**Fix in staging (2026-11-11), not yet live.** `staging/hooks/injection-guard-hook.mjs`, `lexShell()`:
+
+- A heredoc whose delimiter has no quoting is expanded by the shell, so the `$( )` and backtick substitutions in its body are returned in `subs` and read as commands like any other substitution (`expansions()`; a backslash before `$(` keeps it text). A quoted delimiter (`<<'EOF'`, `<<\EOF`) keeps the body as data.
+- `$'...'` is read as bash reads it: a backslash escapes, the quote included, and the word holds the decoded text (`decodeAnsiC()`).
+- A backtick substitution ends at the first backtick that is not escaped (`closingBacktick()`), and `\``, `\\` and `\$` inside it are the character itself.
+- PowerShell: `<#` where a word could start is a block comment up to `#>`; inside a word it is text.
+- The reader does not parse brackets, so it cannot tell `${x/ #/y}`, `(( # ))`, `a[ # ]=1` or `$[ 1 << 2 ]` from a comment or a heredoc. It counts what is open (`${`, `[`, and a `(` that is not a plain subshell: `((`, or one stuck to a word) and, when it leaves out a comment or a heredoc body while something is open, or a double-quoted string ends inside `${ }`, it returns `uncertain: true`. `onlyReads()` is then false, so a guarded name in the command asks (D1); `bareWordText()` blanks nothing; and when the command names a watched instruction file the main handler asks, because a copy into that file can sit in the text that was left out ("could not read all of it for certain").
+
+Tests: `tests/hook.test.js`, "text the shell runs is never dropped as a comment or a heredoc body (BUG-085)": 15 forms in front of a delete of `.claude/hooks` or `security/` ask; in front of a copy of a payload into `CLAUDE.md`, 3 are denied on content and 3 ask as not read for certain; `(( # )) ; cp src/a.js src/b.js` is silent; 11 commands that bash and PowerShell really leave out stay silent in bypass mode (a quoted heredoc, an escaped `$(`, a comment after a read, in a subshell, after a closed `${ }`, a PowerShell line and block comment). Before the fix, against the hook at 99a82f7: 906 passed, 21 failed (every ask and deny above). After: 927 passed, 0 failed. Lex's regress harness (123 lines): no line changed.
+
+Cost: a comment or a heredoc inside an array assignment (`x=( a # first` on one line, `b )` on the next), inside `$[ ]` or after an unclosed `[`, and a quoted default inside a quoted `${ }` (`"${X:-"a b"}"`), make a command that names a guarded or watched file ask. A command that names neither is not affected.
+
+Limit that stays: PowerShell here-strings (`@'` to `'@`) are read as ordinary quotes. No silent form was found (a here-string body with one quote in it leaves the next line starting with a quoted word, which is not a read-only command), but it is not modelled.
+
+Smoke test after applying: in a scratch project ask Claude to run the three lines `cat <<EOF`, `$(rm -rf .claude/hooks)`, `EOF` as one Bash command (a Guardian prompt; decline).
 
 <!-- DETAILS END -->
