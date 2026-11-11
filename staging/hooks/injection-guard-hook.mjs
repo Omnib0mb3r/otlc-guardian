@@ -3728,6 +3728,18 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   const stdin = [...input.pipeIn, ...input.reads];
   const scripts = input.scripts ?? [];
   let words = allWords.filter((w) => w !== "");
+  // A PowerShell script block is code the stage runs: each is read as a
+  // command of its own, with the stage's stdin (cost (c)).
+  if (ctx.dialect === "powershell" && words.some((w) => /[{}]/.test(w))) {
+    const commands = scriptBlockCommands(words);
+    if (commands.length === 0) return { dir, out: stdin };
+    if (commands.length > 1 || commands[0].length !== words.length) {
+      return { dir, out: [...new Set(commands.flatMap((command) => commandWrites(command, dir, ctx, input).out))] };
+    }
+  }
+  // then, do, else and their like stand in front of a command; `time` is
+  // read with the wrappers below.
+  while (ctx.dialect === "bash" && words.length > 1 && words[0] !== "time" && COMMAND_PREFIXES.has(words[0])) words = words.slice(1);
   // An environment value may be a command the program runs: less runs
   // $LESSOPEN and $LESSCLOSE on the file it opens, git runs
   // $GIT_EXTERNAL_DIFF and the pager variables. The list of such
@@ -3814,6 +3826,8 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     unzipWrites(args, dir, ctx);
   } else if (name === "npm") {
     npmWrites(args, dir, ctx);
+    // npm exec and npm x start a program, as npx does (cost (c)).
+    return { dir, out: [...out, ...startedWrites(name, args, dir, ctx, input)] };
   } else if (METADATA_COMMANDS.has(name)) {
     // A file made unreadable stops the hook loading it as surely as a
     // delete does (BUG-065).
@@ -3950,8 +3964,65 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
       const file = long ? long.value || args[k + 1] : short.exec(a) && (short.exec(a)[1] || args[k + 1]);
       if (file) add(dir, file);
     });
+  } else if (!READ_ONLY_COMMANDS.has(name) && !TEXT_SAYERS.has(name)) {
+    // No reader knows the program, so it may be one that starts another
+    // (re-probe 7, cost (c)).
+    return { dir, out: [...out, ...startedWrites(name, args, dir, ctx, input)] };
   }
   return { dir, out };
+}
+
+/**
+ * What a program the readers do not know may start (re-probe 7, cost (c)).
+ * No list of wrappers is complete (setsid, flock, chrt, npx shx, npx
+ * cross-env, busybox, winpty, a cmd `if` or `for`), so the words are read
+ * again from the first one that names a program the readers do know, as
+ * if everything before it were a wrapper: `npx shx cp notes/x.md
+ * CLAUDE.md` is read as the copy. A word before it that holds a whole
+ * command is read as that command (script -qc "cp a b", su -c "cp a b"),
+ * except for a program whose words are messages (gh pr create --body).
+ * A copy is judged by what it copies, so reading a command that was only
+ * an argument blocks only when the source it names holds a payload.
+ * @param {string} program - the program the readers do not know
+ * @returns {string[]} the sources whose content the started command's
+ *   stdout carries
+ */
+function startedWrites(program, args, dir, ctx, input) {
+  const known = (word) => {
+    const name = commandName(word);
+    return STARTED_PROGRAMS.has(name) || (ctx.dialect === "powershell" && PS_STARTED_PROGRAMS.has(name)) ||
+      (ctx.dialect === "cmd" && CMD_STARTED_PROGRAMS.has(name));
+  };
+  const at = args.findIndex(known);
+  for (const word of at < 0 ? args : args.slice(0, at)) {
+    if (!Object.hasOwn(MESSAGE_OPTIONS, program) && /\s/.test(word) && known(word.trim().split(/\s+/)[0])) ctx.recurse(word, dir);
+  }
+  return at < 0 ? [] : commandWrites(args.slice(at), dir, ctx, input).out;
+}
+
+/**
+ * A PowerShell stage's words as the commands they hold: the stage's own,
+ * and one for each script block, which is code the cmdlet runs
+ * (ForEach-Object { Copy-Item a b }, try { ... } finally { ... }, -split
+ * { ... }; re-probe 7, cost (c)). A brace stuck to a word splits it
+ * (%{Copy-Item); ${name} is a variable and stays whole.
+ * @returns {string[][]}
+ */
+function scriptBlockCommands(words) {
+  const commands = [[]];
+  for (const word of words) {
+    let piece = "";
+    for (const [part] of word.matchAll(/\$\{[^}]*\}|[{}]|[^{}$]+|\$/g)) {
+      if (part !== "{" && part !== "}") piece += part;
+      else {
+        if (piece !== "") commands.at(-1).push(piece);
+        piece = "";
+        commands.push([]);
+      }
+    }
+    if (piece !== "") commands.at(-1).push(piece);
+  }
+  return commands.filter((command) => command.length > 0);
 }
 
 /**
@@ -4286,6 +4357,14 @@ const CMD_SWITCH   = /^\/-?[A-Za-z?](?::.*)?$/;
 const CMD_DELETERS = new Set(["del", "erase", "rd", "rmdir"]);
 const CMD_COPIERS  = new Set(["copy", "move"]);
 const CMD_RENAMERS = new Set(["ren", "rename"]);
+// The programs commandWrites() has a reader for: the ones startedWrites()
+// looks for behind a program it does not know (cost (c)). Each dialect
+// adds its own cmdlets or built-ins.
+const STARTED_PROGRAMS = new Set([...COPY_COMMANDS, ...DELETE_COMMANDS, ...METADATA_COMMANDS, ...TAR_COMMANDS, ...CONTENT_PASSERS,
+  ...SHELLS, ...CMD_SHELLS, ...POWERSHELLS, ...INTERPRETERS, ...COMMAND_WRAPPERS,
+  "tee", "dd", "patch", "unzip", "find", "curl", "wget", "robocopy", "xcopy", "git", "eval"]);
+const PS_STARTED_PROGRAMS = new Set([...PS_WRITERS, ...PS_COPIERS, ...PS_REMOVERS, ...PS_RENAMERS, ...PS_CONTENT_PASSERS, ...PS_DOWNLOADERS, ...PS_EVALUATORS]);
+const CMD_STARTED_PROGRAMS = new Set([...CMD_DELETERS, ...CMD_COPIERS, ...CMD_RENAMERS, "mklink"]);
 
 /**
  * The command line `cmd /c` or `cmd /k` runs, or null when there is none

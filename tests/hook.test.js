@@ -5473,6 +5473,129 @@ describe("PreToolUse hook - plainness by statement, and what names a file again 
 });
 
 // ---------------------------------------------------------------------------
+// RE-PROBE 7, COST (c) (staged): a copy behind a program the readers do
+// not know was not read, and no list of wrappers is complete. The words
+// are read again from the first one that names a known program; a bash
+// keyword in front of a command comes off; a PowerShell script block is
+// read as a command of its own.
+
+describe("PreToolUse hook - a command behind a program the readers do not know (re-probe 7, cost (c))", () => {
+  for (const command of [
+    // The re-probe's forms.
+    "setsid cp notes/x.md CLAUDE.md",
+    "flock /tmp/l cp notes/x.md CLAUDE.md",
+    "chrt 0 cp notes/x.md CLAUDE.md",
+    "taskset 1 cp notes/x.md CLAUDE.md",
+    "unbuffer cp notes/x.md CLAUDE.md",
+    "npx cross-env A=1 cp notes/x.md CLAUDE.md",
+    "npx dotenv -- cp notes/x.md CLAUDE.md",
+    "npx shx cp notes/x.md CLAUDE.md",
+    "npx -y shx cp notes/x.md CLAUDE.md",
+    "winpty cp notes/x.md CLAUDE.md",
+    "busybox cp notes/x.md CLAUDE.md",
+    "script -qc \"cp notes/x.md CLAUDE.md\" /dev/null",
+    "watch -n1 cp notes/x.md CLAUDE.md",
+    "strace -o /dev/null cp notes/x.md CLAUDE.md",
+    "caffeinate cp notes/x.md CLAUDE.md",
+    "fakeroot cp notes/x.md CLAUDE.md",
+    "chroot / cp notes/x.md CLAUDE.md",
+    "wsl cp notes/x.md CLAUDE.md",
+    "start //b cp notes/x.md CLAUDE.md",
+    // Other programs that start one, and other known programs behind them.
+    "npm exec -- shx cp notes/x.md CLAUDE.md",
+    "yarn shx cp notes/x.md CLAUDE.md",
+    "pnpm exec shx cp notes/x.md CLAUDE.md",
+    "bunx shx cp notes/x.md CLAUDE.md",
+    "op run -- cp notes/x.md CLAUDE.md",
+    "setsid mv notes/x.md CLAUDE.md",
+    "setsid rsync notes/x.md CLAUDE.md",
+    "setsid dd if=notes/x.md of=CLAUDE.md",
+    "setsid sort -o CLAUDE.md notes/x.md",
+    "setsid tee CLAUDE.md < notes/x.md",
+    "setsid cat notes/x.md > CLAUDE.md",
+    "npx shx cat notes/x.md > CLAUDE.md",
+    "setsid sh -c 'cp notes/x.md CLAUDE.md'",
+    // The command as one word.
+    "su -c \"cp notes/x.md CLAUDE.md\"",
+    "watch -n1 \"cp notes/x.md CLAUDE.md\"",
+    // A bash keyword in front of the command.
+    "if true; then cp notes/x.md CLAUDE.md; fi",
+    "for f in 1; do cp notes/x.md CLAUDE.md; done",
+    "while true; do cp notes/x.md CLAUDE.md; break; done",
+    "if cp notes/x.md CLAUDE.md; then echo ok; fi",
+    "if false; then :; else cp notes/x.md CLAUDE.md; fi",
+    "! cp notes/x.md CLAUDE.md",
+    "if true; then cat notes/x.md > CLAUDE.md; fi",
+    "for f in 1; do cat notes/x.md | tee CLAUDE.md; done",
+  ]) {
+    stagedOnly(`denies: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "deny", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // A script block is code the cmdlet runs.
+    "Get-ChildItem notes | ForEach-Object { Copy-Item notes\\x.md CLAUDE.md }",
+    "1..2 | % { Get-Content notes\\x.md | Set-Content CLAUDE.md }",
+    "Get-ChildItem | Where-Object { Copy-Item notes\\x.md CLAUDE.md }",
+    "try { Copy-Item notes\\x.md CLAUDE.md } catch { }",
+    "try { Get-Content README.md } finally { Copy-Item notes\\x.md CLAUDE.md }",
+    "(Get-Content README.md) -split { Copy-Item notes\\x.md CLAUDE.md }",
+    "1..2 |%{Copy-Item notes\\x.md CLAUDE.md}",
+    "Measure-Command { Copy-Item notes\\x.md CLAUDE.md }",
+    "Invoke-Command -ScriptBlock { Copy-Item notes\\x.md CLAUDE.md }",
+    "Start-Job { Copy-Item notes\\x.md CLAUDE.md }",
+    "% { Get-Content notes\\x.md } > CLAUDE.md",
+    // Held: the forms that were read before.
+    "if ($true) { Copy-Item notes\\x.md CLAUDE.md }",
+    "& { Copy-Item notes\\x.md CLAUDE.md }",
+  ]) {
+    stagedOnly(`denies, PowerShell tool: ${command}`, () => {
+      const out = runGuarded(command, { tool: "PowerShell" });
+      assert.equal(decisionOf(out), "deny", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // The same forms with a clean source.
+    "setsid cp notes/ok.md CLAUDE.md",
+    "npx shx cp notes/ok.md CLAUDE.md",
+    "if true; then cp notes/ok.md CLAUDE.md; fi",
+    // A program name that is only a word.
+    "echo cp notes/x.md CLAUDE.md",
+    "git commit -m \"cp notes/x.md CLAUDE.md\"",
+    "gh pr create --title x --body \"cp notes/x.md CLAUDE.md\"",
+    "rg cp notes/x.md CLAUDE.md",
+    "man cp",
+    "which cp rm",
+    "brew install git curl wget",
+    "npm install rimraf",
+    "pip install requests flask",
+    "make install",
+    // A command another machine or a container runs.
+    "docker exec c cp /app/a /app/b",
+    "ssh host rm -rf /tmp/x",
+    "kubectl exec pod -- cat /etc/hosts",
+    "docker run --rm img sh -c 'npm test'",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+
+  for (const command of [
+    "Get-ChildItem notes | ForEach-Object { Copy-Item notes\\ok.md CLAUDE.md }",
+    "Get-ChildItem | Where-Object { $_.Name -like '*.md' }",
+    "Invoke-RestMethod -Uri https://example.test -Body '{\"a\":1}' -Method Post",
+  ]) {
+    stagedOnly(`silent, PowerShell tool: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions", tool: "PowerShell" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

@@ -233,6 +233,15 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A copy behind a program the hook does not know is read (BUG-066,
+  re-probe 7 cost c).** `npx shx cp notes/x.md CLAUDE.md`, `setsid cp
+  ...`, `flock /tmp/l cp ...` and 15 more wrappers were silent, since
+  no list of wrappers is complete. For an unknown program the words
+  are now read again from the first one that names a known program.
+  A bash keyword in front of a command comes off (`if true; then cp
+  ...; fi`), and a PowerShell script block is read as a command of its
+  own (`ForEach-Object { Copy-Item ... }`).
+
 - **Plainness is judged by statement, and a file is named again only
   where it could run (BUG-080, re-probe 7 cost b).** `echo "## Security"
   >> README.md && git add README.md && git commit -m "docs"`, the same
