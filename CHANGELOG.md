@@ -233,6 +233,18 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **The bare word `security` counts where it can reach a program (BUG-080,
+  re-probe 5 F1).** E8 skipped the word wherever it stood alone, so
+  `npx rimraf security`, `echo security | xargs rm -rf`,
+  `trap 'rm -rf security' EXIT`, `git -c core.fsmonitor='rm -rf security'
+  status` and 23 more forms were silent at the project root, and each
+  deleted the scanner, after which the hook fails open. The word is now
+  resolved like a path and asks when it is Guardian's folder, except in a
+  stage that only reads and feeds only stages that read, in a test
+  runner's stage, and in a `git commit` message. Other commands that carry
+  the word at the project root ask (`npm run security`,
+  `echo "## Security" >> README.md`).
+
 - **A quoted key is still a password or API key (BUG-076).**
   `GUARD-SEC-008` and `-009` wanted `:` or `=` straight after the key
   word, so `"password": "hunter2hunter2"` and `{"api_key": "..."}`, the

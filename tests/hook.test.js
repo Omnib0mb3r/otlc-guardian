@@ -2951,6 +2951,128 @@ describe("PreToolUse hook - the settings reader module is imported and guarded (
 });
 
 // ---------------------------------------------------------------------------
+// Re-probe 5, F1 (BUG-080): the bare word "security" counts again
+// ---------------------------------------------------------------------------
+//
+// E8 skipped the word "security" wherever it stood with no separator, so
+// the plainest spelling of "delete Guardian's scanner" was silent for any
+// program the readers do not parse, and for parsed ones reached through
+// xargs, a function, find or a command string. Each command in the first
+// list deleted or emptied security/01-injection-guard.js in the re-probe,
+// after which the hook fails open. The word now counts when it resolves
+// to Guardian's folder, except in a stage that only reads and feeds only
+// stages that read, a test runner's stage, or a git commit message.
+
+describe("PreToolUse hook - the bare word security counts where it reaches Guardian's folder (re-probe 5, F1)", () => {
+  const run = (command, { sub = "", mode } = {}) => withTempProject((dir) => {
+    for (const rel of [".claude/settings.json", "security/01-injection-guard.js", "src/security/old.js", "src/a.js", "docs/a.md"]) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), rel.endsWith(".json") ? "{}" : "x\n");
+    }
+    return runHook(PRE_HOOK, { tool_name: "Bash", cwd: path.join(dir, sub), tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) },
+      { CLAUDE_PROJECT_DIR: dir });
+  });
+
+  // Re-probe 5, V1: silent in both modes; the real effect was the scanner deleted.
+  for (const command of [
+    "npx rimraf security",
+    "npx -y rimraf security",
+    "npm exec -- rimraf security",
+    "pnpm dlx rimraf security",
+    "bunx rimraf security",
+    "npx shx rm -rf security",
+    "trash security",
+    "timeout 9 npx rimraf security",
+    "nohup trash security",
+    "echo security | xargs rm -rf",
+    "xargs rm -rf <<< security",
+    "printf security | xargs -I{} rm -rf {}",
+    "f() { rm -rf security; }; f",
+    "find security -type f -exec sh -c ': > \"$0\"' {} \\;",
+    "trap 'rm -rf security' EXIT",
+    "git -c core.fsmonitor='rm -rf security' status",
+    "git -c diff.external='rm -rf security' diff",
+    "git -c alias.x='!rm -rf security' x",
+    "git config core.fsmonitor 'rm -rf security' && git status",
+    "export LESSOPEN='|rm -rf security %s'; less src/a.js",
+    "declare -x LESSOPEN='|rm -rf security %s'; less src/a.js",
+    "export GIT_EXTERNAL_DIFF='rm -rf security'; git diff",
+    "node -e \"require('child_process').execSync('rm -rf security')\"",
+    "python -c \"import os; os.system('rm -rf security')\"",
+    "perl -MFile::Path=rmtree -e 'rmtree(q(security))'",
+    "perl -MFile::Path -e 'rmtree qw(security)'",
+    "ruby -rfileutils -e 'FileUtils.rm_rf %w[security]'",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = run(command);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+      assert.match(out, /names security/);
+    });
+  }
+
+  // The exemptions do not reach a word that is handed on or run.
+  for (const command of [
+    "cd security && npx rimraf .",
+    "pytest $(npx rimraf security)",
+    "go test -exec 'rm -rf security' ./...",
+    "LESSOPEN='|rm -rf security %s' pytest",
+    "git commit -m wip security",
+    "git -c core.editor='rm -rf security' commit",
+    "pytest -k security; npx rimraf security",
+    "grep -l security docs/a.md | xargs rm -f",
+    "npx rimraf security | cat",
+    "npm run security",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = run(command);
+      assert.equal(decisionOf(out), "ask", out.slice(0, 200));
+    });
+  }
+
+  // A stage that only reads to the end of its pipeline, a test runner, a commit message.
+  for (const command of [
+    "grep -rn security docs; npm run build",
+    "ls security && npm run build",
+    "cat docs/a.md | grep -i security | head -5; npm run build",
+    "npm audit --audit-level=high | grep -i security",
+    "pytest -k security",
+    "py.test security",
+    "python -m pytest -k security",
+    "python3 -m unittest security",
+    "python manage.py test security",
+    "./manage.py test security",
+    "npx jest security",
+    "npx vitest run security",
+    "yarn jest security",
+    "pnpm exec vitest security",
+    "mocha security",
+    "npm test -- security",
+    "npm run test -- security",
+    "pnpm test security",
+    "yarn test security",
+    "bun test security",
+    "go test security",
+    "cargo test security",
+    "pytest -k security | tee out.log",
+    "git commit -am 'security: fix'",
+    "git commit -m security",
+    "git commit --message='security review' && git push",
+    "git add -A && git commit -m \"harden security\" && git push",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(run(command, { mode: "bypassPermissions" }));
+    });
+  }
+
+  // In a subfolder the word is that folder's own security.
+  for (const command of ["npx rimraf security", "echo security | xargs rm -rf", "trap 'rm -rf security' EXIT"]) {
+    stagedOnly(`silent from src/: ${command}`, () => {
+      expectSilent(run(command, { sub: "src", mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

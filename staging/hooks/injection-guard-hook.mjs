@@ -1123,14 +1123,13 @@ const GUARDED_NAME_PATTERNS = GUARDED_NAMES.map((name) => {
   const lead = name.startsWith(".") ? "" : `(?<![${NAME_CHAR}])`;
   return { name, re: new RegExp(`${lead}${[first, ...rest].join("/")}(?=/?(?:$|[^${NAME_CHAR}/]))`, "gm") };
 });
-// A guarded folder whose name is also an English word ("security"). As a
-// bare word it never counts (pytest -k security, npm test -- security):
-// only as a path with a separator, or as a quoted literal inside code
-// (rmSync('security')), which is how inline code names the folder.
-const WORD_FOLDERS = GUARDED_NAMES.filter((n) => !n.includes("/") && !n.startsWith(".")).map((name) => ({
-  name,
-  quoted: new RegExp(`(['"\`])${escapeRe(name)}\\1`, "gi"),
-}));
+// A guarded folder whose name is also an English word ("security"). With
+// a separator it is a path and is resolved like any other. As a bare word
+// it counts where it can reach a program (re-probe 5, F1): everywhere
+// except the places bareWordText() blanks, which are a pipeline that only
+// reads, a test runner's stage and a git commit message.
+const WORD_FOLDERS = GUARDED_NAMES.filter((n) => !n.includes("/") && !n.startsWith("."));
+const WORD_FOLDER_PATTERNS = GUARDED_NAME_PATTERNS.filter(({ name }) => WORD_FOLDERS.includes(name));
 
 /** Text of a bash $'...' string with its escapes decoded. */
 function decodeAnsiC(body) {
@@ -1230,6 +1229,112 @@ function commandBases(views, cwd) {
 
 const PATH_RUN_CHAR = new RegExp(`[${NAME_CHAR}/]`);
 
+// Programs whose arguments name tests to run. "security" given to one is
+// a test filter or a module name (pytest -k security, npm test -- security).
+const TEST_RUNNERS      = new Set(["pytest", "py.test", "jest", "vitest", "mocha"]);
+const PYTHON_TEST_MODULES = new Set(["pytest", "unittest"]);
+const PACKAGE_MANAGERS  = new Set(["npm", "pnpm", "yarn", "bun"]);
+const PACKAGE_RUNNERS   = new Set(["npx", "pnpx", "bunx"]);
+const TEST_SCRIPT       = /^(?:t|test)$/;
+const DIRECTORY_MOVERS  = new Set(["cd", "chdir", "pushd", "set-location", "sl", "push-location"]);
+const PIPE_OPERATORS    = new Set(["|", "|&"]);
+
+/**
+ * Whether a stage's words run a test runner: pytest, jest, vitest and
+ * mocha (directly, or through npx, bunx, yarn, pnpm exec), python -m
+ * pytest or unittest, manage.py test, the test script of npm, pnpm, yarn
+ * and bun, go test and cargo test. A value set in front of the command
+ * can be what it runs (re-probe 4, E2), and go test -exec names a program
+ * to run, so neither is a test run here.
+ */
+function isTestRun(words) {
+  const name = commandName(words[0] ?? "");
+  const args = words.slice(1);
+  const plain = args.filter((a) => !a.startsWith("-"));
+  if (TEST_RUNNERS.has(name)) return true;
+  if (name === "manage.py") return plain[0] === "test";
+  if (name === "python" || name === "python3" || name === "py") {
+    if (args[0] === "-m") return PYTHON_TEST_MODULES.has(args[1]);
+    return commandName(plain[0] ?? "") === "manage.py" && plain[1] === "test";
+  }
+  if (PACKAGE_RUNNERS.has(name)) return TEST_RUNNERS.has(plain[0]);
+  if (PACKAGE_MANAGERS.has(name)) {
+    if (TEST_SCRIPT.test(plain[0]) || TEST_RUNNERS.has(plain[0])) return true;
+    return (plain[0] === "run" && plain[1] === "test") || (plain[0] === "exec" && TEST_RUNNERS.has(plain[1]));
+  }
+  if (name === "go") return args[0] === "test" && !args.some((a) => /^--?exec(?:=|$)/.test(a));
+  if (name === "cargo") return args[0] === "test";
+  return false;
+}
+
+/**
+ * The places in a `git commit` stage that hold its message: the value of
+ * -m, --message, -F and --file (also at the end of a short cluster, -am).
+ * @param {Array<{word: string, start: number, end: number}>} stage
+ * @returns {Array<[number, number]>}
+ */
+function commitMessageSpans(stage) {
+  if (commandName(stage[0].word) !== "git" || stage[1]?.word !== "commit") return [];
+  const spans = [];
+  for (let k = 2; k < stage.length; k++) {
+    const { word, start, end } = stage[k];
+    if (/^--(?:message|file)=/.test(word)) spans.push([start, end]);
+    else if (/^(?:--message|--file|-[a-zA-Z]*[mF])$/.test(word) && stage[k + 1]) {
+      spans.push([stage[k + 1].start, stage[k + 1].end]);
+      k++;
+    }
+  }
+  return spans;
+}
+
+/**
+ * A command's text with the places blanked where a bare guarded word
+ * ("security") is not a file a program could act on (re-probe 5, F1):
+ *   - a stage that only reads, when every stage after it in its pipeline
+ *     only reads too and none of them changes directory (grep -rn security
+ *     docs; npm audit | grep -i security). A later stage that does
+ *     anything else may be handed the word (echo security | xargs rm -rf);
+ *   - a test runner's stage (isTestRun()), unless it holds a substitution;
+ *   - the message of a git commit.
+ * Everything else stays, heredoc bodies and command strings included: a
+ * function body, a trap, a git config value and inline code all run.
+ */
+function bareWordText(text, dialect) {
+  const blank = [];
+  let pipeline = [];
+  let stage = [];
+  const endStage = () => {
+    if (stage.length > 0) pipeline.push(stage);
+    stage = [];
+  };
+  const endPipeline = () => {
+    endStage();
+    if (pipeline.length === 0) return;
+    const to = pipeline[pipeline.length - 1].at(-1).end;
+    // The first stage from which the rest of the pipeline only reads.
+    const moves = (s) => DIRECTORY_MOVERS.has(commandName(s[0].word));
+    let reading = pipeline.length;
+    while (reading > 0 && !moves(pipeline[reading - 1]) && onlyReads(text.slice(pipeline[reading - 1][0].start, to), dialect)) reading--;
+    if (reading < pipeline.length) blank.push([pipeline[reading][0].start, to]);
+    for (const s of pipeline.slice(0, reading)) {
+      const [a, b] = [s[0].start, s.at(-1).end];
+      if (lexShell(text.slice(a, b), dialect).subs.length > 0) continue;
+      if (isTestRun(s.map((tok) => tok.word))) blank.push([a, b]);
+      else blank.push(...commitMessageSpans(s));
+    }
+    pipeline = [];
+  };
+  for (const tok of lexShell(text, dialect).tokens) {
+    if (tok.word !== undefined) stage.push(tok);
+    else if (PIPE_OPERATORS.has(tok.op)) endStage();
+    else if (CONTROL_OPERATORS.has(tok.op)) endPipeline();
+  }
+  endPipeline();
+  let out = text;
+  for (const [a, b] of blank) out = `${out.slice(0, a)}${" ".repeat(b - a)}${out.slice(b)}`;
+  return out;
+}
+
 /**
  * The first of Guardian's files a command's text names, or null
  * (re-probe 3, D1; re-probe 4, E8).
@@ -1243,6 +1348,10 @@ const PATH_RUN_CHAR = new RegExp(`[${NAME_CHAR}/]`);
  * the command moves to a directory the text does not spell out, or the
  * name is a Windows short name (CLAUDE~1), which exists only for the file
  * it shortens.
+ *
+ * The bare word "security" is resolved the same way, from the text
+ * bareWordText() leaves (re-probe 5, F1): `npx rimraf security` at the
+ * project root names Guardian's folder, `pytest -k security` does not.
  *
  * @param {string[]} texts - the command and any scripts it carries encoded
  * @param {string} cwd - the session's working directory
@@ -1267,9 +1376,10 @@ function guardedNameIn(texts, dialect, cwd, root) {
           while (start > 0 && PATH_RUN_CHAR.test(view[start - 1])) start--;
           if (/^[a-z]:$/.test(view.slice(start - 2, start)) && !PATH_RUN_CHAR.test(view[start - 3] ?? " ")) start -= 2;
           const spelled = view.slice(start, m.index + m[0].length);
-          // A word folder with no separator before or after it is the bare word.
+          // A word folder with no separator before or after it is the bare
+          // word, which is judged below on the text bareWordText() leaves.
           const isPath = spelled.includes("/") || view[m.index + m[0].length] === "/";
-          if (!isPath && WORD_FOLDERS.some((f) => f.name === name)) continue;
+          if (!isPath && WORD_FOLDERS.includes(name)) continue;
           const before = view[start - 1] ?? "";
           const unresolvable = !certain || /[$}%)]/.test(before) || /~\d/.test(spelled);
           // A name stuck to an option cluster (-so.claude/x) is also read on its own.
@@ -1286,17 +1396,20 @@ function guardedNameIn(texts, dialect, cwd, root) {
         }
       }
     }
-    // A quoted literal of a word folder inside code: rmSync('security').
-    // The same literal as a whole shell word (-k 'security') is the word.
-    const words = lexShell(text, dialect).tokens.filter((tok) => tok.word !== undefined);
-    for (const { name, quoted } of WORD_FOLDERS) {
-      for (const m of text.matchAll(quoted)) {
-        const wholeWord = words.some((tok) => tok.start <= m.index && m.index + m[0].length <= tok.end && tok.word.toLowerCase() === name);
-        if (!wholeWord && (!certain || reaches(name, name))) return name;
+    // The bare word, wherever a program could act on it: an argument
+    // (npx rimraf security), a command string (trap 'rm -rf security'
+    // EXIT), a literal in inline code (rmSync('security')).
+    for (const view of nameViews(bareWordText(text, dialect))) {
+      for (const { name, re } of WORD_FOLDER_PATTERNS) {
+        for (const m of view.matchAll(re)) {
+          const bare = view[m.index - 1] !== "/" && view[m.index + m[0].length] !== "/";
+          if (bare && (!certain || reaches(name, name))) return name;
+        }
       }
     }
   }
   return null;
+
 }
 
 // Commands that only read (and cd, which only moves). A command with a
@@ -1413,8 +1526,9 @@ const DIALECTS = {
 
 /**
  * @param {"bash"|"powershell"|"cmd"} dialect - see DIALECTS
- * @returns {{ tokens: Array<{word: string}|{op: string}>, subs: string[] }}
- *   subs: the text of each $( ) and backtick substitution, for recursion
+ * @returns {{ tokens: Array<{word: string, start: number, end: number}|{op: string, start: number, end: number}>, subs: string[] }}
+ *   start and end are the token's place in the text; subs is the text of
+ *   each $( ) and backtick substitution, for recursion
  */
 function lexShell(text, dialect = "bash") {
   const d = DIALECTS[dialect] ?? DIALECTS.bash;
@@ -1482,7 +1596,7 @@ function lexShell(text, dialect = "bash") {
       }
       if (word !== null && /^\d+$/.test(word) && /^[<>]/.test(op)) word = null; // "2>" is one redirect
       else flush();
-      tokens.push({ op });
+      tokens.push({ op, start: i, end: i + op.length });
       i += op.length;
       if (op === "<<" || op === "<<-") expectDelimiter = op;
       if (op === "\n") {

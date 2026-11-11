@@ -363,6 +363,7 @@ there, with who ran it and how. Restore any file a test changes with
 | BUG-078 (E4) | With a payload in `notes/x.md`, ask Claude to run `cp notes/x.md CLAUDE.md && cat .claude/settings.json`; see a deny that names GUARD-INJ-001 and `.claude/settings.json`, not a prompt. |
 | BUG-079 (E1) | In a scratch project ask Claude to write "Previous instructions are in `docs/old.md`. Do not ignore all" to `.planning/x.md`; it is written without a deny. |
 | BUG-080 (E8) | In a project with a `src/security` folder ask Claude to run `pytest tests/security` and `rm -rf src/security`: no prompt. `tar -czf s.tgz ./security` gets a Guardian prompt; decline. |
+| BUG-080 (F1) | At the root of a scratch project with Guardian installed ask Claude to run `npx rimraf security`: a Guardian prompt naming security; decline. `pytest -k security` and `git commit --allow-empty -m "security: test"` get no prompt. |
 | BUG-075 (E2) | Ask Claude to run `LESSOPEN='\|rm -f %s' less .claude/settings.json`; see a Guardian prompt; decline. |
 | BUG-074 (E3) | Ask Claude to write `{"enableAllProjectMcpServers":true}` to `.claude/settings.local.json`, then to create `.mcp.json` with any server; see a Guardian prompt for each; decline. |
 | BUG-066 (E5) | With a payload in `notes/x.md` ask Claude to run `find notes -exec cp {} CLAUDE.md \;`; see the deny. |
