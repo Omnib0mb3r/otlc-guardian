@@ -233,6 +233,15 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A variable setter is an assignment to the name it sets (BUG-080,
+  re-probe 8 J2).** `printf -v PATH %s ./bin:/usr/bin; git commit -m
+  security` was silent, and bash ran `./bin/git` on the word. `printf
+  -v` in any spelling, `let`, `getopts`, `coproc`, `wait -p`,
+  `{NAME}>file` and a `for` or `select` loop are now judged as
+  `NAME=value` is: no statement after one earns an exemption unless
+  the name is known harmless. A loop name of lowercase letters and
+  digits stays plain.
+
 - **A copy behind a program the hook does not know is read (BUG-066,
   re-probe 7 cost c).** `npx shx cp notes/x.md CLAUDE.md`, `setsid cp
   ...`, `flock /tmp/l cp ...` and 15 more wrappers were silent, since

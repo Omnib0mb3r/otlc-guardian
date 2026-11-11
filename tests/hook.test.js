@@ -5596,6 +5596,86 @@ describe("PreToolUse hook - a command behind a program the readers do not know (
 });
 
 // ---------------------------------------------------------------------------
+// RE-PROBE 8, J2 (staged): a variable setter is an assignment to the name
+// it sets. With plainness by statement, `printf -v PATH` marked only its
+// own statement, so the `git commit` after it stood plain and bash ran
+// ./bin/git. Every form that gives a variable a value is now judged as
+// NAME=value is: printf -v in any spelling, let, getopts, coproc, wait -p,
+// {NAME}> and the name of a for or select loop.
+
+describe("PreToolUse hook - a variable setter is an assignment to its name (re-probe 8, J2)", () => {
+  for (const command of [
+    // The re-probe's forms.
+    "printf -v PATH %s ./bin:/usr/bin; git commit -m security",
+    "printf -vPATH %s ./bin:/usr/bin; git commit -m security",
+    "builtin printf -vPATH %s ./bin:/usr/bin; git commit -m security",
+    "printf -vPATH %s ./bin:/usr/bin && git commit -m security",
+    "printf -vPATH %s ./bin:/usr/bin\ngit commit -m security",
+    "printf -vPATH %s ./bin:/usr/bin; pytest security",
+    "printf -vPATH %s ./bin:/usr/bin; npm run security",
+    "mkdir -p bin; printf '#!/bin/sh\\nrm -rf \"$3\"\\n' > g.sh; chmod +x g.sh; echo git | xargs -I{} cp g.sh bin/{}; printf -vPATH %s ./bin:/usr/bin; git commit -m security",
+    "printf -vHOME %s .; git commit -m security",
+    "printf -vGIT_EXEC_PATH %s ./bin; export GIT_EXEC_PATH; git commit -m security",
+    "printf -vBASH_ENV %s g.sh; export BASH_ENV; npm run security",
+    // Other spellings of printf -v.
+    "builtin printf -v PATH %s ./bin; git commit -m security",
+    "command printf -v PATH %s ./bin; git commit -m security",
+    "time printf -v PATH %s ./bin; git commit -m security",
+    "printf -v \"PATH\" %s ./bin; git commit -m security",
+    "printf -v P\"AT\"H %s ./bin; git commit -m security",
+    "printf -v \"${U}PATH\" %s ./bin; git commit -m security",
+    "printf -v$U PATH; git commit -m security",
+    "printf -v IFS %s /; git commit -m security",
+    "printf -vc %s x; git commit -m security",
+    // The other commands and forms that give a variable a value.
+    "let PATH=1; git commit -m security",
+    "let 'PATH = 1'; git commit -m security",
+    "getopts a PATH; git commit -m security",
+    "coproc PATH { true; }; git commit -m security",
+    "wait -p PATH; git commit -m security",
+    ": {PATH}>l.txt; git commit -m security",
+    "true {PATH}>/dev/null; git commit -m security",
+    "for PATH in ./bin; do :; done; git commit -m security",
+    "for GIT_EXEC_PATH in ./bin; do export GIT_EXEC_PATH; done; git commit -m security",
+    "for npm_config_script_shell in ./e; do :; done; npm run security",
+    "select PATH in ./bin; do break; done; git commit -m security",
+    // Held: forms that asked before.
+    ": ${GIT_EXEC_PATH:=./bin}; export GIT_EXEC_PATH; git commit -m security",
+    "(( PATH = 1 )); git commit -m security",
+    ": $((PATH=1)); git commit -m security",
+    "IFS=: read -r PATH <<< ./bin; git commit -m security",
+    "mapfile -t PATH < p.txt; git commit -m security",
+    "export \"${U}PATH=./bin\"; git commit -m security",
+    "env \"${U}PATH=./bin\" git commit -m security",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // A setter after the exempt stage changes nothing before it.
+    "git commit -m security; printf -v PATH %s ./bin",
+    "git commit -m security && printf -v t %s done",
+    // A name known harmless.
+    "printf -v NODE_ENV %s test; npm run security",
+    // printf with no -v.
+    "printf 'done: %s\\n' security",
+    "printf '%s\\n' -v; git commit -m security",
+    // A loop whose name is lowercase letters and digits.
+    "for f in src/*.ts; do npx prettier --write \"$f\"; done && git commit -am \"security fixes\"",
+    "for i in 1 2 3; do echo $i; done; pytest -k security",
+    // wait with no -p.
+    "npm run build & wait; echo done",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

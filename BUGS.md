@@ -1632,6 +1632,26 @@ Tests: `tests/hook.test.js`, "plainness by statement, and what names a file agai
 
 Smoke test after applying: in bypass mode, at the root of a scratch project, ask Claude to run `echo "## Security" >> README.md && git add README.md && git commit -m "docs: security section"`: no Guardian prompt. Then, in default mode, `for f in 1; do true; git commit --allow-empty -m security; done | xargs rm -rf`: a Guardian prompt naming security; decline.
 
+**Re-probe 8, Y2 and Lex decision J2 (2026-11-11): PATH set through `printf -v` was not read as a PATH change. Fixed in staging, not yet live.** A regression from cost (b) (6066f76) for the spaced form; the stuck form is older. `printf -v PATH %s ./bin:/usr/bin; git commit -m security` asked at cfcf016 and was silent at 0621d0b, with `printf -vPATH`, `builtin printf -vPATH`, the `&&` and newline forms, the same before `pytest security` and `npm run security`, `printf -vHOME %s .`, `printf -vGIT_EXEC_PATH %s ./bin; export GIT_EXEC_PATH` and `printf -vBASH_ENV %s g.sh; export BASH_ENV`. Real in the re-probe (real\printfvpath): bash ran `./bin/git` and `security/` was deleted. The worker did not run it again.
+
+Cause: `plainCommand()` read PATH only as a `PATH=` word and an environment assignment only as `NAME=`. `printf -v` marked its own statement not plain and did not set `replacedFrom`, so with plainness by statement the `git commit` after it stood plain. Behind `builtin` or `command` it was not seen at all, because the test asked for `printf` as the stage's first word.
+
+Lex's decision: every variable setter H5 knows counts as an assignment to the name it sets. A set of PATH, HOME, CDPATH, OLDPWD, BASH_ENV, ENV or IFS by any setter is judged as `NAME=value` is.
+
+Change in `staging/hooks/injection-guard-hook.mjs`, `plainCommand()`:
+
+- `printf -v NAME` and `-vNAME` after the word `printf`, wherever it stands in its stage (so behind `builtin`, `command` and `time` too), set `replacedFrom` unless the name is spelled out and on `HARMLESS_ENVIRONMENT`, which is the test `NAME=value` gets. A name that holds a variable or a substitution (`printf -v$U PATH`, where an unset `$U` leaves `-v PATH`) is not spelled out. The value is not followed, so `printf -v PATH` with a safe value asks too.
+- `getopts`, `let` and `coproc` join `NOT_PLAIN_COMMANDS`, where `read` and `mapfile` already were: each puts a value in a name the reader does not follow. `wait -p NAME` and a `{NAME}>file` redirect set `replacedFrom` as well.
+- The name of a `for` or `select` loop is an assignment that outlasts the loop (`for PATH in ./bin; do :; done; git commit -m security`). `LOOP_NAME` is the positive list: lowercase letters and digits. Any other name sets `replacedFrom`. Lex's cost (b) ruling keeps `for f in src/*.ts; do ...; done && git commit -am "security fixes"` silent, and that is why a loop name is not held to `HARMLESS_ENVIRONMENT` as `f=1` is.
+
+Found by the worker and closed with it, all silent at 0621d0b: `printf -v$U PATH; git commit -m security`, `let 'PATH = 1'; ...`, `getopts a PATH; ...`, `coproc PATH { true; }; ...`, `wait -p PATH; ...`, `: {PATH}>l.txt; ...`, `for PATH in ./bin; do :; done; ...`, `for GIT_EXEC_PATH in ./bin; do export GIT_EXEC_PATH; done; ...`, `select PATH in ./bin; do break; done; ...`, and `for npm_config_script_shell in ./e; do :; done; npm run security`, which changes the shell npm runs a script with when Claude Code was itself started through npm. Hook verdicts only; none was run for real. Already asking, and kept as tests: `${NAME:=value}`, `(( PATH = 1 ))`, `$((PATH=1))`, `read`, `mapfile`, and `export` or `env` with a name split by an unset variable.
+
+Cost. Asking now, silent at 0621d0b: an exempt stage after `printf -v` into any name not known harmless (`printf -v msg '%s' x; git commit -m security`), and after a loop whose name holds an uppercase letter or an underscore (`for file_name in a b; do echo $file_name; done; pytest -k security`). The 75 and the 197 everyday commands: 0 changed.
+
+Tests: `tests/hook.test.js`, "a variable setter is an assignment to its name (re-probe 8, J2)": 38 ask, 8 silent in bypass mode. Against the hook at 0621d0b, 29 failed. Staged hook suite before: 1844 passed, 29 failed. After: 1873 passed, 0 failed. Re-probe 7's 640 commands: 0 verdicts changed. Re-probe 8's 851: 13 changed, all Y2 forms, silent to deny. Lex's regress harness: no line changed.
+
+Smoke test after applying: at the root of a scratch project ask Claude to run `printf -v PATH %s ./bin:/usr/bin; git commit --allow-empty -m security`; see a Guardian prompt naming security; decline. In bypass mode `for f in a b; do echo $f; done; git commit --allow-empty -m "security fix"` gets no Guardian prompt.
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

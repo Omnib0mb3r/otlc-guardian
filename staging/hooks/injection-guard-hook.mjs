@@ -1760,8 +1760,13 @@ const SHELL_RUNS_TEXT_COMMANDS = new Set(["trap", "history", "fc"]);
 // ./g.sh git, enable -f ./x.so git, Set-Alias pytest Remove-Item, doskey
 // git=rd, and cmd's path, which sets PATH). `exec` with a redirect sends
 // the output of every later command to a file (exec > l.txt).
-const NOT_PLAIN_COMMANDS = new Set(["case", "read", "mapfile", "readarray", "function", "alias", "exec",
+const NOT_PLAIN_COMMANDS = new Set(["case", "read", "mapfile", "readarray", "getopts", "let", "coproc", "function", "alias", "exec",
   "hash", "enable", "set-alias", "sal", "new-alias", "nal", "doskey", "path"]);
+// The name of a `for` or `select` loop that is known to be no variable
+// bash or a program reads: lowercase letters and digits. Any other name
+// is judged as an assignment to it (re-probe 8, J2): PATH, HOME, an
+// npm_config_ or a _proxy name that is already in the environment.
+const LOOP_NAME = /^(?!histchars$)[a-z][a-z0-9]*$/;
 // The words that open and close a compound command in bash, and the ones
 // a command follows. What a command inside a compound prints goes where
 // the compound's own pipe or redirect sends it.
@@ -2119,6 +2124,9 @@ function plainCommand(text, tokens, dialect, outside = null) {
           depth += closes ? -1 : 1;
           if (depth < 0) return null;
         }
+        // for NAME, select NAME: the loop sets NAME, and it stays set
+        // after the loop (for PATH in ./bin; do :; done; git commit).
+        if ((raw === "for" || raw === "select") && !LOOP_NAME.test(tokens[i + 1]?.word ?? "")) replacedFrom = Math.min(replacedFrom, tok.start);
         // The word after one of these is a command too.
         if (COMMAND_PREFIXES.has(raw)) {
           first = true;
@@ -2136,8 +2144,21 @@ function plainCommand(text, tokens, dialect, outside = null) {
         for (let k = i + 1; tokens[k]?.word !== undefined; k++) if (SET_HISTORY.test(tokens[k].word)) return null;
       }
       if (NOT_PLAIN_COMMANDS.has(run) && spoils(tok, true)) return null;
-    } else if (stageName === "printf" && /^-[A-Za-z]*v/.test(tok.word) && tokens[i - 1]?.word !== undefined && commandName(tokens[i - 1].word) === "printf") {
-      if (spoils(tok)) return null;
+      // wait -p NAME sets NAME.
+      if (!whole && run === "wait" && /^-[A-Za-z]*p/.test(next ?? "")) spoils(tok, true);
+    } else if (/^-[A-Za-z]*v/.test(tok.word) && tokens[i - 1]?.word !== undefined && commandName(tokens[i - 1].word) === "printf") {
+      // printf -v NAME and -vNAME are an assignment to NAME, behind
+      // builtin or command too, and are judged as NAME=value is (re-probe
+      // 8, J2): only a name spelled out and known harmless leaves the
+      // statements after it plain. The value is not followed.
+      const stuck = tok.word.startsWith("-v") ? tok.word.slice(2) : null;
+      const named = stuck === "" ? tokens[i + 1] : tok;
+      const spelled = named?.word !== undefined && !/[$\x60]/.test(singleQuotesOut(text.slice(named.start, named.end)));
+      const name = stuck === "" ? named?.word : stuck;
+      if (spoils(tok, !(spelled && HARMLESS_ENVIRONMENT.has(name ?? "")))) return null;
+    } else if (!whole && /^\{[A-Za-z_]\w*\}$/.test(raw) && isRedirect(tokens[i + 1]?.op)) {
+      // {NAME}>file sets NAME to the number of the descriptor it opens.
+      spoils(tok, true);
     } else if (setsOneOf(raw) || (redirected && (pattern || sub))) {
       if (spoils(tok)) return null;
       const words = redirected || sub ? null : loopWords(raw, tok.word);
