@@ -233,6 +233,14 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A substitution names what it could expand to (BUG-080, re-probe 8
+  J6).** Cost (b) took `$(date +%Y)`, `$(whoami)` and `$(git branch
+  --show-current)` as naming no file, so `echo 'rm -rf security' >
+  2026.sh; sh $(date +%Y).sh` was silent. The list of programs that
+  print a value is gone: only `cat` fed a quoted heredoc names
+  nothing. An append to README.md followed by `git push origin
+  "$(git branch --show-current)"` asks again.
+
 - **A variable setter is an assignment to the name it sets (BUG-080,
   re-probe 8 J2).** `printf -v PATH %s ./bin:/usr/bin; git commit -m
   security` was silent, and bash ran `./bin/git` on the word. `printf

@@ -2176,33 +2176,15 @@ function plainCommand(text, tokens, dialect, outside = null) {
   return { opens, reads, redirects, at, replacedFrom: whole ? Infinity : replacedFrom };
 }
 
-// Programs that print a value of the machine or of git's state, with the
-// arguments each may take: never the name of a file the command wrote,
-// unless an argument spells it (date +x.sh).
-const VALUE_PRINTERS = {
-  date: /^(?:\+.*|-u|--utc|--universal|-I\w*|--iso-8601(?:=\w+)?|-R|--rfc-email|--rfc-3339=\w+)$/,
-  whoami: /^$/,
-  hostname: /^$/,
-  nproc: /^$/,
-  pwd: /^-[LP]$/,
-  uname: /^-[asnrvmpio]+$/,
-  id: /^-[ugnrG]+$/,
-};
-const GIT_VALUE_PRINTERS = {
-  "branch": /^--show-current$/,
-  "rev-parse": /^(?:--abbrev-ref|--short(?:=\d+)?|--verify|-q|--quiet|--show-toplevel|--show-prefix|--git-dir|--is-inside-work-tree|--symbolic-full-name|(?:HEAD|@)(?:[~^]\d*)*|@\{(?:u|upstream|push)\})$/,
-  "describe": /^--(?:tags|always|all|long|dirty|exact-match|first-parent|abbrev(?:=\d+)?)$/,
-  "symbolic-ref": /^(?:--short|-q|--quiet|HEAD)$/,
-};
-
 /**
- * The text a substitution can put in a word, when the reader knows it
+ * The text a substitution puts in a word, when the reader knows it
  * (re-probe 7, cost (b)): the body of a quoted heredoc fed to cat, which
- * the shell hands over as written (Claude Code's commit message form), or
- * the substitution's own words when it runs a program of VALUE_PRINTERS
- * or GIT_VALUE_PRINTERS with arguments on its list. Null for any other:
- * a program that lists files (ls, git ls-files, find) prints the name of
- * one the command just wrote.
+ * the shell hands over as written (Claude Code's commit message form).
+ * Null for any other. What a program prints is not known from its
+ * command line: a year, a branch or a host name is something the command
+ * can have put in a file's name beforehand (echo ... > 2026.sh; sh
+ * $(date +%Y).sh), so every other substitution can say any name
+ * (re-probe 8, J6).
  * @returns {string|null}
  */
 function substitutionText(sub, dialect) {
@@ -2210,16 +2192,8 @@ function substitutionText(sub, dialect) {
   if (uncertain || subs.length > 0) return null;
   const words = tokens.filter((tok) => tok.word !== undefined).map((tok) => tok.word);
   const ops = tokens.filter((tok) => tok.word === undefined && tok.op !== "\n").map((tok) => tok.op);
-  if (ops.length === 1 && (ops[0] === "<<" || ops[0] === "<<-")) {
-    return words.length === 2 && words[0] === "cat" && heredocs.length === 1 && !heredocs[0].expands ? heredocs[0].text : null;
-  }
-  if (ops.length > 0 || words.length === 0) return null;
-  const git = words[0] === "git";
-  const table = git ? GIT_VALUE_PRINTERS : VALUE_PRINTERS;
-  const program = words[git ? 1 : 0];
-  const args = words.slice(git ? 2 : 1);
-  if (program === undefined || !Object.hasOwn(table, program) || (git && args.length === 0)) return null;
-  return args.every((arg) => table[program].test(arg)) ? words.join(" ") : null;
+  const heredoc = ops.length === 1 && (ops[0] === "<<" || ops[0] === "<<-");
+  return heredoc && words.length === 2 && words[0] === "cat" && heredocs.length === 1 && !heredocs[0].expands ? heredocs[0].text : null;
 }
 
 /**

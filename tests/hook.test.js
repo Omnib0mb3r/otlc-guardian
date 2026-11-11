@@ -5358,11 +5358,8 @@ describe("PreToolUse hook - plainness by statement, and what names a file again 
     "echo \"security\" > notes.txt && cat notes.txt",
     "pytest -k security > out.txt 2>&1; tail -20 out.txt",
     "npm test -- security 2>&1 | tee test.log; grep -c FAIL test.log",
-    // A substitution that prints a value of git or of the machine.
-    "echo \"## Security\" >> README.md && git push origin \"$(git branch --show-current)\"",
-    "echo \"## Security\" >> README.md && git tag \"v$(date +%F)\"",
-    "cp src/a.js \"backup-$(date +%F).js\" && git commit -m \"security backup\"",
-    "mkdir -p \"out/$(git rev-parse --short HEAD)\" && npm run security",
+    // A substitution in git add, which writes no file in the working
+    // tree. (The value printers that stood here ask since re-probe 8, J6.)
     "git add $(git ls-files -m) && git commit -m \"security fix\"",
     // Another statement's loop, test or subshell.
     "for f in src/*.ts; do npx prettier --write \"$f\"; done && git commit -am \"security fixes\"",
@@ -5668,6 +5665,60 @@ describe("PreToolUse hook - a variable setter is an assignment to its name (re-p
     "for i in 1 2 3; do echo $i; done; pytest -k security",
     // wait with no -p.
     "npm run build & wait; echo done",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// RE-PROBE 8, J6 (staged): cost (b) took a substitution that runs a
+// program printing a value (date, whoami, git branch --show-current) as
+// naming nothing. The value is one the command can have put in a file's
+// name beforehand: echo 'rm -rf security' > 2026.sh; sh $(date +%Y).sh.
+// Only cat of a quoted heredoc names nothing now.
+
+describe("PreToolUse hook - a substitution names what it could expand to (re-probe 8, J6)", () => {
+  for (const command of [
+    // The re-probe's forms.
+    "echo 'rm -rf security' > 2026.sh; sh $(date +%Y).sh",
+    "echo 'rm -rf security' > 2026.sh; sh \"$(date +%Y).sh\"",
+    "echo 'rm -rf security' > main.sh; bash $(git branch --show-current).sh",
+    "echo 'rm -rf security' > main; sh \"$(git branch --show-current)\"",
+    // The other programs that were on the list.
+    "echo 'rm -rf security' > x; sh \"$(whoami)\"",
+    "echo 'rm -rf security' > x; sh $(hostname)",
+    "echo 'rm -rf security' > x; sh $(uname -s)",
+    "echo 'rm -rf security' > x; sh $(id -un)",
+    "echo 'rm -rf security' > x; sh $(nproc)",
+    "echo 'rm -rf security' > x; sh $(git rev-parse --short HEAD)",
+    "echo 'rm -rf security' > x; sh $(git describe --tags)",
+    "echo 'rm -rf security' > x; sh $(git symbolic-ref --short HEAD)",
+    // The same substitutions where the program is the file written.
+    "cp evil \"$HOME/bin/$(git describe --tags)\"; git commit -m security",
+    "cp evil ~/bin/$(whoami); git commit -m security",
+    // The cost: silent under cost (b), asking again.
+    "echo \"## Security\" >> README.md && git push origin \"$(git branch --show-current)\"",
+    "echo \"## Security\" >> README.md && git tag \"v$(date +%F)\"",
+    "cp src/a.js \"backup-$(date +%F).js\" && git commit -m \"security backup\"",
+    "mkdir -p \"out/$(git rev-parse --short HEAD)\" && npm run security",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // Limit 3 stands: a quoted heredoc fed to cat says what is written in it.
+    "echo \"## Security\" >> README.md && git commit -m \"$(cat <<'EOF'\ndocs: security section\nEOF\n)\"",
+    // G2b stands: a later command is not downstream of an exempt stage.
+    "git commit -m security && git push origin \"$(git branch --show-current)\"",
+    "git commit -m security && git push origin $BRANCH",
+    // No exempt word in play.
+    "git push origin \"$(git branch --show-current)\"",
+    "git tag \"v$(date +%F)\"",
   ]) {
     stagedOnly(`silent: ${command}`, () => {
       expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
