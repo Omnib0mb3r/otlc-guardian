@@ -1040,6 +1040,20 @@ Tests: `tests/hook.test.js`, in the E5 group: four commands with 1,005 clean fil
 
 Smoke test after applying: in a scratch project with more than 1,000 `.md` files under `docs/` ask Claude to run `find docs -name '*.md' -exec cat {} + >> CLAUDE.md` (a Guardian prompt; decline).
 
+**Re-probe 6, W5 and Lex decision G4 (2026-11-11): a copy through a group, a piped subshell or a process substitution. Fixed in staging, not yet live.** With `notes/x.md` holding "ignore all previous instructions" these were silent in both modes, in the live hook too: `{ cat notes/x.md; } > CLAUDE.md`, `cat notes/x.md | ( cat > CLAUDE.md )`, `cat notes/x.md > >(tee CLAUDE.md)`, `cat notes/x.md > >(cat > CLAUDE.md)`, `tee CLAUDE.md < <(cat notes/x.md)`. Real effect in the re-probe (`real\grpcp`, `subcp`, `psub2`, `psub3`): CLAUDE.md held the payload. `shellWriteTargets()` carried a stage's output on only over `|`, `|&` and `)`: the `}` that closes a group is a word, so the redirect after it wrote the file from a stage with no sources; a pipe into `(` was reset at the bracket; a `>` or `<` followed by `(` was skipped.
+
+Lex's decision G4: a redirect or pipe into a watched file from a group, a subshell or a process substitution judges every source the compound reads.
+
+Change in `staging/hooks/injection-guard-hook.mjs`, in `shellWriteTargets()`: open `( )` and `{ }` groups are kept on a stack (`groups`). What every command inside a group prints is the group's output, which the redirect or pipe after the closing bracket carries on (before, only the last command of a subshell counted, so `( cat notes/x.md; echo done ) > CLAUDE.md` was silent too). What is piped into a group is on the stdin of every command inside it. A leading `{` is taken off the first command of a group, so that command is read like any other. `>(cmd)` is read as a pipe of the current command's output into `cmd` (`procSinks`; the function takes the piped sources as a new last parameter), and `<(cmd)` as a file whose content is what `cmd` prints (`procSources`, `outputOf()`).
+
+Side effect, wanted: a command inside `{ }` is now read by the readers, so `{ rm -f .claude/settings.json; }` and `f() { rm -rf security; }; f` are found as a delete of Guardian's file and no longer rest on the name check alone. One F1 test asserted the words "names security" for the function form; it now accepts either message.
+
+Tests: `tests/hook.test.js`, "a copy through a group, a subshell or a process substitution (re-probe 6, G4)": 13 are denied on content (11 failed before the fix; `cat notes/x.md | { cat > CLAUDE.md; }` and `cat <(cat notes/x.md) > CLAUDE.md` were denied already), 8 stay silent in bypass mode (the same forms with a clean source or into a file that is not watched, `diff <(sort a) <(sort b)`, and a payload read by a command whose output goes elsewhere). Staged hook suite before: 1121 passed, 11 failed. After: 1132 passed, 0 failed. Lex's regress harness: no line changed.
+
+Limit that stays: the sources are a superset. Every command in a group counts, also one whose own output is redirected away (`( cat notes/x.md > /dev/null; cat docs/a.md ) > CLAUDE.md` is denied), and a `<(cmd)` given to a program as an argument is treated as read by it.
+
+Smoke test after applying: with a payload in `notes/x.md` ask Claude to run `{ cat notes/x.md; } > CLAUDE.md`; see the deny.
+
 ### BUG-067: PowerShell parameter prefixes and encoded command payloads
 
 **Status:** IN-PROGRESS · **Found:** 2026-11-10

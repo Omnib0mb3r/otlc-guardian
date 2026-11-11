@@ -233,6 +233,15 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A copy through a group, a piped subshell or a process substitution
+  is judged by content (BUG-066, re-probe 6 G4).**
+  `{ cat notes/x.md; } > CLAUDE.md`, `cat notes/x.md | ( cat > CLAUDE.md )`,
+  `cat notes/x.md > >(tee CLAUDE.md)` and `tee CLAUDE.md < <(cat notes/x.md)`
+  wrote a payload into a watched file unread. The reader now carries
+  the output of every command in a `( )` or `{ }` group to what follows
+  the closing bracket, gives a group what is piped into it, and reads
+  `>(cmd)` as a pipe and `<(cmd)` as cmd's output.
+
 - **An escape right after a guarded name no longer hides it (BUG-075).**
   `printf "rm -rf security\n" | sh`, `echo -e "rm -rf security\n" | sh`
   and `printf "rm -rf .claude/hooks\n" | sh` were silent: the `\n` was

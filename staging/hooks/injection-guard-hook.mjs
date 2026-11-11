@@ -2246,7 +2246,7 @@ function pathLikeWords(text) {
  *   A copy of a file this command wrote earlier carries what was written
  *   there (`grep -v x f > tmp && mv tmp f`).
  */
-function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { decoded: [], filters: [], quiet: [] }) {
+function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { decoded: [], filters: [], quiet: [] }, stdin = []) {
   const targets = new Map();
   if (depth > MAX_SHELL_DEPTH) return targets;
   // Git Bash spells a drive as a folder (/c/Users); PowerShell and cmd do not.
@@ -2264,13 +2264,26 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
     entry.append ||= append;
     targets.set(key, entry);
   };
-  const recurse = (text, dir, inner = dialect) => {
-    for (const [key, entry] of shellWriteTargets(text, dir, depth + 1, inner, found)) {
+  const merge = (inner) => {
+    for (const [key, entry] of inner) {
       const mine = targets.get(key) ?? { sources: new Set(), append: false };
       for (const s of entry.sources) mine.sources.add(s);
       mine.append ||= entry.append;
       targets.set(key, mine);
     }
+  };
+  const recurse = (text, dir, inner = dialect, piped = []) => merge(shellWriteTargets(text, dir, depth + 1, inner, found, piped));
+  // The sources of what a command prints: it is read as a subshell
+  // redirected to a file that does not exist, and that file's sources are
+  // taken (for <(cmd), re-probe 6, G4).
+  const outputOf = (text, dir) => {
+    const sink = ".guardian-substitution-output";
+    const inner = shellWriteTargets(`(${text}\n) > ${sink}`, dir, depth + 1, dialect, found);
+    const key = abs(dir, sink);
+    const sources = [...(inner.get(key)?.sources ?? [])];
+    inner.delete(key);
+    merge(inner);
+    return sources;
   };
   const filter = (inputs, apply) => `filter:${found.filters.push({ inputs, apply }) - 1}`;
   const ctx = { add, abs, recurse, dialect, decoded: found.decoded, quiet: [], filter, root: found.root };
@@ -2301,7 +2314,14 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
   let stageWords = []; // this command's word tokens, with their places in the text
   let writes = [];   // [{ word, append }] from > and >> redirections
   let reads = [];    // files read through <
-  let pipeIn = [];   // sources whose content arrives on stdin through a pipe
+  let pipeIn = stdin; // sources whose content arrives on stdin through a pipe
+  // Open ( ) and { } groups (re-probe 6, G4). What every command inside
+  // prints is the group's output, which a redirect or pipe after the
+  // closing bracket carries on; what is piped into the group is on the
+  // stdin of every command inside.
+  const groups = [];     // [{ out: [], stdin: [] }]
+  let procSinks = [];    // the commands of >(cmd): this command's output is piped into each
+  let procSources = [];  // the commands of <(cmd): this command reads what each prints
   // Text that arrives on stdin spelled out in the command: a heredoc body,
   // a here-string, what an echo or printf before a pipe says. To an
   // interpreter or a shell with no other program it is the script.
@@ -2309,7 +2329,20 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
   let said = [];
   let heredocsSeen = 0;
   const finish = (op) => {
-    const stage = commandWrites(words, dir, ctx, { pipeIn, reads: reads.map((r) => abs(dir, r)), scripts: [...said, ...scripts] });
+    let own = words;
+    if (own[0] === "{") {
+      groups.push({ out: [], stdin: pipeIn });
+      own = own.slice(1);
+    }
+    const closes = own.length === 1 && own[0] === "}" && groups.length > 0;
+    const substituted = procSources.splice(0).flatMap((inner) => outputOf(inner, dir));
+    const stage = closes
+      ? { dir, out: groups.pop().out }
+      : commandWrites(own, dir, ctx, {
+        pipeIn: [...pipeIn, ...groups.flatMap((g) => g.stdin)],
+        reads: [...reads.map((r) => abs(dir, r)), ...substituted],
+        scripts: [...said, ...scripts],
+      });
     // A filter pattern is left out of the scan only where it is written:
     // the token of this command that spells it, in the top-level text.
     for (const q of ctx.quiet.splice(0)) {
@@ -2318,10 +2351,17 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
       if (k >= 0) stageWords.splice(k, 1);
     }
     for (const w of writes) add(dir, w.word, stage.out, w.append);
+    for (const inner of procSinks.splice(0)) recurse(inner, dir, dialect, stage.out);
     dir = stage.dir;
-    // A group's output flows on: (Get-Content x) | Set-Content y, (cat a) > b (re-probe 3, D1).
-    pipeIn = op === "|" || op === "|&" || op === ")" ? stage.out : [];
-    said = (op === "|" || op === "|&") && TEXT_SAYERS.has(commandName(words[0] ?? "")) ? [words.slice(1).join(" ")] : [];
+    for (const g of groups) g.out.push(...stage.out);
+    // A group's output flows on: (Get-Content x) | Set-Content y, (cat a) > b
+    // (re-probe 3, D1), and so does what is piped into one: cat a | ( cat > b ).
+    if (op === "(") {
+      groups.push({ out: [], stdin: own.length === 0 ? pipeIn : [] });
+      pipeIn = [];
+    } else if (op === ")") pipeIn = groups.pop()?.out ?? stage.out;
+    else pipeIn = op === "|" || op === "|&" ? stage.out : [];
+    said = (op === "|" || op === "|&") && TEXT_SAYERS.has(commandName(own[0] ?? "")) ? [own.slice(1).join(" ")] : [];
     scripts = [];
     words = [];
     stageWords = [];
@@ -2336,6 +2376,19 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
     } else if (CONTROL_OPERATORS.has(tok.op)) finish(tok.op);
     else if (WRITE_REDIRECTS.has(tok.op) || READ_REDIRECTS.has(tok.op)) {
       const next = tokens[i + 1];
+      // A process substitution: >(cmd) is a pipe into cmd, and <(cmd) is
+      // what cmd prints, read as a file (re-probe 6, G4).
+      if (next?.op === "(" && dialect === "bash" && (tok.op === ">" || tok.op === "<")) {
+        let open = 0;
+        let j = i + 1;
+        for (; j < tokens.length; j++) {
+          if (tokens[j].op === "(") open++;
+          else if (tokens[j].op === ")" && --open === 0) break;
+        }
+        (tok.op === ">" ? procSinks : procSources).push(command.slice(next.end, tokens[j]?.start ?? command.length));
+        i = j;
+        continue;
+      }
       if (next?.word === undefined) continue;
       i++;
       if (WRITE_REDIRECTS.has(tok.op)) writes.push({ word: next.word, append: tok.op === ">>" || tok.op === "&>>" });
