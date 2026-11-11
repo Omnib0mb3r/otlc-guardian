@@ -2484,6 +2484,75 @@ describe("PreToolUse hook - a command naming a guarded file asks unless it only 
 });
 
 // ---------------------------------------------------------------------------
+// Re-probe 4, E4: the strictest finding decides, and every finding is named
+// ---------------------------------------------------------------------------
+//
+// The checks ran in order and the first one to speak ended the run, so a
+// command that both copied a payload into CLAUDE.md (deny) and named a
+// guarded file (ask) asked, and the prompt said nothing of the payload. A
+// person approving the read let the payload in.
+
+describe("PreToolUse hook - the strictest finding decides (re-probe 4, E4)", () => {
+  const run = (tool, command, mode) => withTempProject((dir) => {
+    const files = {
+      ".claude/settings.json": "{}",
+      "notes/x.md": `${CRITICAL_PAYLOAD}\n`,
+      "notes/clean.md": "Be terse.\n",
+      "staged/agents/a.md": `${CRITICAL_PAYLOAD}\n`,
+      "clean/agents/a.md": "Be terse.\n",
+    };
+    for (const [rel, text] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      writeFileSync(path.join(dir, rel), text);
+    }
+    return runHook(PRE_HOOK, { tool_name: tool, cwd: dir, tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) });
+  });
+
+  // Each asked in default mode, with a prompt that did not mention the payload.
+  for (const [tool, command] of [
+    ["Bash", "cp notes/x.md CLAUDE.md && cat .claude/settings.json"],
+    ["Bash", "cat .claude/settings.json; cp notes/x.md CLAUDE.md"],
+    ["Bash", "cp -r staged/agents .claude/"],
+    ["PowerShell", "robocopy staged .claude\\agents /MIR"],
+    ["PowerShell", "Copy-Item staged\\agents .claude -Recurse"],
+  ]) {
+    stagedOnly(`a payload copy that also names a guarded file is denied with prompts on: ${command}`, () => {
+      const out = run(tool, command);
+      assert.equal(decisionOf(out), "deny", out.slice(0, 300));
+      expectWarning(out, "GUARD-INJ-001");
+    });
+  }
+
+  stagedOnly("the message names both findings, the payload and the guarded file", () => {
+    const out = run("Bash", "cp notes/x.md CLAUDE.md && cat .claude/settings.json");
+    expectWarning(out, "GUARD-INJ-001", "CLAUDE.md", ".claude/settings.json", "2 findings");
+  });
+
+  // The guarded-name ask is staged (D1), so its control is too.
+  stagedOnly("the same commands with a clean source keep their ask", () => {
+    for (const [tool, command] of [
+      ["Bash", "cp notes/clean.md CLAUDE.md && cat .claude/settings.json"],
+      ["Bash", "cp -r clean/agents .claude/"],
+    ]) {
+      const out = run(tool, command);
+      assert.equal(decisionOf(out), "ask", `${command}: ${out.slice(0, 200)}`);
+    }
+  });
+
+  test("a payload copy alone is denied in both modes, one finding", () => {
+    for (const mode of [undefined, "bypassPermissions"]) {
+      const out = run("Bash", "cp notes/x.md CLAUDE.md", mode);
+      assert.equal(decisionOf(out), "deny");
+      assert.ok(!JSON.parse(out).hookSpecificOutput.permissionDecisionReason.includes("findings"), "one finding is not numbered");
+    }
+  });
+
+  test("a clean copy that names nothing guarded stays silent", () => {
+    expectSilent(run("Bash", "cp notes/clean.md CLAUDE.md"));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

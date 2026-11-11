@@ -227,6 +227,14 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A payload deny is never replaced by an ask (BUG-078, re-probe 4 E4).**
+  The staged hook's checks ran in order and the first to speak ended the
+  run, so `cp notes/x.md CLAUDE.md && cat .claude/settings.json` asked
+  about the settings file and said nothing of the payload it copied into
+  `CLAUDE.md`; folder copies into `.claude` dropped from deny to ask the
+  same way. Every check now records its finding and the strictest decides
+  (deny over ask over an advisory); the message names each one.
+
 - **An HTML comment used as padding no longer hides half a pattern
   (BUG-046, re-probe 3).** The change window weighed a comment's characters
   as text, so a comment over 2 KB between "ignore all" on disk and
