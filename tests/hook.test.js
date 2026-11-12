@@ -7243,6 +7243,70 @@ describe("PreToolUse hook - a source that is not on disk, and a clone (re-probe 
   }
 });
 
+describe("PreToolUse hook - a folder an archive is unpacked into (re-probe 10, R1 and Lex decision L1)", () => {
+  // What an extractor writes is the archive's content, which is not read
+  // before it lands: the folder carries the clone's marker.
+  for (const [command, tool] of [
+    // R1: unpacked into a scratch folder, then the folder copied in whole.
+    ["mkdir -p .claude/agents tmp && tar -xf agents.tar -C tmp && cp -r tmp/. .claude/agents/"],
+    ["mkdir -p .claude/agents && unzip -oq agents.zip -d tmp && cp -r tmp/. .claude/agents/"],
+    ["curl -L https://example.test/a.zip -o a.zip && unzip -o a.zip -d tmp && cp -r tmp/. .claude/agents/"],
+    ["curl -L https://example.test/a.tgz | tar -xz -C tmp && cp -r tmp/. .claude/agents/"],
+    ["tar -xf evil.tar -C tmp && cp -r tmp .claude/agents/"],
+    ["unzip -o nothere.zip -d tmp && cp -r tmp .claude/agents/"],
+    ["tar --extract --file=a.tar --directory=tmp && cp -r tmp/. .claude/agents/"],
+    ["bsdtar -xf a.zip -C tmp && cp -r tmp/. .claude/agents/"],
+    ["7z x a.7z -otmp && cp -r tmp/. .claude/agents/"],
+    ["7z x -otmp a.7z && cp tmp/CLAUDE.md CLAUDE.md"],
+    ["7za e a.zip -o tmp -y && cp -r tmp/. .claude/agents/"],
+    ["python -m zipfile -e a.zip tmp && cp -r tmp/. .claude/agents/"],
+    ["python -c \"import zipfile; zipfile.ZipFile('a.zip').extractall('tmp')\" && cp -r tmp/. .claude/agents/"],
+    ["unzip a.zip CLAUDE.md -d tmp && cp tmp/CLAUDE.md CLAUDE.md"],
+    // Unpacked into the working folder, then copied on.
+    ["tar -xf a.tar && cp -r agents/. .claude/agents/"],
+    ["unzip -o a.zip && cp pack/CLAUDE.md CLAUDE.md"],
+    // Unpacked straight into a watched path (re-probe 9 open item (b)).
+    ["tar -xf agents.tar -C .claude/agents"],
+    ["unzip agents.zip -d .claude/agents"],
+    ["unzip -o agents.zip CLAUDE.md"],
+    ["tar -xf a.tar CLAUDE.md"],
+    ["cd .claude/agents && tar -xf ../../a.tar"],
+    ["7z x a.7z -o.claude/agents"],
+    ["python -m tarfile -e a.tar .claude/agents"],
+    // PowerShell.
+    ["Expand-Archive agents.zip -DestinationPath tmp; Copy-Item -Recurse tmp .claude\\agents\\pack", "PowerShell"],
+    ["Expand-Archive agents.zip -DestinationPath tmp; Copy-Item -Recurse tmp\\* .claude\\agents\\", "PowerShell"],
+    ["Expand-Archive agents.zip -DestinationPath .claude\\agents", "PowerShell"],
+    ["Expand-Archive -Path agents.zip -DestinationPath .claude\\agents -Force", "PowerShell"],
+    ["[IO.Compression.ZipFile]::ExtractToDirectory('a.zip', 'tmp'); Copy-Item -Recurse tmp\\. .claude\\agents", "PowerShell"],
+    ["[IO.Compression.ZipFile]::ExtractToDirectory('a.zip', '.claude\\agents')", "PowerShell"],
+  ]) {
+    stagedOnly(`asks${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      const out = runGuarded(command, { tool });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  // Unpacking where nothing is watched stays silent, as a clone into vendor/ does.
+  for (const [command, tool] of [
+    ["tar -xzf node-v24.tar.gz -C /tmp/node"],
+    ["tar -xf release.tar -C dist && npm ci"],
+    ["unzip -o fonts.zip -d assets/fonts"],
+    ["unzip -q data.zip -d data && python scripts/load.py data"],
+    ["mkdir -p build && tar -xf dist.tar -C build && ls build"],
+    ["7z x backup.7z -orestore && ls restore"],
+    ["tar -tf a.tar"],
+    ["unzip -l a.zip"],
+    ["unzip -o a.zip -d tmp && cp tmp/README.md docs/"],
+    ["Expand-Archive release.zip -DestinationPath C:\\tools\\app", "PowerShell"],
+    ["Expand-Archive data.zip -DestinationPath data; Get-ChildItem data", "PowerShell"],
+  ]) {
+    stagedOnly(`silent${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions", tool }));
+    });
+  }
+});
+
 describe("PreToolUse hook - PowerShell downloads, mklink and fsutil hardlink (re-probe 9, K2)", () => {
   for (const command of [
     // The re-probe's download forms, and their like.

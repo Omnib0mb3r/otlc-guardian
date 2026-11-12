@@ -4404,7 +4404,7 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
     // [IO.Compression.ZipFile]::ExtractToDirectory('a.zip', 'dir') unpacks into dir (re-probe 4, E7).
     for (const m of command.matchAll(DOTNET_ZIP_EXTRACT)) {
       const literal = /^(['"])(.*)\1$/.exec(callArguments(command, m.index + m[0].length)?.[1] ?? "");
-      add(cwd, literal ? literal[2] || "." : ".");
+      add(cwd, literal ? literal[2] || "." : ".", [DOWNLOADED]);
     }
     // [scriptblock]::Create('...') and $ExecutionContext.InvokeCommand
     // .InvokeScript('...') make or run a script from a string, as
@@ -4637,6 +4637,8 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     tarWrites(args, dir, ctx);
   } else if (name === "unzip") {
     unzipWrites(args, dir, ctx);
+  } else if (SEVEN_ZIP_COMMANDS.has(name)) {
+    sevenZipWrites(args, dir, ctx);
   } else if (name === "npm") {
     npmWrites(args, dir, ctx);
     // npm exec and npm x start a program, as npx does (cost (c)).
@@ -4687,7 +4689,7 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     for (const p of pathLikeWords(code)) {
       if (!ROOT_WORD.test(p) && (writes || namesGuardFile(abs(dir, p)))) add(dir, p);
     }
-    for (const dest of archiveDestinations(args, code)) add(dir, dest);
+    for (const dest of archiveDestinations(args, code)) add(dir, dest, [DOWNLOADED]);
   } else if (COPY_COMMANDS.has(name)) {
     const valued = new Set(COPY_VALUE_OPTIONS[name] ?? []);
     // A valued long option may be cut short (install --own root; H9).
@@ -4972,7 +4974,10 @@ const editsInPlace = (args) => args.some((a) => /^-[a-zA-Z]*i/.test(a) || longOp
 /**
  * What `tar` extracts: the members it names, under -C/--directory or the
  * working directory, or that whole directory when it names none, since
- * the archive's contents are not visible (BUG-065).
+ * the archive's contents are not visible (BUG-065). What lands there is
+ * the archive's content, which is not read before it lands: the folder
+ * carries the clone's marker (re-probe 10, L1), so a later copy out of
+ * it asks, and so does an unpack straight into a watched path.
  */
 function tarWrites(args, dir, ctx) {
   let extract = false;
@@ -5005,14 +5010,15 @@ function tarWrites(args, dir, ctx) {
     }
   }
   if (!extract) return;
-  if (members.length === 0) ctx.add(dir, into);
-  for (const m of members) ctx.add(dir, `${into}/${m}`);
+  if (members.length === 0) ctx.add(dir, into, [DOWNLOADED]);
+  for (const m of members) ctx.add(dir, `${into}/${m}`, [DOWNLOADED]);
 }
 
 /**
  * What `unzip` extracts: the members it names, under -d (also -dDIR) or
  * the working directory, or that whole directory when it names none. Listing and
  * testing (-l, -t, -v, -Z) and extracting to stdout (-p) write nothing.
+ * Marked as unread content, as tar's is (re-probe 10, L1).
  */
 function unzipWrites(args, dir, ctx) {
   let into = ".";
@@ -5032,8 +5038,32 @@ function unzipWrites(args, dir, ctx) {
     else if (!excluding) members.push(a);
   }
   if (archive === null) return;
-  if (members.length === 0) ctx.add(dir, into);
-  for (const m of members) ctx.add(dir, `${into}/${m}`);
+  if (members.length === 0) ctx.add(dir, into, [DOWNLOADED]);
+  for (const m of members) ctx.add(dir, `${into}/${m}`, [DOWNLOADED]);
+}
+
+// 7-Zip under its names (7z, 7za, 7zr, 7zz).
+const SEVEN_ZIP_COMMANDS = new Set(["7z", "7za", "7zr", "7zz"]);
+
+/**
+ * What 7-Zip extracts (`x` keeps the archive's folders, `e` flattens
+ * them): into -oDIR, else the working folder. Its own syntax takes the
+ * folder stuck to -o; "-o DIR" is read both ways, the working folder and
+ * DIR, since either may be what lands. Marked as unread content, as
+ * tar's is (re-probe 10, L1). Other commands (a, l, t, d) write no file
+ * a later copy could take content from, or only the archive itself.
+ */
+function sevenZipWrites(args, dir, ctx) {
+  const words = args.filter((a) => !/^-/.test(a));
+  if (!/^[ex]$/i.test(words[0] ?? "")) return;
+  const into = [];
+  for (let k = 0; k < args.length; k++) {
+    const m = /^-o(.*)$/i.exec(args[k]);
+    if (!m) continue;
+    if (m[1]) into.push(archiveFolder(m[1]));
+    else into.push(".", archiveFolder(args[k + 1] ?? "."));
+  }
+  for (const folder of into.length ? into : ["."]) ctx.add(dir, folder, [DOWNLOADED]);
 }
 
 // ---------------------------------------------------------------------------
@@ -5218,8 +5248,8 @@ function powershellWrites(name, args, dir, ctx, stdin) {
     for (const p of [...(named.get("path") ?? []), ...(named.get("literalpath") ?? []), ...positional]) add(dir, p);
   } else if (name === "expand-archive") {
     // What the archive holds lands in -DestinationPath, the working
-    // folder by default, as with unzip (re-probe 4, E7).
-    add(dir, archiveFolder(psPaths(args, name, ["destinationpath"], 1)[0] ?? "."));
+    // folder by default, as with unzip (re-probe 4, E7), unread (L1).
+    add(dir, archiveFolder(psPaths(args, name, ["destinationpath"], 1)[0] ?? "."), [DOWNLOADED]);
   } else if (PS_RENAMERS.has(name)) {
     const [target] = psPaths(args, name, ["path", "literalpath"], 0);
     const [newName] = psPaths(args, name, ["newname"], 1);

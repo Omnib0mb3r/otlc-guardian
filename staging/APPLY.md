@@ -179,8 +179,7 @@ xargs sh`, J11), a download whose name the server chooses (`curl -OJ`),
 and from re-probe 9: a missing file read by `head` or `sed`, a file on
 disk rewritten by a program the readers do not model before the copy,
 the output of a program with no reader into a watched file (`gh api`,
-`aria2c`, Python's `urlretrieve`), a computed download name, an archive
-unpacked straight into a watched folder, `curl URL | sh`, a WebClient
+`aria2c`, Python's `urlretrieve`), a computed download name, `curl URL | sh`, a WebClient
 download kept in a variable, `HttpClient`, a `DownloadFile` after `cd`,
 `cp -r tools/. ~/bin/`, `cp -b -S`, a `post-checkout` hook run by a
 repair, and, held, a scanner that never settles or exits at load. All
@@ -469,6 +468,14 @@ Behavior a user will notice after the apply:
   and `(New-Object Net.WebClient).DownloadString('https://example.test/') > CLAUDE.md`.
   `(Get-Content notes\x.md).Replace('a','b') > CLAUDE.md` is denied on
   a payload.
+- A folder an archive extractor fills carries the clone's mark (L1):
+  `unzip -oq agents.zip -d tmp && cp -r tmp/. .claude/agents/`,
+  `tar -xf agents.tar -C tmp && cp -r tmp/. .claude/agents/`,
+  `unzip agents.zip -d .claude/agents`, `7z x a.7z -o.claude/agents`
+  and, through the PowerShell tool,
+  `Expand-Archive agents.zip -DestinationPath .claudegents` ask. In
+  bypass mode `unzip -o fonts.zip -d assets/fonts` and
+  `tar -xzf node-v24.tar.gz -C /tmp/node` are silent.
 - In PowerShell a text writer says the word as `echo` does (K4): in
   bypass mode `Add-Content README.md "## Security"` and
   `Write-Output "security scan done" | Out-File -Append logs\ci.log` are
@@ -843,6 +850,7 @@ there, with who ran it and how. Restore any file a test changes with
 | BUG-066 (cost ruling, downloads) | At the root of a scratch project ask Claude to run `curl -o CLAUDE.md https://example.com/`; see a Guardian prompt naming CLAUDE.md and a download; decline. With a payload in `notes/x.md`, `cp -r notes evil && cp -r evil .claude/agents`; see it denied with a message naming the payload. In bypass mode `curl -s https://example.com/ > out.html` gets no Guardian prompt. |
 | BUG-066 (K1) | In a scratch project ask Claude to run `git clone https://github.com/octocat/Hello-World tmp && cp tmp/README CLAUDE.md`; see a Guardian prompt naming CLAUDE.md; decline. Ask for `git clone https://github.com/octocat/Hello-World .claude/agents/x`; see a Guardian prompt; decline. With a payload in `notes/x.md`, `cat notes/*.md > CLAUDE.md`; see it denied. In bypass mode `git clone https://github.com/octocat/Hello-World vendor/hw` and `cp .env.example .env` get no Guardian prompt. |
 | BUG-066 (K2) | On Windows, with a payload in `notes\x.md`, through the PowerShell tool ask for `cmd /c mklink /H CLAUDE.md notes\x.md`; see it denied. Ask for `(New-Object Net.WebClient).DownloadFile('https://example.com/','CLAUDE.md')`; see a Guardian prompt naming CLAUDE.md; decline. In bypass mode `Start-BitsTransfer -Source https://example.com/x.zip -Destination downloads\x.zip` gets no Guardian prompt. |
+| BUG-066 (L1) | In a scratch project, with an archive `agents.zip` holding `helper.md` with a payload, ask Claude to run `unzip -oq agents.zip -d tmp && cp -r tmp/. .claude/agents/`; see a Guardian prompt naming `.claude/agents`; decline. Ask for `unzip agents.zip -d .claude/agents`; see a Guardian prompt; decline. In bypass mode `unzip -o agents.zip -d assets/x` gets no Guardian prompt. |
 | BUG-080 (K4) | At the root of a scratch project in bypass mode, through the PowerShell tool, ask for `Add-Content README.md "## Security"`; no Guardian prompt. Then `Add-Content x.ps1 'Remove-Item -Recurse security'; .\x.ps1`; see it denied. |
 | BUG-080 (K6) | In a scratch `guardian init` project ask Claude to run `` rm -rf secu`:`rity ``; see a Guardian prompt naming security; decline. In bypass mode `tar czf backup-$(date +%F).tgz src` and `npm config get registry && npm test -- security` get no Guardian prompt. |
 | BUG-080 (K7) | In bypass mode, in a scratch git repository, ask Claude to run `echo "- note" >> CHANGELOG.md && git add CHANGELOG.md && git commit -m "chore: security changelog" && git tag v0.0.1`; no Guardian prompt. |
