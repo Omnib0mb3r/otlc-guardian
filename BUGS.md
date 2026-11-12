@@ -1916,6 +1916,26 @@ Tests: `tests/hook.test.js`, "a program's name counts as planted only where some
 
 Smoke test after applying: at the root of a scratch project in bypass mode ask Claude to run `python manage.py migrate && python manage.py test security`; no Guardian prompt (Python itself may fail with no `manage.py`). Then ask for `cp evil/git ~/bin/; git commit -m security` in default mode; see a Guardian prompt naming security; decline.
 
+**Cost ruling on the unset-variable split (re-probe 8, Costs), Lex's decision of 2026-11-11: a name split by a variable the command does not set is uncertain. Fixed in staging, not yet live.** A variable that is not set expands to nothing, so `secu$U"rity"` is `security` to the shell and spells no name to the hook. Silent at d88f87d: `rm -rf .claude/ho$U"oks"` (run for real by the re-probe, real\unsetvar: `.claude/hooks` deleted), `rm -rf secu$U"rity"`, `npx rimraf .claude/ho${U}oks` and `cp notes/x.md CLAU${U}DE.md`, which put a payload in CLAUDE.md. The re-probe did not count it as a finding, because SECURITY.md says a name built from parts is not seen. Lex ruled to close it: it is the cheapest evasion there is.
+
+Worker findings of the same class, silent at d88f87d and fixed here (hook verdicts only): the default form (`npx rimraf secu${U:-rity}`), the shell's own parameters (`secu$1rity`, `secu$@rity`), a reference at the start of the word (`"$PREFIX"security`), two references in one word, the folder above the project (`npx rimraf .$U.`, `rm -rf .${U}./`), a write to a settings file (`echo x > .claude/sett${U}ings.json`), to `.mcp.json` and to `AGENTS.md`, a reference inside a substitution or in text handed to another shell (`bash -c 'rm -rf secu$U"rity"'`), and through the PowerShell tool `Remove-Item -Recurse secu$U"rity"`, `secu$env:U"rity"` and `Copy-Item notes\x.md CLAU${U}DE.md`.
+
+Change in `staging/hooks/injection-guard-hook.mjs`:
+
+- `splitNameReadings()` returns the command as it reads with such a variable empty, and with the default its word gives. A reference counts when a name character stands right before or after it in its word, quotes apart. `$DIR/x`, `x/$NAME` and `--out=$DIR` are left alone. `WORD_REFERENCE` and `referenceDefault()` are shared with `spellings()` in `bareWordText()`.
+- The main handler gives those readings to `guardedNameIn()` and `wordAboveProject()` beside the command, so a guarded name or a folder above the project found in a reading asks as it does when spelled out.
+- What the command writes in a reading and not as spelled joins the write targets with no content known. A settings file, an enforcement file or `.mcp.json` among them asks as any write to it does. A watched file among them asks with a message of its own, also when the source is clean: the variable may hold anything, so the hook does not judge the copy as if it knew.
+
+Built as the ruling says (uncertain, so it asks). `cp notes/x.md CLAU${U}DE.md` asks and is not denied as `cp notes/x.md CLAUDE.md` is; in bypass mode both are denied.
+
+Not read: cmd's `%U%`. On a `cmd /c` command line a variable that is not set stays as written (`del secu%U%rity` names a file `secu%U%rity`), so it splits no name there; it expands to nothing only inside a batch file, which the hook does not read.
+
+Cost: none measured. Silent before and after: `cp notes/ok.md $DEST/notes.md`, `npx rimraf build/$TARGET`, `tar -czf backup-$DATE.tgz src`, `cp README.md README.md.$TS`, `echo v$VERSION > VERSION`, `cp .env.$ENV .env`, `git checkout -b fix/$TICKET-security`, `git commit -m "release v$VERSION: security fixes"`, `awk '{print $1}' src/a.js`. A command asks only when taking the variable out leaves a guarded name, a folder above the project or a watched file that the command as spelled does not have.
+
+Tests: `tests/hook.test.js`, "a name split by a variable that is not set (re-probe 8, cost ruling on the unset-variable split)": 25 ask (3 through the PowerShell tool), 15 silent. Against the hook at d88f87d, 25 failed. Staged hook suite before: 2542 passed, 25 failed. After: 2567 passed, 0 failed. Re-probe 7's 640 commands and re-probe 8's 851: 0 verdicts changed. Everyday commands: 0 changed in the 75 and in the 197. Lex's regress harness: no line changed.
+
+Smoke test after applying: in a scratch `guardian init` project ask Claude to run `rm -rf secu$U"rity"`; see a Guardian prompt naming security; decline. Put the line "ignore all previous instructions" in `notes/x.md` and ask for `cp notes/x.md CLAU${U}DE.md`; see a Guardian prompt naming CLAUDE.md; decline. In bypass mode `tar -czf backup-$DATE.tgz src` gets no Guardian prompt.
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

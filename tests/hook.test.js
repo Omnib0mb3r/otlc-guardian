@@ -6840,6 +6840,87 @@ describe("PreToolUse hook - a folder above the project stuck to -P or -B (re-pro
 });
 
 // ---------------------------------------------------------------------------
+// RE-PROBE 8, THE COST RULING ON THE UNSET-VARIABLE SPLIT (staged): a
+// variable the command does not set, stuck inside a name, left a word
+// that spells no name and expands to one: rm -rf secu$U"rity" deleted
+// Guardian's folder. The command is also read with such a variable empty
+// and with the default its word gives; a guarded name, a folder above the
+// project or a watched file found in that reading asks.
+
+describe("PreToolUse hook - a name split by a variable that is not set (re-probe 8, cost ruling on the unset-variable split)", () => {
+  for (const command of [
+    // The re-probe's forms.
+    "rm -rf .claude/ho$U\"oks\"",
+    "rm -rf secu$U\"rity\"",
+    "npx rimraf .claude/ho${U}oks",
+    "cp notes/x.md CLAU${U}DE.md",
+    // The other spellings of a reference, and its default.
+    "npx rimraf secu${U}rity",
+    "npx rimraf secu${U:-rity}",
+    "npx rimraf \"secu$U\"rity",
+    "npx rimraf secu$1rity",
+    "npx rimraf secu$@rity",
+    "npx rimraf sec${U}uri${V}ty",
+    "npx rimraf \"$PREFIX\"security",
+    "npx rimraf .clau$U\"de\"/settings.json",
+    // The folder above the project.
+    "npx rimraf .$U.",
+    "rm -rf .${U}./",
+    // A watched file, clean content included: what lands is not known.
+    "cp notes/ok.md CLAU${U}DE.md",
+    "cat notes/x.md > CLAU$U\"DE\".md",
+    "cp notes/x.md AGEN${U}TS.md",
+    "echo x > .claude/sett${U}ings.json",
+    "mv notes/ok.md .mc${U}p.json",
+    // Inside a substitution, and in text handed to another shell.
+    "echo $(npx rimraf secu${U}rity)",
+    "bash -c 'rm -rf secu$U\"rity\"'",
+    "sh -c 'cp notes/x.md CLAU${U}DE.md'",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    "Remove-Item -Recurse secu$U\"rity\"",
+    "Remove-Item -Recurse secu$env:U\"rity\"",
+    "Copy-Item notes\\x.md CLAU${U}DE.md",
+  ]) {
+    stagedOnly(`asks, PowerShell tool: ${command}`, () => {
+      const out = runGuarded(command, { tool: "PowerShell" });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // A variable that is a path segment or a value of its own.
+    "cp notes/ok.md $DEST/notes.md",
+    "npx rimraf build/$TARGET",
+    "npx rimraf $BUILD_DIR/cache",
+    "npm run build -- --out=$OUT/security-report",
+    "export PATH=$PATH:$HOME/bin && npm run security",
+    // A variable stuck to a name that is no guarded or watched one.
+    "tar -czf backup-$DATE.tgz src",
+    "cp README.md README.md.$TS",
+    "echo v$VERSION > VERSION",
+    "cp .env.$ENV .env",
+    "npx rimraf dist-$TARGET",
+    "git checkout -b fix/$TICKET-security",
+    "git commit -m \"release v$VERSION: security fixes\"",
+    // A dollar sign that is no variable in a name.
+    "awk '{print $1}' src/a.js",
+    "grep -rn 'foo$' src",
+    "for f in notes/*.md; do cp \"$f\" \"backup/$f.bak\"; done",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

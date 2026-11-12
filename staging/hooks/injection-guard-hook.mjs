@@ -2456,6 +2456,49 @@ function plainCommand(text, tokens, dialect, outside = null) {
   return { opens, reads, redirects, at, replacedFrom: whole ? Infinity : replacedFrom };
 }
 
+// A variable reference in a word: ${NAME}, ${NAME:-value} and their like
+// (the value is captured), $NAME, the shell's own ($1, $@, $#, $?), and
+// PowerShell's $env:NAME.
+const WORD_REFERENCE = /\$\{[#!]?[A-Za-z_]\w*(?::?[-+]([^}]*))?[^}]*\}|\$env:[A-Za-z_]\w*|\$[A-Za-z_]\w*|\$[\d@*#?]/g;
+/** What a reference to a variable that is not set leaves in its word: the default the word gives, 0 for a count, else nothing. */
+const referenceDefault = (m, value) => value ?? (/^\$(?:\{#|[#?]$)/.test(m) ? "0" : "");
+// A character a file name is made of, for a reference stuck to one.
+const NAME_PART = /[A-Za-z0-9_~.-]/;
+
+/**
+ * The command as it reads when a variable stuck to the text of a name is
+ * not set (re-probe 8, the cost ruling on the unset-variable split):
+ * `rm -rf secu$U"rity"` deletes security, and `cp notes/x.md
+ * CLAU${U}DE.md` writes CLAUDE.md, and neither word spells the name. A
+ * reference counts when a name character stands right before or after it
+ * in its word, quotes apart; $DIR/x and --out=$DIR are left as they are.
+ * It is read once as empty and once with the default its word gives
+ * (secu${U:-rity}). Text in single quotes is read the same way, since a
+ * shell it is handed to expands it (bash -c 'rm -rf secu$U"rity"').
+ * @returns {string[]} the readings that differ from the text
+ */
+function splitNameReadings(text, dialect) {
+  const { tokens, uncertain } = lexShell(text, dialect);
+  if (uncertain) return [];
+  const readings = [() => "", referenceDefault].map((fill) => {
+    let out = "";
+    let at = 0;
+    for (const tok of tokens) {
+      if (tok.word === undefined) continue;
+      const raw = text.slice(tok.start, tok.end);
+      const spelled = raw.replace(WORD_REFERENCE, (m, value, offset) => {
+        const before = raw.slice(0, offset).replace(/["']/g, "").slice(-1);
+        const after = raw.slice(offset + m.length).replace(/["']/g, "").slice(0, 1);
+        return NAME_PART.test(before) || NAME_PART.test(after) ? fill(m, value) : m;
+      });
+      out += text.slice(at, tok.start) + spelled;
+      at = tok.end;
+    }
+    return out + text.slice(at);
+  });
+  return [...new Set(readings)].filter((reading) => reading !== text);
+}
+
 /**
  * The text a substitution puts in a word, when the reader knows it
  * (re-probe 7, cost (b)): the body of a quoted heredoc fed to cat, which
@@ -2580,9 +2623,8 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
     if (tok.expanded || !tok.word.includes("$")) return [tok.word];
     // Read from the text, where the quotes still tell x.s$U"h" from x.s$Uh.
     const raw = text.slice(tok.start, tok.end);
-    const reference = /\$\{[#!]?[A-Za-z_]\w*(?::?[-+]([^}]*))?[^}]*\}|\$[A-Za-z_]\w*|\$[\d@*#?]/g;
     const word = (spelled) => lexShell(spelled, dialect).tokens.map((part) => part.word ?? "").join("");
-    return [tok.word, word(raw.replace(reference, "")), word(raw.replace(reference, (m, value) => value ?? (/^\$(?:\{#|[#?]$)/.test(m) ? "0" : "")))];
+    return [tok.word, word(raw.replace(WORD_REFERENCE, "")), word(raw.replace(WORD_REFERENCE, referenceDefault))];
   };
   /** Whether a word, with any glob or brace list in it, can expand to a file of this name. */
   const expandsTo = (tok, base) => spellings(tok).some((one) => expandBraces(one).split(/\s+/).some((spelled) => {
@@ -5508,6 +5550,20 @@ process.stdin.on("end", () => {
     const sessionCwd = (typeof data.cwd === "string" && data.cwd) || projectRoot;
     const shellRead = { decoded: [], filters: [], quiet: [], root: projectRoot };
     const bashTargets = write.kind === "bash" ? shellWriteTargets(write.content, sessionCwd, 0, write.dialect, shellRead) : new Map();
+    // A name split by a variable that may not be set (CLAU${U}DE.md,
+    // secu$U"rity") is read as the name it can be (re-probe 8, the cost
+    // ruling on the unset-variable split). What the command writes in
+    // that reading is written here too, with nothing known of its
+    // content, so a watched file among it is confirmed by a person.
+    const splitReadings = write.kind === "bash" ? splitNameReadings(write.content, write.dialect) : [];
+    const splitTargets = new Set();
+    for (const reading of splitReadings) {
+      for (const target of shellWriteTargets(reading, sessionCwd, 0, write.dialect, { decoded: [], filters: [], quiet: [], root: projectRoot }).keys()) {
+        if (bashTargets.has(target)) continue;
+        bashTargets.set(target, { sources: new Set(), append: false });
+        splitTargets.add(target);
+      }
+    }
     const bashWrites = [...bashTargets.keys()];
 
     // ── Self-protection: settings changes that weaken Guardian ────────
@@ -5594,7 +5650,7 @@ process.stdin.on("end", () => {
     // one, in any spelling, and is not known to only read (re-probe 3, D1).
     if (write.kind === "bash" && selfProtected.size === 0) {
       const outside = outsideProject(projectRoot);
-      const named = guardedNameIn([write.content, ...shellRead.decoded], write.dialect, sessionCwd, projectRoot,
+      const named = guardedNameIn([write.content, ...splitReadings, ...shellRead.decoded], write.dialect, sessionCwd, projectRoot,
         (file) => isWatchedPath(file, settings));
       if (named && !onlyReads(write.content, write.dialect, 0, null, outside)) {
         record(confirmOrDeny,
@@ -5604,7 +5660,7 @@ process.stdin.on("end", () => {
           `cat or Get-Content. Approve only if you asked for it.${bypassNote}`);
       }
       // A folder above the project holds all of them at once (F3b).
-      const above = named ? null : wordAboveProject([write.content, ...shellRead.decoded], write.dialect, sessionCwd, projectRoot);
+      const above = named ? null : wordAboveProject([write.content, ...splitReadings, ...shellRead.decoded], write.dialect, sessionCwd, projectRoot);
       if (above && !onlyReads(write.content, write.dialect, 0, null, outside)) {
         record(confirmOrDeny,
           `${TAG} This command names ${safeEchoPath(above, 60)}, a folder above this project, which holds the project ` +
@@ -5627,6 +5683,13 @@ process.stdin.on("end", () => {
     // ${ }, where the shell may read it otherwise. A copy into the
     // watched path this command names can sit in that text unread, so a
     // person confirms the command.
+    const splitWatched = written.find((target) => splitTargets.has(target));
+    if (splitWatched) {
+      record(confirmOrDeny,
+        `${TAG} This command writes ${safeEchoPath(splitWatched, 120)}, which agents load as instructions, when a variable ` +
+        `inside the file's name is not set, and Guardian cannot tell what the variable holds or judge what lands there. ` +
+        `Spell the file's name out, or approve only if you know what the command does.${bypassNote}`);
+    }
     if (shellRead.uncertain) {
       record(confirmOrDeny,
         `${TAG} This command names ${safeEchoPath(watched[0], 120)}, which agents load as instructions, and Guardian ` +

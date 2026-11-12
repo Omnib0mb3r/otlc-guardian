@@ -233,6 +233,14 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A name split by a variable that is not set asks (BUG-080, re-probe
+  8 cost ruling).** `rm -rf secu$U"rity"` deleted Guardian's folder
+  and `cp notes/x.md CLAU${U}DE.md` wrote CLAUDE.md, and neither was
+  seen: the word spells no name until the shell drops the variable.
+  The command is now also read with a variable stuck inside a name
+  left empty, and with the default its word gives. A guarded name, a
+  folder above the project or a watched file found that way asks.
+
 - **A folder above the project stuck to `-P` or `-B` asks (BUG-074,
   re-probe 8 cost (a)).** `wget -P.. URL` and `cmake -S. -B..` write
   above the project and were silent. `-P` and `-B` are now read as
