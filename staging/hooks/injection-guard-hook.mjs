@@ -1889,6 +1889,12 @@ function messageSpans(stage) {
   return spans;
 }
 
+// The options of git push known to run no program and to take no value
+// (re-probe 8, J11). --receive-pack, --exec and --signed start one, and
+// git takes a long option cut short, so only these, as spelled, pass.
+const GIT_PUSH_FLAGS = new Set(["-u", "--set-upstream", "-f", "--force", "--force-with-lease", "--force-if-includes", "--tags", "--follow-tags",
+  "--all", "--atomic", "--prune", "-d", "--delete", "-n", "--dry-run", "-q", "--quiet", "-v", "--verbose", "--progress", "--no-verify"]);
+
 // The folders whose files git runs as hooks, by name, wherever they
 // stand in a path: .git (hooks, config), .husky, and .githooks, the usual
 // value of core.hooksPath.
@@ -2602,6 +2608,10 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
     // A redirect that writes the file counts in any stage: git commit -m x > l.txt.
     const holding = tokens.filter((tok, i) => tok.word !== undefined && spellings(tok).some((one) => one.toLowerCase().includes(base)) &&
       (WRITE_REDIRECTS.has(tokens[i - 1]?.op) || active(tok.start)));
+    // git's store names the file again to whatever comes after: git add
+    // with its name, and git add ., git add -A, git commit -a and git
+    // stash without it (re-probe 8, J11).
+    if (all.some((s) => gitStores(s) && !keptOnly(s))) return false;
     return holding.length === 1 && !plain.opens.some((arg) => (background || arg.start > holding[0].start) && active(arg.start) &&
       ((arg.sub && !namesNothing(arg, (said) => said.toLowerCase().includes(base))) || expandsTo(arg, base)));
   };
@@ -2665,14 +2675,18 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
   // moves, enters a virtual environment, assigns, or only reads with no
   // redirect); `settled`, it is quiet, or an exempt stage of its own, or
   // reads into a file a redirect may write.
+  const quiets = new Map();
+  const quiet = (s) => {
+    if (!quiets.has(s)) quiets.set(s, moves(s) || entersVenv(s) || assigns(s) || onlyReads(text.slice(...place(s)), dialect, 0, null, outside));
+    return quiets.get(s);
+  };
   const kinds = new Map();
   const kind = (s) => {
     if (!kinds.has(s)) {
       // Whether a file is a sink can turn on what another stage is, and
       // that on this one: while a stage is being judged it is neither.
       kinds.set(s, { quiet: false, settled: false });
-      const quiet = moves(s) || entersVenv(s) || assigns(s) || onlyReads(text.slice(...place(s)), dialect, 0, null, outside);
-      kinds.set(s, { quiet, settled: quiet || exempt(s) || onlyReads(text.slice(...place(s)), dialect, 0, sink, outside) });
+      kinds.set(s, { quiet: quiet(s), settled: quiet(s) || exempt(s) || onlyReads(text.slice(...place(s)), dialect, 0, sink, outside) });
     }
     return kinds.get(s);
   };
@@ -2682,6 +2696,25 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
   // git add and git commit put the files they are given in git's store.
   // Neither runs one or writes one in the working tree.
   const gitKeeps = (s) => s[0].word === "git" && (s[1]?.word === "add" || s[1]?.word === "commit");
+  // The same, wherever the subcommand stands (git -C src add .), and git
+  // stash, which keeps what the working tree holds.
+  const gitStores = (s) => commandName(s[0].word) === "git" && s.some((tok) => tok.word === "add" || tok.word === "commit" || tok.word === "stash");
+  // git push sends what git holds to a remote. With options known to run
+  // no program (--receive-pack and --exec name one) and every word
+  // spelled out, it hands nothing to a program here.
+  const gitPushes = (s) => s[0].word === "git" && s[1]?.word === "push" &&
+    s.slice(2).every((tok) => !/[$\x60]/.test(singleQuotesOut(text.slice(tok.start, tok.end))) && (!tok.word.startsWith("-") || GIT_PUSH_FLAGS.has(tok.word)));
+  /**
+   * Whether nothing after a stage that puts files in git's store can
+   * take them back out (re-probe 8, J11): git's index and history hand a
+   * file's content to a later stage that never names the file (git add
+   * l.txt; git diff --cached | xargs rm -rf). Every later stage, and
+   * every other one when something runs in the background, moves,
+   * assigns, only reads with no redirect to a file, or is git add, git
+   * commit or git push itself.
+   */
+  const keptOnly = (s) => all.every((other) => other === s || (!background && other[0].start < s[0].start) ||
+    quiet(other) || gitKeeps(other) || gitPushes(other));
   /**
    * Whether a stage neither runs a file it is given nor hands its
    * content to a program (cost (b)). It stands in a plain statement and

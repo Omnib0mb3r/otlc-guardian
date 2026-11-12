@@ -233,6 +233,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **Git's store names a file again to what comes after (BUG-080,
+  re-probe 8 J11).** `echo security > l.txt; git add l.txt; git diff
+  --cached | grep '^+s' | cut -c2- | xargs rm -rf` was silent: `git
+  add` did not count as naming the file, and git's index handed its
+  content to `xargs`. A command that puts files in git's store (`git
+  add`, `git commit`, `git stash`, with the file's name or with `-A`,
+  `.` or `-a`) now keeps a file it wrote ordinary only when every
+  later stage moves, assigns, only reads, or is `git add`, `git
+  commit` or a `git push` with options known to start no program.
+
 - **A command string, a git config value and a PowerShell link are
   read (BUG-066, re-probe 8 J8).** `script -qc 'true; cp notes/x.md
   CLAUDE.md' /dev/null`, `npm exec -c 'cp ...'`, `git -c

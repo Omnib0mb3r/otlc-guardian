@@ -6611,6 +6611,92 @@ describe("PreToolUse hook - a command string, a git config value, a PowerShell l
 });
 
 // ---------------------------------------------------------------------------
+// RE-PROBE 8, J11 (staged): cost (b) let git add and git commit name a
+// file without counting, and git's index and history then handed the
+// file's content to a later stage that never names it. A stage that puts
+// files in git's store (git add, git commit, git stash, with the file's
+// name or without it) leaves a file the command wrote an ordinary one
+// only when every stage after it moves, assigns, only reads, or is git
+// add, git commit or git push.
+
+describe("PreToolUse hook - git's store names a file again to what comes after (re-probe 8, J11)", () => {
+  for (const command of [
+    // The re-probe's forms.
+    "echo security > l.txt; git add l.txt; git diff --cached | grep '^+s' | cut -c2- | xargs rm -rf",
+    "echo security > l.txt; git add -N l.txt; git diff | grep '^+s' | cut -c2- | xargs rm -rf",
+    "echo 'rm -rf security' > x.sh && git add x.sh && git diff --cached --name-only | xargs sh",
+    "echo 'rm -rf security' > x.sh && git add x.sh && git ls-files -s | awk '{print $4}' | xargs sh",
+    "echo security > l.txt && git add l.txt && git commit -F l.txt && git log -1 --format=%s | xargs rm -rf",
+    "echo security > l.txt && git add l.txt && git stash; git stash show -p | xargs rm -rf",
+    // The store filled without the file's name.
+    "echo security > l.txt; git add -A; git diff --cached | grep '^+s' | cut -c2- | xargs rm -rf",
+    "echo security > l.txt; git add .; git diff --cached | grep '^+s' | cut -c2- | xargs rm -rf",
+    "echo security > l.txt; git -C . add -A; git diff --cached | grep '^+s' | cut -c2- | xargs rm -rf",
+    "echo 'rm -rf security' > x.sh && git add -A && git diff --cached --name-only | xargs sh",
+    "echo security > l.txt && git commit -am x && git log -1 -p | grep '^+s' | cut -c2- | xargs rm -rf",
+    "echo security > l.txt && git commit -m x l.txt && git log -1 -p | grep '^+s' | cut -c2- | xargs rm -rf",
+    "echo security > l.txt; git stash -u; git stash show -p --include-untracked | grep '^+s' | cut -c2- | xargs rm -rf",
+    // A later writer, runner or shell.
+    "echo security > l.txt && git add l.txt && git diff --cached > m.txt",
+    "echo security > l.txt; git add l.txt; git diff --cached | tee m.txt",
+    "echo security > l.txt; git add l.txt; git diff --cached | bash",
+    "echo security > l.txt; git add l.txt; git diff --cached | node clean.js",
+    "echo security > l.txt && git add l.txt && git archive HEAD | tar -x -C out",
+    "echo security > l.txt && git add l.txt && git checkout-index -a --prefix=out/",
+    "echo security > l.txt && git add l.txt && npm run clean",
+    "echo security > l.txt && git add l.txt && make",
+    // In the background "after" is not known.
+    "git diff --cached | grep '^+s' | cut -c2- | xargs rm -rf & echo security > l.txt; git add l.txt",
+    // git push with an option that starts a program, or a word not spelled out.
+    "echo security > l.txt && git add l.txt && git push --receive-pack=./r.sh origin main",
+    "echo security > l.txt && git add l.txt && git push --exec=./r.sh origin main",
+    "echo security > l.txt && git add l.txt && git push --rec=./r.sh origin main",
+    "echo security > l.txt && git add l.txt && git push $REMOTE main",
+    // The cost: asking now.
+    "echo \"## Security\" >> README.md && git add README.md && git commit -m \"docs: notes\" && npm test",
+    "echo \"## Security\" >> README.md && git add CHANGELOG.md && npm test",
+    "echo \"## Security\" >> README.md && git add README.md && git commit -m docs && git tag v1",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // The ruled cases of cost (b) stand.
+    "echo \"## Security\" >> README.md && git add README.md && git commit -m \"docs: notes\"",
+    "echo \"## Security\" >> README.md && git add README.md && git diff README.md",
+    "echo \"## Security\" >> README.md && git add README.md && cat README.md",
+    "echo \"## Security\" >> README.md && git add -A && git commit -m \"docs: notes\"",
+    "echo \"## Security\" >> README.md && git add README.md && git commit -m \"$(cat <<'EOF'\ndocs: security section\nEOF\n)\" && git status",
+    // Later stages that only read, move, or are git's own.
+    "echo \"## Security\" >> README.md && git add README.md && git commit -m \"docs: notes\" && git status",
+    "echo \"## Security\" >> README.md && git add README.md && git commit -m \"docs: notes\" && git log --oneline -3",
+    "echo \"## Security\" >> README.md && git add README.md && git diff --cached | head -20",
+    "echo \"## Security\" >> README.md && git add README.md && git commit -m \"docs: notes\" && cd src",
+    "echo \"## Security\" >> README.md && git add README.md && git commit -m \"docs: notes\" && git push",
+    "echo \"## Security\" >> README.md && git add README.md && git commit -m \"docs: notes\" && git push -u origin main",
+    "echo security > l.txt; git add l.txt; git commit -m notes; git log -1 -p",
+    // A runner before the store takes nothing out of it.
+    "npm test && echo \"## Security\" >> README.md && git add README.md && git commit -m \"docs: notes\"",
+    // git diff and cat put nothing in the store.
+    "echo \"## Security\" >> README.md && git diff README.md && npm test",
+    "echo \"## Security\" >> README.md && cat README.md && npm test",
+    // No file written by a redirect: nothing to name again.
+    "git add -A && git commit -m \"security fix\" && npm test",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+
+  stagedOnly("silent, PowerShell tool: an append, git add, git commit", () => {
+    expectSilent(runGuarded("echo \"## Security\" >> README.md; git add README.md; git commit -m docs", { mode: "bypassPermissions", tool: "PowerShell" }));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 
