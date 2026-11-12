@@ -109,6 +109,11 @@ export class Inspection {
     this.isMailBody = meta.source === "mail-body";
     this.reasons = [];
     this.inner = [];
+    // The same entries with their bytes, kept for the antivirus check:
+    // an engine that does not unpack archives is handed each one. They
+    // are the buffers the walk already read, at most the uncompressed
+    // limit in all.
+    this.entries = [];
     // What scanned the file in the antivirus check; null when nothing did.
     this.antivirusEngine = null;
     this.stopped = false;
@@ -164,6 +169,7 @@ export class Inspection {
   /** Lists an archive entry in `file.inner`. */
   addInner(node, buf) {
     this.inner.push({ path: node.path, sha256: sha256(buf), size: buf.length });
+    this.entries.push({ path: node.path, data: buf });
   }
 
   inspect(buf, node) {
@@ -249,8 +255,8 @@ export class Inspection {
  * @param {object} [meta] untrusted mail metadata: source, from, to, subject,
  *   message_id, received_at, original_name, content_type
  * @param {object} [options] for tests: `limits`, `now`, `platform`, and `antivirus`,
- *   a runner `(path, timeoutMs, name) => { engine, status, detail }` in place of the
- *   machine's antivirus
+ *   a runner `(path, timeoutMs, name, entries) => { engine, status, detail, findings? }`
+ *   in place of the machine's antivirus
  * @returns {object} the contract v1 verdict object
  * @throws {UsageError} when the path is not a readable file
  */
@@ -294,7 +300,8 @@ export function checkInbound(filePath, meta = {}, options = {}) {
   }
 
   // The antivirus scans the file on disk, once, whatever the walk found:
-  // a file too big to read here is still scanned.
+  // a file too big to read here is still scanned. It is given the
+  // archive entries the walk read as well.
   if ((options.platform ?? process.platform) === "win32") {
     ctx.run("antivirus", root, () => checkAntivirus(ctx, filePath, root));
   } else {

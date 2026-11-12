@@ -20,17 +20,26 @@
 //   2. Otherwise the antivirus registered as this machine's AMSI
 //      provider (Antimalware Scan Interface; a third-party antivirus
 //      that replaces Defender registers one). A Windows PowerShell
-//      child calls AmsiInitialize, AmsiOpenSession, AmsiScanBuffer
-//      over the file's bytes, AmsiCloseSession and AmsiUninitialize.
-//      A file larger than one buffer goes through in chunks that
-//      overlap, in one session. Before the file, the child hands the
-//      provider the antivirus industry's harmless test string: a
-//      provider that does not flag it is not scanning (its product is
-//      switched off, or it only takes scripts), and with no engine
-//      the file is not clean. AMSI_RESULT_DETECTED (32768 or more)
-//      blocks; clean is AMSI_RESULT_CLEAN (0) or NOT_DETECTED (1)
-//      only; blocked-by-administrator results and every other value
-//      hold.
+//      child runs engines/amsi.ps1, a plain script file: it calls
+//      AmsiInitialize, AmsiOpenSession, AmsiScanBuffer over the
+//      file's bytes, AmsiCloseSession and AmsiUninitialize. A file
+//      larger than one buffer goes through in chunks that overlap.
+//      AMSI_RESULT_DETECTED (32768 or more) blocks; clean is
+//      AMSI_RESULT_CLEAN (0) or NOT_DETECTED (1) only;
+//      blocked-by-administrator results and every other value hold.
+//
+//      AMSI sees only the bytes it is handed and does not unpack an
+//      archive. So every archive entry Guardian read (each file.inner
+//      entry) goes to the child on standard input and is scanned as a
+//      buffer of its own, under its inner path, in the same session.
+//      A detection in an entry blocks with that entry's path.
+//      MpCmdRun unpacks archives itself and gets the file only.
+//
+//      A provider whose product is switched off answers "clean" to
+//      everything. So the product behind the provider must be listed
+//      as enabled by Windows Security Center (root/SecurityCenter2,
+//      AntiVirusProduct, productState bit 0x1000); otherwise the
+//      check holds as antivirus-disabled.
 //
 //   3. Neither: the check holds. A scan that did not happen is never
 //      clean. Off Windows the check does not run, which holds too.
@@ -39,13 +48,16 @@
 // environment, so programs are found from %ProgramFiles% and
 // %SystemRoot% when set and from C:\Program Files and C:\Windows
 // otherwise, and the AMSI child is given a temp folder to compile in.
-// The file's path and name reach the child in environment variables,
-// never in its command text: a file name is untrusted.
+// The file's path and name reach the child in environment variables
+// and the entries' paths on standard input, never in its command
+// line: a name is untrusted. The command line is the same for every
+// file and holds no script text.
 // ============================================================
 
 import { spawnSync } from "child_process";
 import os from "os";
 import path from "path";
+import { fileURLToPath } from "url";
 
 const DEFAULT_PROGRAM_FILES = "C:\\Program Files";
 const DEFAULT_SYSTEM_ROOT = "C:\\Windows";
@@ -69,106 +81,38 @@ const AMSI_BLOCKED_BY_ADMIN_START = 0x4000;
 const AMSI_BLOCKED_BY_ADMIN_END = 0x4FFF;
 const AMSI_DETECTED = 0x8000;
 
-/** One AmsiScanBuffer call takes this many bytes of the file. */
+/** One AmsiScanBuffer call takes this many bytes. */
 export const AMSI_CHUNK_BYTES = 16 * 1024 * 1024;
-/** Each chunk starts this many bytes before the last one ended, so nothing is cut in two unseen. */
+/** Each chunk starts with this many bytes of the one before, so nothing is cut in two unseen. */
 export const AMSI_OVERLAP_BYTES = 64 * 1024;
+/** The AMSI child's script. Its header says what it reads and prints. */
+export const AMSI_SCRIPT = fileURLToPath(new URL("../engines/amsi.ps1", import.meta.url));
+
+// Windows Security Center, AntiVirusProduct.productState: this bit is
+// set while the product is switched on.
+const PRODUCT_ENABLED = 0x1000;
+// Windows Defender as Security Center lists it, and its AMSI provider DLL.
+const DEFENDER_PRODUCT_PATH = /^windowsdefender:/i;
+const DEFENDER_PROVIDER = "mpoav.dll";
+// "C:", "Program Files", "<vendor>": a provider and a product that
+// share at least this much of their path belong together.
+const VENDOR_DEPTH = 3;
 
 const SPAWN = { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] };
-
-// The AMSI child. It prints one line of JSON and decides nothing:
-//   providers   file names of the registered provider DLLs
-//   init        HRESULT of AmsiInitialize
-//   selftest    AMSI_RESULT for the antivirus test string, selftestHr its HRESULT
-//   result      highest AMSI_RESULT over the file's chunks, hr the first failing HRESULT
-//   chunks      AmsiScanBuffer calls made on the file
-//   error       a .NET or PowerShell failure (the file could not be opened, Add-Type failed)
-// The test string is put together at run time so no file holds it whole.
-const AMSI_SCRIPT = String.raw`
-$ErrorActionPreference = 'Stop'
-$out = @{ providers = @(); init = $null; selftest = $null; selftestHr = $null; result = $null; hr = 0; chunks = 0; error = $null }
-try {
-  $ids = @(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\AMSI\Providers' -ErrorAction SilentlyContinue | ForEach-Object { $_.PSChildName })
-  foreach ($id in $ids) {
-    $dll = (Get-ItemProperty ('HKLM:\SOFTWARE\Classes\CLSID\' + $id + '\InprocServer32') -ErrorAction SilentlyContinue).'(default)'
-    if ($dll) { $out.providers += [IO.Path]::GetFileName($dll.Trim('"')) } else { $out.providers += $id }
-  }
-  if ($out.providers.Count -gt 0) {
-    Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public static class GuardianAmsi {
-  [DllImport("amsi.dll", CharSet = CharSet.Unicode)] public static extern int AmsiInitialize(string appName, out IntPtr context);
-  [DllImport("amsi.dll")] public static extern int AmsiOpenSession(IntPtr context, out IntPtr session);
-  [DllImport("amsi.dll", CharSet = CharSet.Unicode)] public static extern int AmsiScanBuffer(IntPtr context, byte[] buffer, uint length, string contentName, IntPtr session, out int result);
-  [DllImport("amsi.dll")] public static extern void AmsiCloseSession(IntPtr context, IntPtr session);
-  [DllImport("amsi.dll")] public static extern void AmsiUninitialize(IntPtr context);
-}
-"@
-    $context = [IntPtr]::Zero
-    $out.init = [GuardianAmsi]::AmsiInitialize('OTLC Guardian inbound-check', [ref]$context)
-    if ($out.init -eq 0) {
-      try {
-        $session = [IntPtr]::Zero
-        $out.selftestHr = [GuardianAmsi]::AmsiOpenSession($context, [ref]$session)
-        if ($out.selftestHr -eq 0) {
-          try {
-            $probe = [Text.Encoding]::ASCII.GetBytes('X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR' + '-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*')
-            $verdict = 0
-            $out.selftestHr = [GuardianAmsi]::AmsiScanBuffer($context, $probe, [uint32]$probe.Length, 'guardian-selftest.txt', $session, [ref]$verdict)
-            if ($out.selftestHr -eq 0) { $out.selftest = $verdict }
-          } finally { [GuardianAmsi]::AmsiCloseSession($context, $session) }
-        }
-        if ($out.selftestHr -eq 0 -and $out.selftest -ge 32768) {
-          $chunk = [int]$env:GUARDIAN_AMSI_CHUNK
-          $overlap = [int]$env:GUARDIAN_AMSI_OVERLAP
-          $stream = [IO.File]::Open($env:GUARDIAN_AMSI_FILE, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
-          try {
-            $length = $stream.Length
-            $out.result = 0
-            $session = [IntPtr]::Zero
-            $out.hr = [GuardianAmsi]::AmsiOpenSession($context, [ref]$session)
-            if ($out.hr -eq 0) {
-              try {
-                $buffer = New-Object byte[] ([int][Math]::Min([long]$chunk, [Math]::Max([long]1, $length)))
-                $position = [long]0
-                while ($position -lt $length) {
-                  $null = $stream.Seek($position, [IO.SeekOrigin]::Begin)
-                  $filled = 0
-                  while ($filled -lt $buffer.Length) {
-                    $read = $stream.Read($buffer, $filled, $buffer.Length - $filled)
-                    if ($read -le 0) { break }
-                    $filled += $read
-                  }
-                  if ($filled -le 0) { break }
-                  $verdict = 0
-                  $out.hr = [GuardianAmsi]::AmsiScanBuffer($context, $buffer, [uint32]$filled, $env:GUARDIAN_AMSI_NAME, $session, [ref]$verdict)
-                  $out.chunks += 1
-                  if ($out.hr -ne 0) { break }
-                  if ($verdict -gt $out.result) { $out.result = $verdict }
-                  if ($verdict -ge 32768) { break }
-                  if ($position + $filled -ge $length) { break }
-                  $position += $filled - $overlap
-                }
-              } finally { [GuardianAmsi]::AmsiCloseSession($context, $session) }
-            }
-          } finally { $stream.Dispose() }
-        }
-      } finally { [GuardianAmsi]::AmsiUninitialize($context) }
-    }
-  }
-} catch {
-  $out.error = $_.Exception.Message
-}
-[Console]::Out.WriteLine(($out | ConvertTo-Json -Compress))
-`;
-const AMSI_COMMAND = Buffer.from(AMSI_SCRIPT, "utf16le").toString("base64");
 
 /**
  * @typedef {object} AntivirusResult
  * @property {string|null} engine what scanned, or null when nothing could
- * @property {"clean"|"threat"|"unavailable"|"error"} status
+ * @property {"clean"|"threat"|"unavailable"|"disabled"|"error"} status of the file itself
  * @property {string} detail
+ * @property {{ path: string, status: "threat"|"error", detail: string }[]} [findings]
+ *   archive entries that are not clean, by inner path
+ */
+
+/**
+ * @typedef {object} Entry an archive entry Guardian read
+ * @property {string} path its inner path
+ * @property {Buffer} data its bytes
  */
 
 const hresult = (hr) => `0x${(Number(hr) >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
@@ -178,18 +122,18 @@ const hresult = (hr) => `0x${(Number(hr) >>> 0).toString(16).toUpperCase().padSt
  * `env` and `spawn` are injectable for tests.
  *
  * @param {{ env?: Record<string, string|undefined>, spawn?: typeof spawnSync }} [options]
- * @returns {(filePath: string, timeoutMs: number, contentName: string) => AntivirusResult}
+ * @returns {(filePath: string, timeoutMs: number, contentName: string, entries?: Entry[]) => AntivirusResult}
  */
 export function systemAntivirus({ env = process.env, spawn = spawnSync } = {}) {
   const systemRoot = env.SystemRoot || DEFAULT_SYSTEM_ROOT;
-  return (filePath, timeoutMs, contentName) => {
+  return (filePath, timeoutMs, contentName, entries = []) => {
     const deadline = Date.now() + timeoutMs;
     const left = () => Math.max(1, deadline - Date.now());
     if (defenderRunning(systemRoot, spawn, Math.min(SERVICE_TIMEOUT_MS, left()))) {
       return { engine: DEFENDER_ENGINE, ...scanWithDefender(env, spawn, filePath, left()) };
     }
-    const amsi = scanWithAmsi(env, systemRoot, spawn, filePath, contentName, left());
-    if (amsi.engine === null) {
+    const amsi = scanWithAmsi(env, systemRoot, spawn, filePath, contentName, entries, left());
+    if (amsi.status === "unavailable") {
       return { engine: null, status: "unavailable", detail: `the Windows Defender service (${SERVICE}) is not running, and ${amsi.detail}` };
     }
     return amsi;
@@ -222,11 +166,72 @@ function scanWithDefender(env, spawn, filePath, timeoutMs) {
   return { status: "error", detail: `MpCmdRun.exe exit code ${run.status}${code ? ` (${code})` : ""}` };
 }
 
-function scanWithAmsi(env, systemRoot, spawn, filePath, contentName, timeoutMs) {
+/**
+ * The archive entries as the AMSI child reads them from standard
+ * input: for each, the length of its path (4 bytes, little endian),
+ * the path in UTF-8, the length of its data (8 bytes) and the data.
+ * @param {Entry[]} entries
+ * @returns {Buffer}
+ */
+export function encodeEntries(entries) {
+  const frames = [];
+  for (const { path: innerPath, data } of entries) {
+    const name = Buffer.from(innerPath, "utf8");
+    const head = Buffer.alloc(4 + name.length + 8);
+    head.writeUInt32LE(name.length, 0);
+    name.copy(head, 4);
+    head.writeBigUInt64LE(BigInt(data.length), 4 + name.length);
+    frames.push(head, data);
+  }
+  return Buffer.concat(frames);
+}
+
+/** The folders a Windows path runs through, lower case, without a \\?\ prefix. */
+const folders = (file) => path.win32.dirname(String(file).replace(/^\\\\\?\\/, "")).toLowerCase().split("\\").filter(Boolean);
+
+/** Whether a provider DLL belongs to a Security Center product. */
+function sameProduct(provider, product) {
+  const paths = Array.isArray(product?.paths) ? product.paths.map(String) : [];
+  if (path.win32.basename(provider).toLowerCase() === DEFENDER_PROVIDER) return paths.some((p) => DEFENDER_PRODUCT_PATH.test(p));
+  const dll = folders(provider);
+  return paths.some((p) => {
+    const exe = folders(p);
+    let shared = 0;
+    while (shared < dll.length && shared < exe.length && dll[shared] === exe[shared]) shared++;
+    return shared >= VENDOR_DEPTH;
+  });
+}
+
+/**
+ * What Security Center says about the products behind the providers.
+ * @returns {{ enabled: string[] } | { why: string }} the enabled products' names, or why none is
+ */
+function providerState(providers, products) {
+  const own = products.filter((product) => providers.some((provider) => sameProduct(provider, product)));
+  const enabled = own.filter((product) => Number.isInteger(product.state) && (product.state & PRODUCT_ENABLED) !== 0);
+  if (enabled.length) return { enabled: enabled.map((product) => String(product.name)) };
+  if (own.length === 0) return { why: "Windows Security Center lists no antivirus product for it" };
+  const states = own.map((product) => `${product.name} (product state 0x${(Number(product.state) >>> 0).toString(16).toUpperCase().padStart(6, "0")})`);
+  return { why: `Windows Security Center reports ${states.join(", ")} switched off` };
+}
+
+function amsiVerdict(result) {
+  if (!Number.isInteger(result)) return { status: "error", detail: "the scan gave no AMSI result" };
+  if (result >= AMSI_DETECTED) return { status: "threat", detail: `flagged as malware (AMSI result ${result})` };
+  if (result === AMSI_CLEAN || result === AMSI_NOT_DETECTED) return { status: "clean", detail: "no threat found" };
+  if (result >= AMSI_BLOCKED_BY_ADMIN_START && result <= AMSI_BLOCKED_BY_ADMIN_END) {
+    return { status: "error", detail: `blocked by an administrator policy (AMSI result ${result})` };
+  }
+  return { status: "error", detail: `AMSI result ${result}, which Guardian does not know` };
+}
+
+function scanWithAmsi(env, systemRoot, spawn, filePath, contentName, entries, timeoutMs) {
   const exe = path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   const temp = env.TEMP || env.TMP || os.tmpdir();
-  const run = spawn(exe, ["-NoProfile", "-NonInteractive", "-NoLogo", "-EncodedCommand", AMSI_COMMAND], {
+  const run = spawn(exe, ["-NoProfile", "-NonInteractive", "-NoLogo", "-ExecutionPolicy", "Bypass", "-File", AMSI_SCRIPT], {
     ...SPAWN,
+    stdio: ["pipe", "pipe", "pipe"],
+    input: encodeEntries(entries),
     timeout: timeoutMs,
     env: {
       ...env,
@@ -261,22 +266,32 @@ function scanWithAmsi(env, systemRoot, spawn, filePath, contentName, timeoutMs) 
   }
   if (out.providers.length === 0) return { engine: null, status: "unavailable", detail: "no AMSI provider is registered" };
 
-  const engine = `AMSI provider ${out.providers.join(", ")}`;
+  const providers = out.providers.map(String);
+  const named = `AMSI provider ${providers.map((p) => path.win32.basename(p)).join(", ")}`;
+  if (out.productsError) return { engine: named, status: "error", detail: `Windows Security Center could not be read (${out.productsError})` };
+  const state = providerState(providers, Array.isArray(out.products) ? out.products : []);
+  if (!state.enabled) return { engine: null, status: "disabled", detail: `the ${named} cannot be relied on: ${state.why}` };
+
+  const engine = `${named} (${state.enabled.join(", ")})`;
   if (out.error) return { engine, status: "error", detail: String(out.error) };
   if (out.init !== 0) return { engine, status: "error", detail: `AmsiInitialize failed (${hresult(out.init)})` };
-  if (out.selftestHr !== 0) return { engine, status: "error", detail: `the provider's self-test call failed (${hresult(out.selftestHr)})` };
-  if (!Number.isInteger(out.selftest) || out.selftest < AMSI_DETECTED) {
-    return { engine: null, status: "unavailable", detail: `the ${engine} did not flag the antivirus test string, so it is not scanning files` };
+  if (out.session !== 0) return { engine, status: "error", detail: `AmsiOpenSession failed (${hresult(out.session)})` };
+  if (out.entries !== entries.length) {
+    return { engine, status: "error", detail: `${out.entries} of ${entries.length} archive entries were scanned` };
   }
-  if (out.hr !== 0) return { engine, status: "error", detail: `AmsiScanBuffer failed (${hresult(out.hr)})` };
-  const result = out.result;
-  if (!Number.isInteger(result)) return { engine, status: "error", detail: "the scan gave no AMSI result" };
-  if (result >= AMSI_DETECTED) return { status: "threat", engine, detail: `flagged as malware (AMSI result ${result})` };
-  if (result === AMSI_CLEAN || result === AMSI_NOT_DETECTED) return { engine, status: "clean", detail: "no threat found" };
-  if (result >= AMSI_BLOCKED_BY_ADMIN_START && result <= AMSI_BLOCKED_BY_ADMIN_END) {
-    return { engine, status: "error", detail: `blocked by an administrator policy (AMSI result ${result})` };
+  const findings = [];
+  const stray = { engine, status: "error", detail: "the scan named an archive entry Guardian did not send" };
+  const known = (index) => Number.isInteger(index) && index >= 0 && index < entries.length;
+  for (const { index, result } of Array.isArray(out.flagged) ? out.flagged : []) {
+    if (!known(index)) return stray;
+    findings.push({ path: entries[index].path, ...amsiVerdict(result) });
   }
-  return { engine, status: "error", detail: `AMSI result ${result}, which Guardian does not know` };
+  for (const { index, hr } of Array.isArray(out.entryErrors) ? out.entryErrors : []) {
+    if (!known(index)) return stray;
+    findings.push({ path: entries[index].path, status: "error", detail: `AmsiScanBuffer failed (${hresult(hr)})` });
+  }
+  const own = out.hr !== 0 ? { status: "error", detail: `AmsiScanBuffer failed (${hresult(out.hr)})` } : amsiVerdict(out.result);
+  return { engine, ...own, findings: findings.filter((finding) => finding.status !== "clean") };
 }
 
 const clip = (text) => {
@@ -285,7 +300,8 @@ const clip = (text) => {
 };
 
 /**
- * Check 8. Called once, on the top-level file.
+ * Check 8. Called once, on the top-level file, with the archive
+ * entries the walk read.
  * @param {import("../index.js").Inspection} ctx
  * @param {string} filePath
  * @param {import("../index.js").Node} node
@@ -297,25 +313,38 @@ export function checkAntivirus(ctx, filePath, node) {
     return;
   }
   const run = ctx.options.antivirus ?? systemAntivirus();
-  const result = run(path.resolve(filePath), timeoutMs, path.basename(filePath));
+  const result = run(path.resolve(filePath), timeoutMs, path.basename(filePath), ctx.entries);
   const engine = typeof result?.engine === "string" && result.engine ? result.engine : null;
   const by = engine ?? "the antivirus";
   switch (result?.status) {
     case "clean":
       ctx.antivirusEngine = engine;
-      return;
+      break;
     case "threat":
       ctx.antivirusEngine = engine;
       ctx.report("antivirus", "block", "antivirus-threat", `${by} found ${clip(result.detail)}`, node);
-      return;
+      break;
     case "unavailable":
       ctx.report("antivirus", "hold", "antivirus-unavailable", `no antivirus engine could scan the file: ${clip(result.detail)}`, node);
+      return;
+    case "disabled":
+      ctx.report("antivirus", "hold", "antivirus-disabled", `${clip(result.detail)}; the file was not scanned`, node);
       return;
     case "error":
       ctx.antivirusEngine = engine;
       ctx.report("antivirus", "hold", "antivirus-error", `the scan by ${by} failed: ${clip(result.detail)}; the file was not scanned`, node);
-      return;
+      break;
     default:
       ctx.report("antivirus", "hold", "antivirus-error", "the antivirus scan gave no answer Guardian knows; the file was not scanned", node);
+      return;
+  }
+  // Archive entries the engine was handed one by one.
+  for (const finding of Array.isArray(result.findings) ? result.findings : []) {
+    const where = { path: String(finding?.path) };
+    if (finding?.status === "threat") {
+      ctx.report("antivirus", "block", "antivirus-threat", `${by} found ${clip(finding.detail)}`, where);
+    } else {
+      ctx.report("antivirus", "hold", "antivirus-error", `the scan by ${by} failed: ${clip(finding?.detail)}; the entry was not scanned`, where);
+    }
   }
 }

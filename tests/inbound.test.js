@@ -27,7 +27,7 @@
  */
 
 import { strict as assert } from "assert";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, statSync, readdirSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, statSync, readdirSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { spawnSync } from "child_process";
@@ -40,7 +40,9 @@ import {
 import { Budget } from "../security/inbound/limits.js";
 import { detectType } from "../security/inbound/checks/type.js";
 import { decodeStream } from "../security/inbound/readers/pdf.js";
-import { systemAntivirus, AMSI_CHUNK_BYTES, AMSI_OVERLAP_BYTES } from "../security/inbound/checks/antivirus.js";
+import {
+  systemAntivirus, encodeEntries, AMSI_CHUNK_BYTES, AMSI_OVERLAP_BYTES, AMSI_SCRIPT,
+} from "../security/inbound/checks/antivirus.js";
 import zlib from "zlib";
 import * as fx from "./inbound-fixtures.js";
 
@@ -1257,6 +1259,57 @@ describe("Check 8 - antivirus", () => {
     assert.equal(calls[0][2], "bundle.zip");
   });
 
+  test("the runner gets every file.inner entry with its bytes, nested ones too, under its inner path", () => {
+    let handed;
+    const antivirus = (file, timeoutMs, name, entries) => { handed = entries; return fx.avClean(); };
+    const inner = fx.zip([{ name: "deep.txt", data: "three" }]);
+    const r = judge(fx.zip([{ name: "a.txt", data: "one" }, { name: "docs/b.txt", data: "two" }, { name: "inner.zip", data: inner }]), "bundle.zip", {}, { antivirus });
+    assert.deepEqual(handed.map((e) => e.path), r.file.inner.map((e) => e.path));
+    assert.deepEqual(handed.map((e) => e.path), ["a.txt", "docs/b.txt", "inner.zip", "inner.zip!/deep.txt"]);
+    assert.deepEqual(handed.map((e) => sha256hex(e.data)), r.file.inner.map((e) => e.sha256));
+    assert.equal(handed[0].data.toString(), "one");
+  });
+
+  test("a file that is not an archive hands the runner no entries", () => {
+    let handed;
+    judge(Buffer.from("notes\n"), "notes.txt", {}, { antivirus: (file, timeoutMs, name, entries) => { handed = entries; return fx.avClean(); } });
+    assert.deepEqual(handed, []);
+  });
+
+  test("fail: a threat in an archive entry blocks with that entry's path", () => {
+    const antivirus = () => ({ engine: "mock engine", status: "clean", detail: "", findings: [{ path: "docs/b.txt", status: "threat", detail: "flagged as malware (mock)" }] });
+    const r = judge(fx.zip([{ name: "a.txt", data: "one" }, { name: "docs/b.txt", data: "two" }]), "bundle.zip", {}, { antivirus });
+    const found = hasReason(r, "antivirus-threat", "block");
+    assert.equal(found.path, "docs/b.txt");
+    assert.match(found.detail, /mock engine/);
+    assert.equal(r.checks.antivirus, "block");
+    assert.equal(r.verdict, "block");
+  });
+
+  test("fail: an entry the engine could not scan holds with that entry's path", () => {
+    const antivirus = () => ({ engine: "mock engine", status: "clean", detail: "", findings: [{ path: "a.txt", status: "error", detail: "AmsiScanBuffer failed (mock)" }] });
+    const r = judge(fx.zip([{ name: "a.txt", data: "one" }]), "bundle.zip", {}, { antivirus });
+    assert.equal(hasReason(r, "antivirus-error", "hold").path, "a.txt");
+    assert.equal(r.verdict, "hold");
+  });
+
+  test("fail: a file whose scan failed still reports the threat found in an entry", () => {
+    const antivirus = () => ({ engine: "mock engine", status: "error", detail: "scan failed (mock)", findings: [{ path: "a.txt", status: "threat", detail: "flagged as malware (mock)" }] });
+    const r = judge(fx.zip([{ name: "a.txt", data: "one" }]), "bundle.zip", {}, { antivirus });
+    hasReason(r, "antivirus-error", "hold");
+    assert.equal(r.reasons.find((x) => x.code === "antivirus-threat").path, "a.txt");
+    assert.equal(r.verdict, "block");
+  });
+
+  test("fail: an engine whose product is switched off holds as antivirus-disabled, and no engine is named", () => {
+    const antivirus = () => ({ engine: null, status: "disabled", detail: "the AMSI provider x.dll cannot be relied on: switched off (mock)" });
+    const r = judge(Buffer.from("notes\n"), "notes.txt", {}, { antivirus });
+    assert.match(hasReason(r, "antivirus-disabled", "hold").detail, /switched off/);
+    assert.equal(r.checks.antivirus, "hold");
+    assert.equal(r.verdict, "hold");
+    assert.equal(r.antivirus_engine, null);
+  });
+
   test("fail: with no time left no engine is started and the check holds", () => {
     let called = false;
     const r = judge(Buffer.from("notes\n"), "notes.txt", {}, {
@@ -1285,7 +1338,14 @@ describe("Check 8 - antivirus", () => {
 // The service query, MpCmdRun.exe and the AMSI child, each answered by the test.
 const SERVICE_RUNNING = "SERVICE_NAME: WinDefend\r\n        STATE              : 4  RUNNING\r\n";
 const SERVICE_STOPPED = "SERVICE_NAME: WinDefend\r\n        STATE              : 1  STOPPED\r\n";
-const AMSI_CLEAN = { providers: ["aswAMSI.dll"], init: 0, selftest: 32768, selftestHr: 0, result: 0, hr: 0, chunks: 1, error: null };
+const AVG_ON = { name: "AVG Antivirus", state: 0x041000, paths: ["C:\\Program Files\\AVG\\Antivirus\\wsc_proxy.exe"] };
+const AVG_OFF = { ...AVG_ON, state: 0x040000 };
+const DEFENDER_OFF = { name: "Windows Defender", state: 0x060100, paths: ["windowsdefender://", "C:\\Program Files\\Windows Defender\\MsMpeng.exe"] };
+const DEFENDER_ON = { ...DEFENDER_OFF, state: 0x061100 };
+const AMSI_CLEAN = {
+  providers: ["C:\\Program Files\\AVG\\Antivirus\\aswAMSI.dll"], products: [DEFENDER_OFF, AVG_ON], productsError: null,
+  init: 0, session: 0, result: 0, hr: 0, chunks: 1, entries: 0, flagged: [], entryErrors: [], error: null,
+};
 const amsiOut = (fields) => ({ status: 0, stdout: `${JSON.stringify({ ...AMSI_CLEAN, ...fields })}\r\n`, stderr: "" });
 
 /**
@@ -1335,7 +1395,7 @@ describe("Check 8 - which engine scans", () => {
   });
 
   test("neither engine: Defender stopped and no AMSI provider registered is unavailable, naming both", () => {
-    const out = fakeSystem({ amsi: amsiOut({ providers: [], selftest: null, result: null }) }).run("C:\\q\\a.pdf", 1000, "a.pdf");
+    const out = fakeSystem({ amsi: amsiOut({ providers: [], result: null }) }).run("C:\\q\\a.pdf", 1000, "a.pdf");
     assert.equal(out.status, "unavailable");
     assert.equal(out.engine, null);
     assert.match(out.detail, /WinDefend/);
@@ -1414,24 +1474,96 @@ describe("Check 8 - the AMSI runner", () => {
   const amsi = (fields) => fakeSystem({ amsi: "stdout" in fields || fields.error instanceof Error ? fields : amsiOut(fields) });
   const scan = (fields) => amsi(fields).run("C:\\q\\a b.pdf", 41_000, "a b.pdf");
 
-  test("starts Windows PowerShell hidden, with no profile and no shell, and hands the file over in the environment", () => {
+  test("starts Windows PowerShell hidden on the script file, with no profile and no shell, and hands the file over in the environment", () => {
     const { run, spawned } = amsi({});
     assert.equal(run("C:\\q\\a b';calc.pdf", 41_000, "a b';calc.pdf").status, "clean");
     const child = spawned[1];
     assert.equal(child.exe, "D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
-    assert.ok(child.args.includes("-NoProfile") && child.args.includes("-NonInteractive"));
+    assert.deepEqual(child.args, ["-NoProfile", "-NonInteractive", "-NoLogo", "-ExecutionPolicy", "Bypass", "-File", AMSI_SCRIPT]);
     assert.equal(child.options.windowsHide, true);
     assert.ok(!child.options.shell, "never through a shell");
     assert.ok(child.options.timeout > 0 && child.options.timeout <= 41_000);
-    // The untrusted name never becomes part of the command text.
-    assert.ok(!child.args.join(" ").includes("calc"), "the file name is not in the arguments");
+    // The untrusted name never becomes part of the command line.
     assert.equal(child.options.env.GUARDIAN_AMSI_FILE, "C:\\q\\a b';calc.pdf");
     assert.equal(child.options.env.GUARDIAN_AMSI_NAME, "a b';calc.pdf");
-    const script = Buffer.from(child.args[child.args.indexOf("-EncodedCommand") + 1], "base64").toString("utf16le");
-    for (const call of ["AmsiInitialize", "AmsiOpenSession", "AmsiScanBuffer", "AmsiCloseSession", "AmsiUninitialize"]) {
-      assert.ok(script.includes(call), `the script calls ${call}`);
+  });
+
+  test("the command line carries no script text: no -EncodedCommand, no -Command, the same for every file", () => {
+    const first = amsi({ entries: 1 });
+    first.run("C:\\q\\one.pdf", 1000, "one.pdf", [{ path: "x.txt", data: Buffer.from("x") }]);
+    const second = amsi({});
+    second.run("C:\\q\\two.zip", 1000, "two.zip");
+    assert.deepEqual(first.spawned[1].args, second.spawned[1].args);
+    for (const arg of first.spawned[1].args) assert.ok(!/^-(?:e|ec|enc\w*|c|com\w*)$/i.test(arg), arg);
+  });
+
+  test("the script is a file in the repo that calls the five AMSI functions and asks Security Center", () => {
+    assert.equal(path.relative(ROOT, AMSI_SCRIPT).replace(/\\/g, "/"), "security/inbound/engines/amsi.ps1");
+    assert.ok(existsSync(AMSI_SCRIPT));
+    const script = readFileSync(AMSI_SCRIPT, "utf8");
+    for (const call of ["AmsiInitialize", "AmsiOpenSession", "AmsiScanBuffer", "AmsiCloseSession", "AmsiUninitialize", "SecurityCenter2", "AntiVirusProduct"]) {
+      assert.ok(script.includes(call), `the script uses ${call}`);
     }
-    assert.ok(!script.includes("calc"), "the file name is not in the script");
+    // Windows PowerShell 5.1 reads a script with no byte order mark as ANSI.
+    assert.ok(/^[\x09\x0A\x0D\x20-\x7E]*$/.test(script), "the script is ASCII");
+    assert.ok(!/EICAR|Invoke-Expression|\biex\b|DownloadString|Set-MpPreference/i.test(script), "no test string, no generated code, no setting change");
+  });
+
+  test("the archive entries go to the child on standard input, framed with their inner paths", () => {
+    const accented = `inner.zip!/d${String.fromCharCode(233)}j${String.fromCharCode(224)}.txt`;
+    const entries = [{ path: "a.txt", data: Buffer.from("one") }, { path: accented, data: Buffer.alloc(0) }, { path: "b.bin", data: Buffer.from([0, 255, 10]) }];
+    const { run, spawned } = amsi({ entries: 3 });
+    assert.equal(run("C:\\q\\a.zip", 1000, "a.zip", entries).status, "clean");
+    const input = spawned[1].options.input;
+    assert.deepEqual(input, encodeEntries(entries));
+    const read = [];
+    for (let at = 0; at < input.length;) {
+      const nameLength = input.readUInt32LE(at);
+      const name = input.subarray(at + 4, at + 4 + nameLength).toString("utf8");
+      const dataLength = Number(input.readBigUInt64LE(at + 4 + nameLength));
+      at += 4 + nameLength + 8;
+      read.push({ path: name, data: input.subarray(at, at + dataLength) });
+      at += dataLength;
+    }
+    assert.deepEqual(read.map((e) => e.path), entries.map((e) => e.path));
+    assert.ok(read.every((e, i) => e.data.equals(entries[i].data)));
+    assert.equal(encodeEntries([]).length, 0);
+  });
+
+  test("Defender is not sent the entries: MpCmdRun unpacks the archive itself", () => {
+    const { run, spawned } = fakeSystem({ service: SERVICE_RUNNING, defender: { status: 0, stdout: "", stderr: "" } });
+    run("C:\\q\\a.zip", 1000, "a.zip", [{ path: "a.txt", data: Buffer.from("one") }]);
+    assert.equal(spawned[1].options.input, undefined);
+  });
+
+  test("a detection in an entry is a threat finding with that entry's path; the file itself stays clean", () => {
+    const entries = [{ path: "a.txt", data: Buffer.from("one") }, { path: "inner.zip!/bad.bin", data: Buffer.from("two") }];
+    const out = amsi({ entries: 2, flagged: [{ index: 1, result: 32768 }] }).run("C:\\q\\a.zip", 1000, "a.zip", entries);
+    assert.equal(out.status, "clean");
+    assert.deepEqual(out.findings, [{ path: "inner.zip!/bad.bin", status: "threat", detail: "flagged as malware (AMSI result 32768)" }]);
+  });
+
+  test("an entry with an unknown result or a failed scan call is an error finding", () => {
+    const entries = [{ path: "a.txt", data: Buffer.from("one") }, { path: "b.txt", data: Buffer.from("two") }];
+    const out = amsi({ entries: 2, flagged: [{ index: 0, result: 16384 }], entryErrors: [{ index: 1, hr: -2147024882 }] }).run("C:\\q\\a.zip", 1000, "a.zip", entries);
+    assert.deepEqual(out.findings.map((f) => [f.path, f.status]), [["a.txt", "error"], ["b.txt", "error"]]);
+    assert.match(out.findings[1].detail, /0x8007000E/);
+  });
+
+  test("fewer entries scanned than sent, or an entry index Guardian did not send, is an error", () => {
+    const entries = [{ path: "a.txt", data: Buffer.from("one") }, { path: "b.txt", data: Buffer.from("two") }];
+    assert.match(amsi({ entries: 1 }).run("C:\\q\\a.zip", 1000, "a.zip", entries).detail, /1 of 2/);
+    assert.equal(amsi({ entries: 1 }).run("C:\\q\\a.zip", 1000, "a.zip", entries).status, "error");
+    for (const index of [2, -1, 0.5, "0", null]) {
+      assert.equal(amsi({ entries: 2, flagged: [{ index, result: 32768 }] }).run("C:\\q\\a.zip", 1000, "a.zip", entries).status, "error", String(index));
+    }
+  });
+
+  test("a failed scan call on the file is an error, and a threat found in an entry is still reported", () => {
+    const entries = [{ path: "a.txt", data: Buffer.from("one") }];
+    const out = amsi({ hr: -2147024882, entries: 1, flagged: [{ index: 0, result: 32768 }] }).run("C:\\q\\a.zip", 1000, "a.zip", entries);
+    assert.equal(out.status, "error");
+    assert.equal(out.findings[0].status, "threat");
   });
 
   test("clean only on AMSI_RESULT_CLEAN (0) or NOT_DETECTED (1)", () => {
@@ -1460,21 +1592,63 @@ describe("Check 8 - the AMSI runner", () => {
   });
 
   test("no provider registered is unavailable", () => {
-    assert.equal(scan({ providers: [], selftest: null, result: null }).status, "unavailable");
+    assert.equal(scan({ providers: [], result: null }).status, "unavailable");
   });
 
-  test("a provider that does not flag the test string is not scanning: unavailable, never clean", () => {
-    for (const selftest of [0, 1, null, 16384]) {
-      const out = scan({ selftest, result: 0 });
-      assert.equal(out.status, "unavailable", String(selftest));
-      assert.match(out.detail, /test string/);
-    }
+  test("pass: the product behind the provider is enabled in Security Center, and the engine names it", () => {
+    const out = scan({});
+    assert.equal(out.status, "clean");
+    assert.equal(out.engine, "AMSI provider aswAMSI.dll (AVG Antivirus)");
   });
 
-  test("a failed AmsiInitialize, self-test call or scan call is an error with the HRESULT", () => {
-    assert.match(scan({ init: -2147024891, selftest: null, result: null }).detail, /0x80070005/);
-    assert.equal(scan({ init: -2147024891, selftest: null, result: null }).status, "error");
-    assert.equal(scan({ selftestHr: -2147467259, selftest: 0 }).status, "error");
+  test("fail: the product behind the provider is switched off: disabled, never clean, with the state", () => {
+    const out = scan({ products: [DEFENDER_OFF, AVG_OFF], result: 0 });
+    assert.equal(out.status, "disabled");
+    assert.equal(out.engine, null);
+    assert.match(out.detail, /AVG Antivirus/);
+    assert.match(out.detail, /0x040000/);
+    assert.match(out.detail, /aswAMSI\.dll/);
+  });
+
+  test("fail: another product being enabled does not vouch for this provider", () => {
+    assert.equal(scan({ products: [DEFENDER_ON, AVG_OFF] }).status, "disabled");
+    const stranger = { name: "Other AV", state: 0x041000, paths: ["C:\\Program Files\\Other\\av.exe"] };
+    const out = scan({ products: [stranger] });
+    assert.equal(out.status, "disabled");
+    assert.match(out.detail, /lists no antivirus product/);
+  });
+
+  test("fail: Security Center listing nothing, or a state that is not a number, is disabled", () => {
+    assert.equal(scan({ products: [] }).status, "disabled");
+    assert.equal(scan({ products: null }).status, "disabled");
+    assert.equal(scan({ products: [{ ...AVG_ON, state: "4096" }] }).status, "disabled");
+    assert.equal(scan({ products: [{ ...AVG_ON, state: null }] }).status, "disabled");
+  });
+
+  test("fail: Security Center that cannot be read is an error, never clean", () => {
+    const out = scan({ products: [], productsError: "Invalid namespace" });
+    assert.equal(out.status, "error");
+    assert.match(out.detail, /Security Center/);
+    assert.match(out.detail, /Invalid namespace/);
+  });
+
+  test("a product is matched to its provider by the vendor folder, whatever the case or a long-path prefix", () => {
+    const product = { name: "Vendor AV", state: 0x041000, paths: ["\\\\?\\C:\\PROGRAM FILES\\Vendor\\core\\1.2\\host.exe"] };
+    assert.equal(scan({ providers: ["c:\\Program Files\\vendor\\amsi\\x64\\vamsi.dll"], products: [product] }).status, "clean");
+    // Sharing only the Program Files folder is not the same vendor.
+    assert.equal(scan({ providers: ["C:\\Program Files\\Elsewhere\\vamsi.dll"], products: [product] }).status, "disabled");
+  });
+
+  test("Defender's own provider (MpOav.dll) is matched to Windows Defender in Security Center", () => {
+    const provider = "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\4.18.1\\MpOav.dll";
+    assert.equal(scan({ providers: [provider], products: [DEFENDER_ON] }).status, "clean");
+    assert.equal(scan({ providers: [provider], products: [DEFENDER_OFF, AVG_ON] }).status, "disabled");
+  });
+
+  test("a failed AmsiInitialize, AmsiOpenSession or scan call is an error with the HRESULT", () => {
+    assert.match(scan({ init: -2147024891, result: null }).detail, /0x80070005/);
+    assert.equal(scan({ init: -2147024891, result: null }).status, "error");
+    assert.equal(scan({ session: -2147467259, result: null }).status, "error");
     const failed = scan({ hr: -2147024882, result: 0 });
     assert.equal(failed.status, "error");
     assert.match(failed.detail, /0x8007000E/);
@@ -1553,6 +1727,41 @@ if (process.env.GUARDIAN_INBOUND_REAL_ANTIVIRUS === "1") {
       }
       assert.equal(out.status, "threat", JSON.stringify(out));
       console.log(`     ${out.engine}: ${out.detail}`);
+    });
+
+    test("a clean zip is clean through the CLI: the engine is handed its entries", () => {
+      const file = place(fx.zip([{ name: "a.txt", data: "one" }, { name: "docs/b.txt", data: "two" }]), "bundle.zip");
+      const run = cli(file, "--json");
+      const out = JSON.parse(run.stdout);
+      assert.equal(out.checks.antivirus, "pass", JSON.stringify(out.reasons));
+      assert.equal(out.verdict, "clean", JSON.stringify(out.reasons));
+    });
+
+    test("entries larger than one buffer, empty ones and ones after them are all scanned", () => {
+      const file = place(Buffer.from("Line 3 transfer notes.\n"), "notes.txt");
+      const entries = [
+        { path: "big.bin", data: Buffer.alloc(AMSI_CHUNK_BYTES + 3 * AMSI_OVERLAP_BYTES, 0x41) },
+        { path: "empty.txt", data: Buffer.alloc(0) },
+        { path: "after.txt", data: Buffer.from("after the big one\n") },
+      ];
+      const out = systemAntivirus()(file, 60_000, "notes.txt", entries);
+      if (/Defender/.test(out.engine ?? "")) return console.log("     Windows Defender scans the file itself; entries are not sent");
+      assert.equal(out.status, "clean", JSON.stringify(out));
+      assert.deepEqual(out.findings, []);
+    });
+
+    test("the test string in an archive entry is flagged under that entry's path", () => {
+      const file = place(Buffer.from("Line 3 transfer notes.\n"), "notes.txt");
+      const entries = [
+        { path: "a.txt", data: Buffer.from("one") },
+        { path: "inner.zip!/sample.bin", data: Buffer.from(eicar, "latin1") },
+        { path: "c.txt", data: Buffer.from("three") },
+      ];
+      const out = systemAntivirus()(file, 30_000, "notes.txt", entries);
+      if (/Defender/.test(out.engine ?? "")) return console.log("     Windows Defender scans the file itself; entries are not sent");
+      assert.equal(out.status, "clean", JSON.stringify(out));
+      assert.deepEqual(out.findings.map((f) => [f.path, f.status]), [["inner.zip!/sample.bin", "threat"]]);
+      console.log(`     ${out.engine}: ${out.findings[0].detail}`);
     });
 
     test("the EICAR test file is blocked, by the scan or by real-time protection", () => {
