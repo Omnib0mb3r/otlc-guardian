@@ -4413,7 +4413,9 @@ function pathLikeWords(text) {
  *   command unpacked, cloned or downloaded into so far, and `carried`,
  *   the later steps that carry that content on, each { command, to }
  *   with `to` the paths the step names or null when one is not spelled
- *   out (Lex decision P1); both are made here when absent
+ *   out (Lex decision P1), and with `own` set for the step that brings
+ *   the content in itself, into a place that is not spelled out; both
+ *   are made here when absent
  * @returns {Map<string, { sources: Set<string>, append: boolean }>}
  *   absolute target -> absolute source files. A source prefixed "patch:"
  *   is a patch file, of which only the added lines land; "filter:N" is
@@ -4445,7 +4447,14 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
     entry.append ||= append;
     targets.set(key, entry);
     if (entry.sources.has(DOWNLOADED)) found.inbound.add(fold(key));
+    // An unpack, a clone or a download into a place that is not spelled
+    // out (Lex, 2026-11-12, with P1): where the content lands is not
+    // known, so it can be the project root or a watched path.
+    if (sources.some(fetched) && UNSPELLED[dialect].test(p)) found.carried.push({ command: p, to: null, own: true });
   };
+  /** Whether a source is what a download, a clone or an archive brings, also behind a line filter. */
+  const fetched = (source) => source === DOWNLOADED ||
+    (source.startsWith("filter:") && found.filters[Number(source.slice(7))].inputs.some(fetched));
   const merge = (inner) => {
     for (const [key, entry] of inner) {
       const mine = targets.get(key) ?? { sources: new Set(), append: false };
@@ -6400,19 +6409,69 @@ process.stdin.on("end", () => {
     // each found one more spelling of that copy, so it is judged by what
     // the step names, whatever the program. An environment file is
     // watched for what it holds, not loaded as instructions.
-    const landsOn = (p) => settingsFiles.some((f) => covers(p, f)) || (isWatched(p) && !ENV_FILE.test(watchKey(p))) || isWatched(`${p}/x`);
-    for (const { command, to } of shellRead.carried ?? []) {
+    //
+    // A folder git runs hooks from counts as such a path (re-probe 12,
+    // O4 and Lex decision P2): .git/hooks, .husky, .githooks and the
+    // folder core.hooksPath names. A file there is code that runs on the
+    // next git command.
+    const hooksFolders = write.kind === "bash" ? configuredHooksFolders(projectRoot) : [];
+    const runsAsHook = (p) => {
+      const key = watchKey(p);
+      const parts = key.split("/");
+      return parts.includes(".husky") || parts.includes(".githooks") ||
+        parts.some((part, k) => part === ".git" && (k === parts.length - 1 || parts[k + 1] === "hooks")) ||
+        hooksFolders.some((folder) => key === folder || key.startsWith(`${folder}/`));
+    };
+    const landsOn = (p) => settingsFiles.some((f) => covers(p, f)) || (isWatched(p) && !ENV_FILE.test(watchKey(p))) || isWatched(`${p}/x`) ||
+      runsAsHook(p);
+    for (const { command, to, own } of shellRead.carried ?? []) {
       const place = to === null ? null : to.find(landsOn);
       if (to !== null && !place) continue;
-      record(confirmOrDeny,
-        `${TAG} This command unpacks, clones or downloads content, which Guardian cannot read before it lands, and a later step ` +
-        `(${safeEcho(command, 80)}) ` +
-        (place
-          ? `carries it to ${safeEchoPath(place, 120)}, which is the project root, a folder above it or a path agents load as instructions. `
-          : `copies or writes with a source or destination the command does not spell out (a variable, a substitution, ` +
-            `pipeline or xargs input, inline code), so Guardian cannot tell where that content lands. `) +
-        `Approve only if you know what it holds.${bypassNote}`);
+      record(confirmOrDeny, own
+        ? `${TAG} This command unpacks, clones or downloads content into ${safeEcho(command, 80)}, a place it does not spell out ` +
+          `(a variable or a substitution). Guardian cannot read that content before it lands and cannot tell where it lands: ` +
+          `it can be the project root or a path agents load as instructions. Spell the destination out, or approve only ` +
+          `if you know what it holds.${bypassNote}`
+        : `${TAG} This command unpacks, clones or downloads content, which Guardian cannot read before it lands, and a later step ` +
+          `(${safeEcho(command, 80)}) ` +
+          (place
+            ? `carries it to ${safeEchoPath(place, 120)}, which is the project root, a folder above it, a path agents load as ` +
+              `instructions or a folder git runs hooks from. `
+            : `copies or writes with a source or destination the command does not spell out (a variable, a substitution, ` +
+              `pipeline or xargs input, inline code), so Guardian cannot tell where that content lands. `) +
+          `Approve only if you know what it holds.${bypassNote}`);
       break;
+    }
+
+    // ── Unread content into a folder git runs hooks from (P2) ─────────
+    // Judged as a copy into an instruction file is (K1, L1): a download,
+    // a clone or an archive, a file out of the folder one of them fills,
+    // or a source that is not on disk when the command is read. A hook
+    // the command spells out (echo "npm test" > .husky/pre-commit) is
+    // the agent's own visible text and is not asked about, and neither
+    // is a copy of a file that is on disk (Lex's ruling: everyday husky
+    // setup must not ask).
+    // The folders this command clones into: what a clone puts there is
+    // not what was on disk when the command was read.
+    const clonedFolders = bashWrites.filter((t) => cloned(t));
+    const fromClone = (s) => clonedFolders.some((folder) => s.startsWith(`${folder}/`));
+    const notOnDisk = (s) => {
+      if (/^(?:[A-Za-z]:)?\/dev\/(?:null|stdin|zero|tty|fd\/\d+)$/.test(s) || /(?:^|\/)nul$/i.test(s) || s.includes("{}")) return false;
+      if (SOURCE_GLOB.test(s) && !existsSync(s)) return globFiles(s) === null;
+      return !existsSync(s) && !bashTargets.has(s) && !bashWrites.some((t) => t.startsWith(`${s}/`));
+    };
+    const unreadSource = (s) => {
+      if (s.startsWith(UNJUDGED)) return true;
+      if (s.startsWith("filter:")) return shellRead.filters[Number(s.slice(7))].inputs.some(unreadSource);
+      return !s.startsWith("patch:") && (fromClone(s) || notOnDisk(s));
+    };
+    const hookTarget = bashWrites.find((t) => runsAsHook(t) && [...bashTargets.get(t).sources].some(unreadSource));
+    if (hookTarget) {
+      record(confirmOrDeny,
+        `${TAG} This command copies, links, downloads, clones or unpacks into ${safeEchoPath(hookTarget, 120)}, a folder git runs ` +
+        `hooks from, and Guardian could not read what lands there (a download, a clone or an archive, a file out of one, or a ` +
+        `source that is not on disk when the command is read). A file there runs on the next git command. ` +
+        `Approve only if you know what it holds.${bypassNote}`);
     }
     if (watched.length === 0) emitVerdict(findings);
 
@@ -6442,9 +6501,6 @@ process.stdin.on("end", () => {
     // not in the command text, so the sources are read and judged the
     // way a Write of the result would be.
     let unjudgedTarget = null;
-    // The folders this command clones into: what a clone puts there is
-    // not what was on disk when the command was read.
-    const clonedFolders = bashWrites.filter((t) => cloned(t));
     // A source that is a file's path brings nothing Guardian can read
     // when the file is not on disk and no earlier stage of this command
     // wrote it, or when it sits in a folder the command clones into
@@ -6454,13 +6510,8 @@ process.stdin.on("end", () => {
     // `git clone URL tmp && cp tmp/CLAUDE.md CLAUDE.md` through. A glob
     // stands for the files it matches. Nothing is read from a null device.
     // find's {} is read once per file find matches (E5), and a folder
-    // the command put files under is judged by those files.
-    const fromClone = (s) => clonedFolders.some((folder) => s.startsWith(`${folder}/`));
-    const notOnDisk = (s) => {
-      if (/^(?:[A-Za-z]:)?\/dev\/(?:null|stdin|zero|tty|fd\/\d+)$/.test(s) || /(?:^|\/)nul$/i.test(s) || s.includes("{}")) return false;
-      if (SOURCE_GLOB.test(s) && !existsSync(s)) return globFiles(s) === null;
-      return !existsSync(s) && !bashTargets.has(s) && !bashWrites.some((t) => t.startsWith(`${s}/`));
-    };
+    // the command put files under is judged by those files. (fromClone()
+    // and notOnDisk() stand above, where the git hook folders use them.)
     for (const target of written) {
       const { sources, append } = bashTargets.get(target);
       if (sources.size === 0) continue;
