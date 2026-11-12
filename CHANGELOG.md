@@ -233,6 +233,17 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A command that writes a runner's configuration earns no test-run
+  exemption (BUG-080, re-probe 8 cost ruling).** `printf ... >
+  package.json; npm run security` and a `conftest.py` written before
+  `pytest security` were silent: the word stood only in the exempt
+  stage, and the runner did what the new file said. A command that
+  writes `package.json`, `conftest.py`, `pytest.ini`,
+  `pyproject.toml`, `setup.cfg`, `tox.ini`, a jest, vitest or vite
+  config, `.mocharc`, `.npmrc`, `Cargo.toml` or `.cargo/config` now
+  asks when a test run or a package script holds the word. `npm ci &&
+  npm test -- security` stays silent.
+
 - **A name split by a variable that is not set asks (BUG-080, re-probe
   8 cost ruling).** `rm -rf secu$U"rity"` deleted Guardian's folder
   and `cp notes/x.md CLAU${U}DE.md` wrote CLAUDE.md, and neither was

@@ -6921,6 +6921,81 @@ describe("PreToolUse hook - a name split by a variable that is not set (re-probe
 });
 
 // ---------------------------------------------------------------------------
+// RE-PROBE 8, THE COST RULING ON RUNNER CONFIGURATION (staged): a test run
+// and a package script do what the runner's configuration says, and the
+// same command could write it: printf ... > package.json; npm run
+// security. A command that writes package.json, conftest.py, pytest.ini,
+// pyproject.toml, setup.cfg, tox.ini, a jest, vitest or vite config,
+// .mocharc, .npmrc, Cargo.toml or .cargo/config earns neither exemption,
+// and such a file is no ordinary file for a reading stage to write when
+// the command does anything else.
+
+describe("PreToolUse hook - a command that writes a runner's configuration earns no test-run exemption (re-probe 8, cost ruling on runner configuration)", () => {
+  for (const command of [
+    // The re-probe's forms.
+    "printf '{\"scripts\":{\"security\":\"rm -rf $npm_lifecycle_event\"}}' > package.json; npm run security",
+    "printf 'import shutil,sys\\nshutil.rmtree(sys.argv[-1])\\n' > conftest.py; pytest security",
+    // Each file of the ruling.
+    "printf '[pytest]\\naddopts = -p evil\\n' > pytest.ini; pytest -k security",
+    "cp evil.toml pyproject.toml && pytest -k security",
+    "cp evil.cfg setup.cfg; python -m pytest security",
+    "cp evil.ini tox.ini; pytest security",
+    "cp evil.js jest.config.js; npx jest security",
+    "cp evil.ts vitest.config.ts; npx vitest run security",
+    "printf 'script-shell=./e.sh\\n' > .npmrc; npm test -- security",
+    "cp evil.toml Cargo.toml; cargo test security",
+    "mkdir -p .cargo; cp evil.toml .cargo/config.toml; cargo test security",
+    "cp evil.js .mocharc.js; npx mocha -g security",
+    // Written without its name, in place, by a program the hook does not
+    // know, by a move into the folder, through tee, and after the run.
+    "npm pkg set scripts.security='rm -rf $npm_lifecycle_event'; npm run security",
+    "sed -i 's/jest/.\\/e.sh/' package.json && npm test -- security",
+    "node gen.js --out=package.json && npm run security",
+    "mv tmp/package.json . && npm run security",
+    "tee package.json < evil.json; npm run security",
+    "npm run security; printf x > package.json",
+    // No ordinary file for a reading stage when the command does more.
+    "printf '{\"lint-staged\":{\"*\":\"rm -rf security\"}}' > package.json; git commit -am x",
+    // The cost: asking now.
+    "echo 'markers = security' >> pytest.ini && git add pytest.ini && git commit -m cfg",
+    "cp package.json package.json.bak && npm test -- security",
+    "npx prettier --write package.json && npm test -- security",
+    "git checkout package.json && npm test -- security",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  stagedOnly("asks, PowerShell tool: Set-Content package.json $evil; npm run security", () => {
+    const out = runGuarded("Set-Content package.json $evil; npm run security", { tool: "PowerShell" });
+    assert.equal(decisionOf(out), "ask", out.slice(0, 200) || "(silent)");
+  });
+
+  for (const command of [
+    // None of the files is written by name.
+    "npm ci && npm test -- security",
+    "npm install && npm test -- security",
+    "git pull && pytest -k security",
+    "pip install -e . && pytest -k security",
+    "echo done > out.txt; pytest -k security",
+    // Read, or put in git's store.
+    "cat package.json && npm test -- security",
+    "jq .version package.json > v.txt; npm test -- security",
+    "git add package.json package-lock.json && npm test -- security",
+    // A message is not a test run.
+    "git add package.json package-lock.json && git commit -m \"security: bump deps\"",
+    // Written and read, nothing else.
+    "echo 'markers = security' >> pytest.ini && cat pytest.ini",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 

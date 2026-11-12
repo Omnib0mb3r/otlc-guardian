@@ -2065,6 +2065,15 @@ const programStem = (name) => name.toLowerCase().replace(PROGRAM_EXTENSION, "");
 // so with any other option every word counts.
 const PLAIN_COPIERS = new Set(["cp", "mv", "ln"]);
 const PLAIN_COPY_FLAGS = /^(?:-[rRafpvnuisLPdTlH]+|--(?:recursive|archive|force|verbose|no-clobber|update|symbolic|preserve|dereference|no-dereference))$/;
+// The files a test runner or a package manager takes its scripts,
+// plugins and programs from (re-probe 8, the cost ruling on runner
+// configuration): a command that writes one decides what `npm run x`
+// or `pytest` runs. RUNNER_CONFIG_SAMPLES spells them out for a glob.
+const RUNNER_CONFIG = /(?:^|[\\/])(?:package\.json|\.npmrc|\.yarnrc(?:\.yml)?|bunfig\.toml|conftest\.py|pytest\.ini|pyproject\.toml|setup\.cfg|tox\.ini|(?:jest|vitest|vite)\.config\.\w+|\.mocharc(?:\.\w+)?|cargo\.toml|\.cargo[\\/]config(?:\.toml)?)$/i;
+const RUNNER_CONFIG_SAMPLES = ["package.json", ".npmrc", ".yarnrc", ".yarnrc.yml", "bunfig.toml", "conftest.py", "pytest.ini", "pyproject.toml",
+  "setup.cfg", "tox.ini", "cargo.toml", "config", "config.toml", ".mocharc",
+  ...["js", "cjs", "mjs", "ts", "mts", "cts", "json", "yml", "yaml"].flatMap((ending) =>
+    [`jest.config.${ending}`, `vitest.config.${ending}`, `vite.config.${ending}`, `.mocharc.${ending}`])];
 /** Whether a word holds a file that would run under a program's name: bin/git, ~/bin/git.cmd, open('/x/git','w'). */
 const holdsProgram = (word, stem) => word.split(/[\s\\/=:'"\x60(),;|&<>]+/).some((part) => part !== "" && programStem(part) === stem);
 
@@ -2670,7 +2679,11 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
   // configuration. A file written by a command that does is no ordinary
   // file, since the configuration can make git run it (J1).
   let gitConfigured = false;
-  const sink = plainSink && ((word) => !gitConfigured && namedOnce(word) && plainSink(word));
+  // A runner's configuration file is no ordinary file when the command
+  // does more than write it and read: git and the package managers run
+  // what it names (a lint-staged entry of package.json on git commit).
+  const sink = plainSink && ((word) => !gitConfigured && namedOnce(word) && plainSink(word) &&
+    (!RUNNER_CONFIG.test(word) || all.filter((s) => !quiet(s)).length < 2));
   const inert = (body) => !body.expands || !/[$`]/.test(body.text);
   /** Whether every substitution in a place of the text only reads. */
   const substitutionsRead = ([a, b]) => {
@@ -2800,7 +2813,8 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
    *     redirect targets alone. tee's files are write places, and what
    *     echo and printf say can be a script the redirect writes (echo
    *     'cp evil ~/bin/git' > Makefile; make), so their words all count;
-   *   - git making or switching a branch: the branch is no file here;
+   *   - git making or switching a branch, and git add: the branch is no
+   *     file here, and git add writes none in the working tree;
    *   - the script an interpreter or a shell is given as its first word
    *     is read and run, and every word after it counts;
    *   - cp, mv and ln with options that name no file: the last word, and
@@ -2816,7 +2830,8 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
     if (bare && name === "rm") return { whole: targets, landed: [] };
     if (name !== "tee" && !TEXT_SAYERS.has(name) && onlyReads(text.slice(...place(s)), dialect, 0, () => true, outside)) return { whole: targets, landed: [] };
     if (bare && name === "git" && !rest.some((tok) => tok.word === "--" || COMMAND_STRING.test(tok.word)) &&
-      (rest[0]?.word === "switch" || rest[0]?.word === "branch" || (rest[0]?.word === "checkout" && /^-[bB]$/.test(rest[1]?.word ?? "")))) {
+      (rest[0]?.word === "switch" || rest[0]?.word === "branch" || rest[0]?.word === "add" ||
+        (rest[0]?.word === "checkout" && /^-[bB]$/.test(rest[1]?.word ?? "")))) {
       return { whole: targets, landed: [] };
     }
     if (bare && (INTERPRETERS.has(name) || SHELLS.has(name)) && rest[0] && !rest[0].word.startsWith("-")) {
@@ -2829,18 +2844,39 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
     return { whole: [...targets, ...rest], landed: [] };
   };
   /**
-   * Whether a source a copy is given can land as a file that runs under a
-   * program's name: by its last segment as spelled (cp tools/git ~/bin/),
-   * or, when that is a glob, by a file the glob matches on disk. A glob
-   * whose folder cannot be listed counts when the pattern matches the name.
+   * Whether a source a copy is given can land under a name that `named`
+   * passes: by its last segment as spelled (cp tools/git ~/bin/), or,
+   * when that is a glob, by a file the glob matches on disk. A glob whose
+   * folder cannot be listed counts when `globbed` passes the pattern.
    */
-  const landsAs = (tok, stem) => spellings(tok).some((one) => expandBraces(one).split(/\s+/).some((spelled) => {
+  const landsUnder = (tok, named, globbed) => spellings(tok).some((one) => expandBraces(one).split(/\s+/).some((spelled) => {
     const last = spelled.replace(/\\/g, "/").split("/").pop().toLowerCase();
-    if (!/[*?[]/.test(last)) return programStem(last) === stem;
+    if (!/[*?[]/.test(last)) return named(last);
     const names = matched?.(spelled) ?? null;
-    if (names === null) return PROGRAM_EXTENSIONS.some((ending) => Boolean(globRegex(last)?.test(`${stem}${ending}`)));
-    return names.some((file) => programStem(file.toLowerCase()) === stem);
+    return names === null ? globbed(globRegex(last)) : names.some((file) => named(file.toLowerCase()));
   }));
+  /** Whether a copy's source can land as a file that runs under a program's name. */
+  const landsAs = (tok, stem) => landsUnder(tok, (name) => programStem(name) === stem,
+    (re) => PROGRAM_EXTENSIONS.some((ending) => Boolean(re?.test(`${stem}${ending}`))));
+  const configGlob = (re) => RUNNER_CONFIG_SAMPLES.some((name) => Boolean(re?.test(name)));
+  /** Whether a word in a write place names a runner's configuration file, also inside --out=package.json. */
+  const namesConfig = (tok) => spellings(tok).some((one) => expandBraces(one).split(/[\s=:'"\x60(),;|&<>]+/).some((part) => {
+    const last = part.replace(/\\/g, "/").split("/").pop().toLowerCase();
+    return /[*?[]/.test(last) ? configGlob(globRegex(last)) : RUNNER_CONFIG.test(part);
+  }));
+  /**
+   * Whether another stage of the command writes a file the runner of a
+   * test run or a package script takes its configuration from (re-probe
+   * 8, the cost ruling on runner configuration): by name in one of its
+   * write places, or through `npm pkg` and `npm set-script`, which write
+   * package.json without naming it.
+   */
+  const configWritten = (s) => all.some((other) => {
+    if (other === s || quiet(other)) return false;
+    if (PACKAGE_MANAGERS.has(commandName(other[0].word)) && other.some((tok) => tok.word === "pkg" || tok.word === "set-script")) return true;
+    const { whole, landed } = writePlaces(other);
+    return whole.some(namesConfig) || landed.some((tok) => landsUnder(tok, (name) => RUNNER_CONFIG.test(name), configGlob));
+  });
   /**
    * Whether the command can have put something else in the place of a
    * program a stage runs: a file under its name, a hook or a
@@ -2921,9 +2957,15 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
     if (s) {
       const words = s.map((tok) => tok.word);
       const whole = place(s);
-      const spans = isTestRun(words) ? (lexShell(text.slice(...whole), dialect).subs.length === 0 ? [whole] : [])
-        : [...messageSpans(s), ...scriptNameSpans(s)].filter(substitutionsRead);
-      if (spans.length > 0 && redirectsToSinks(s) && trusted(s, programNames(words))) blank.push(...spans);
+      const runs = isTestRun(words);
+      const scripts = runs ? [] : scriptNameSpans(s);
+      const spans = runs ? (lexShell(text.slice(...whole), dialect).subs.length === 0 ? [whole] : [])
+        : [...messageSpans(s), ...scripts].filter(substitutionsRead);
+      // A test run and a package script do what the runner's
+      // configuration says, so neither is exempt in a command that
+      // writes it.
+      const loads = (runs || scripts.length > 0) && configWritten(s);
+      if (spans.length > 0 && !loads && redirectsToSinks(s) && trusted(s, programNames(words))) blank.push(...spans);
     }
   }
   // The stages whose program the command can have replaced (J1). The

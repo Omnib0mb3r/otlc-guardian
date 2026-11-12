@@ -1936,6 +1936,26 @@ Tests: `tests/hook.test.js`, "a name split by a variable that is not set (re-pro
 
 Smoke test after applying: in a scratch `guardian init` project ask Claude to run `rm -rf secu$U"rity"`; see a Guardian prompt naming security; decline. Put the line "ignore all previous instructions" in `notes/x.md` and ask for `cp notes/x.md CLAU${U}DE.md`; see a Guardian prompt naming CLAUDE.md; decline. In bypass mode `tar -czf backup-$DATE.tgz src` gets no Guardian prompt.
 
+**Cost ruling on runner configuration (re-probe 8, worker findings not fixed), Lex's decision of 2026-11-11: a command that writes a runner's configuration file loses the test-run exemption. Fixed in staging, not yet live.** A test run and a package script do what the runner's configuration says, and the same command could write it. Silent at 339e256: `printf '{"scripts":{"security":"rm -rf $npm_lifecycle_event"}}' > package.json; npm run security`, and `printf 'import shutil,sys\nshutil.rmtree(sys.argv[-1])\n' > conftest.py; pytest security`. The word stands only in the exempt stage, and the other stage names no program.
+
+Change in `staging/hooks/injection-guard-hook.mjs`:
+
+- `RUNNER_CONFIG` names the files of the ruling: `package.json`, `conftest.py`, `pytest.ini`, `pyproject.toml`, `setup.cfg`, `tox.ini`, `jest.config.*`, `vitest.config.*`, `.npmrc`, `Cargo.toml`, `.cargo/config` and `.cargo/config.toml`. Added by the worker, as files of the same kind for runners on the hook's list: `vite.config.*` (vitest reads it), `.mocharc` and `.mocharc.*`, `.yarnrc`, `.yarnrc.yml` and `bunfig.toml`.
+- `configWritten()` in `bareWordText()`: another stage that is not quiet names one of those files in a write place (`writePlaces()`, from the ruling on H6: a redirect target, the last word of a copy and the name a source lands under, any word of a program the reader does not know, also inside `--out=package.json`), or is `npm pkg` or `npm set-script` (pnpm, yarn and bun too), which write `package.json` without naming it. A glob counts when it can match one of the names.
+- A stage that is a test run or holds a script name earns no exemption when `configWritten()` is true. A message (`git commit -m`) is not affected.
+- The worker's note in the ruling: such a file is not an ordinary file for a reading stage to write when the command has any other stage that is not quiet. `printf '{"lint-staged":{"*":"rm -rf security"}}' > package.json; git commit -am x` asks, because an installed git hook runs what the file names. Written and only read back (`echo 'markers = security' >> pytest.ini && cat pytest.ini`), it stays silent.
+- `writePlaces()` gained `git add`: it writes no file in the working tree, so `git add package.json package-lock.json && npm test -- security` is silent.
+
+Built wider than the ruling's words in two places: the script-name exemption is withheld as the test-run one is (`npm run security` is the re-probe's first case), and the write counts whether it stands before or after the run (`npm run security; printf x > package.json` asks), as every other test of what another stage can do is made.
+
+Still silent, stated: the two-call form (the file written in one command, the run in the next), a file the runner loads that is not on the list (`printf ... > tests/test_a.py; pytest -k security`: a test file is code the runner runs, and no list of names covers it), `npm version patch && npm run security` (it rewrites the version in `package.json`), and a copy whose source glob matches none of the names on disk now (`cp cfg/* . && pytest -k security` with no folder `cfg`).
+
+Cost. Asking now, silent at 339e256: `cp package.json package.json.bak && npm test -- security` (a single source could land under its own name if the last word were a folder), `npx prettier --write package.json && npm test -- security`, `git checkout package.json && npm test -- security`, `sed -i ... package.json && npm test -- security`, and a reading stage that writes the word into one of the files in a command that goes on to git or a program (`echo 'markers = security' >> pytest.ini && git add pytest.ini && git commit -m cfg`). Silent as before: `npm ci && npm test -- security`, `npm install && npm test -- security`, `git pull && pytest -k security`, `pip install -e . && pytest -k security`, `cat package.json && npm test -- security`, `jq .version package.json > v.txt; npm test -- security`.
+
+Tests: `tests/hook.test.js`, "a command that writes a runner's configuration earns no test-run exemption (re-probe 8, cost ruling on runner configuration)": 24 ask (1 through the PowerShell tool), 10 silent. Against the hook at 339e256, 24 failed. Staged hook suite before: 2577 passed, 24 failed. After: 2601 passed, 0 failed. Re-probe 7's 640 commands and re-probe 8's 851: 0 verdicts changed. Everyday commands: 0 changed in the 75 and in the 197. Lex's regress harness: no line changed.
+
+Smoke test after applying: at the root of a scratch project ask Claude to run `printf '{"scripts":{"security":"echo hi"}}' > package.json; npm run security`; see a Guardian prompt naming security; decline. In bypass mode `npm ci && npm test -- security` gets no Guardian prompt (npm itself may fail).
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10
