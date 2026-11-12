@@ -50,15 +50,19 @@ function pngChunk(type, data) {
 
 /**
  * A 1x1 grey PNG. `text` adds tEXt chunks ({ keyword: value }),
- * `ztext` adds compressed zTXt chunks.
+ * `ztext` adds compressed zTXt chunks, `itext` compressed iTXt chunks.
  */
-export function png({ text = {}, ztext = {} } = {}) {
+export function png({ text = {}, ztext = {}, itext = {} } = {}) {
   const ihdr = Buffer.concat([u32be(1), u32be(1), Buffer.from([8, 0, 0, 0, 0])]);
   const idat = zlib.deflateSync(Buffer.from([0, 0x80]));
   const chunks = [pngChunk("IHDR", ihdr)];
   for (const [k, v] of Object.entries(text)) chunks.push(pngChunk("tEXt", Buffer.from(`${k}\0${v}`, "latin1")));
   for (const [k, v] of Object.entries(ztext)) {
     chunks.push(pngChunk("zTXt", Buffer.concat([Buffer.from(`${k}\0\0`, "latin1"), zlib.deflateSync(Buffer.from(v, "latin1"))])));
+  }
+  for (const [k, v] of Object.entries(itext)) {
+    // keyword, compressed (1), deflate (0), language tag, translated keyword, UTF-8 text
+    chunks.push(pngChunk("iTXt", Buffer.concat([Buffer.from(`${k}\0\x01\0en\0\0`, "latin1"), zlib.deflateSync(Buffer.from(v, "utf8"))])));
   }
   chunks.push(pngChunk("IDAT", idat), pngChunk("IEND", Buffer.alloc(0)));
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), ...chunks]);
@@ -398,6 +402,32 @@ export function pdfPage(text = "Line 3 transfer notes", { catalogExtra = "" } = 
     "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >>",
     { dict: "", data: `BT /F1 12 Tf 72 720 Td (${text}) Tj ET`, flate: true },
+  ];
+}
+
+/**
+ * A page whose text is shown through a Type0 font with a ToUnicode
+ * CMap: each character of `text` gets its own two-byte code, so the
+ * content stream holds only hex codes and the words can be read only
+ * through the CMap. `tj` shows them as a TJ array with a small
+ * kerning number between the codes. Objects 1 to 6.
+ */
+export function pdfCmapPage(text, { tj = false } = {}) {
+  const chars = [...new Set(text)];
+  const code = (ch) => (chars.indexOf(ch) + 1).toString(16).padStart(4, "0");
+  const hex = [...text].map(code);
+  const show = tj ? `[${hex.map((h) => `<${h}>`).join(" -20 ")}] TJ` : `<${hex.join("")}> Tj`;
+  const bfchar = chars.map((ch) => `<${code(ch)}> <${ch.charCodeAt(0).toString(16).padStart(4, "0")}>`).join("\n");
+  const cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n" +
+    "1 begincodespacerange <0000> <FFFF> endcodespacerange\n" +
+    `${chars.length} beginbfchar\n${bfchar}\nendbfchar\nendcmap CMapName currentdict /CMap defineresource pop end end`;
+  return [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    { dict: "", data: `BT /F1 12 Tf 72 720 Td ${show} ET`, flate: true },
+    "<< /Type /Font /Subtype /Type0 /BaseFont /GuardianTest /Encoding /Identity-H /ToUnicode 6 0 R >>",
+    { dict: "", data: cmap, flate: true },
   ];
 }
 

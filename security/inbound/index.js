@@ -34,6 +34,7 @@ import { checkArchive } from "./checks/archive.js";
 import { checkEncrypted } from "./checks/encrypted.js";
 import { checkOffice } from "./checks/office.js";
 import { checkPdf } from "./checks/pdf.js";
+import { checkInjection } from "./checks/injection.js";
 import { innerPath } from "./paths.js";
 
 export { UsageError };
@@ -95,6 +96,8 @@ const PIPELINE = [
     if (ctx.isMailBody && node.top) return ctx.skip("executable");
     ctx.run("executable", node, () => checkExecutable(ctx, node));
   },
+  // Last: reads the text the readers above found (parts, PDF objects).
+  (ctx, buf, node) => ctx.run("injection", node, () => checkInjection(ctx, buf, node)),
 ];
 
 export class Inspection {
@@ -105,7 +108,6 @@ export class Inspection {
     this.isMailBody = meta.source === "mail-body";
     this.reasons = [];
     this.inner = [];
-    this.texts = [];
     this.stopped = false;
     this.state = Object.fromEntries(CHECK_NAMES.map((name) => [name, { ran: false, error: false, allowedSkip: false }]));
   }
@@ -149,11 +151,6 @@ export class Inspection {
       this.state[check].error = true;
       this.report(check, "hold", "internal-error", `${check} check failed: ${error?.message ?? error}`, node);
     }
-  }
-
-  /** Text a reader pulled out of a node, for the prompt-injection check. */
-  addText(node, label, text) {
-    if (typeof text === "string" && text.trim()) this.texts.push({ node, label, text });
   }
 
   /** Lists an archive entry in `file.inner`. */

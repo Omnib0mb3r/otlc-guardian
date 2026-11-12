@@ -171,6 +171,8 @@ const CONTAINER_MAGIC = [
 
 function inspectCfb(ctx, buf, node) {
   const doc = readCfb(buf, ctx.budget);
+  // Kept for the prompt-injection check, which reads its streams' text.
+  node.cfb = doc;
   const top = new Set(doc.entries.filter((e) => !e.path.includes("/")).map((e) => e.name));
 
   if (MSI_CLSIDS.has(doc.root.clsid)) {
