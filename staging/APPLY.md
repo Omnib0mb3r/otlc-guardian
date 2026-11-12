@@ -21,7 +21,7 @@ E8), and turned into Lex's runbook; updated on 2026-11-11 for the fifth
 sixth (G1 to G7, then G2b and F3b read-only) with two findings made while
 fixing it: a string escape after a guarded name, and a wrapper option's
 value; and for the seventh (H1 to H10, then the cost rulings (a), (b)
-and (c)).
+and (c)); and for the eighth (J1 to J11, then its five cost rulings).
 
 ## Preconditions
 
@@ -36,7 +36,7 @@ and (c)).
 
 | Staged file | Live file | Size of the change |
 |---|---|---|
-| `staging/hooks/injection-guard-hook.mjs` | `.claude/hooks/injection-guard-hook.mjs` | 4,351 lines added, 283 removed |
+| `staging/hooks/injection-guard-hook.mjs` | `.claude/hooks/injection-guard-hook.mjs` | 5,033 lines added, 265 removed |
 | `staging/hooks/web-content-guard.mjs` | `.claude/hooks/web-content-guard.mjs` | 26 added, 21 removed |
 | `staging/security/01-injection-guard.js` | `security/01-injection-guard.js` | 433 added, 60 removed |
 | (edit) | `.claude/settings.json` (this repo only) | both hook commands anchored, web guard matcher widened |
@@ -57,8 +57,8 @@ Already live, not part of this apply:
 
 Bugs fixed by the staged files, with the commit that staged each fix. Each
 bug's detail block in `BUGS.md` describes the change and its tests; the
-re-probe items are paragraphs naming Sn, Dn, En, Fn, Gn or Hn, or one of
-re-probe 7's cost rulings (a), (b) and (c).
+re-probe items are paragraphs naming Sn, Dn, En, Fn, Gn, Hn or Jn, or one
+of the cost rulings of re-probe 7 ((a), (b) and (c)) and re-probe 8.
 
 | Bug | Commit | File | Change |
 |---|---|---|---|
@@ -144,12 +144,32 @@ re-probe 7's cost rulings (a), (b) and (c).
 | BUG-074 (cost a) | 8c6b285 | hook | a path stuck to an option counts only for `-t`, `-o` and `-d` |
 | BUG-080 (cost b) | 6066f76 | hook | plainness is judged by statement; a later naming counts only where the file can be run or handed on |
 | BUG-066 (cost c) | b79792b | hook | a command behind a program the readers do not know is read |
+| BUG-080 (J2) | d06b19e | hook | a variable setter is an assignment to the name it sets |
+| BUG-080 (J6) | acb4a68 | hook | a substitution names what it could expand to; only `cat` of a quoted heredoc names nothing |
+| BUG-080 (J1) | c99239c | hook | git earns no exemption beside a write to a hooks folder or a git configuration change |
+| BUG-080 (J1, second commit) | 4e20d7f | hook | after a move, a program the command can have replaced is handed the word wherever the shell is |
+| BUG-080 (J3) | e4178db | hook | a starter (`npx`, `npm exec`, `uv run`) runs a known program only when every option in front of it is on its list |
+| BUG-080 (J4) | c3f3d6d | hook | a test runner earns the exemption only when every option is on that runner's list |
+| BUG-080 (J5) | 924e487 | hook | `cd ~+`, `cd ~-`, `shopt`, a `popd` with a command after it and `HOME` as a word leave the location uncertain |
+| BUG-080 (J7) | 7a5acc9 | hook | a PowerShell module or script beside an exempt stage makes the command not plain |
+| BUG-027 (J9) | a2876a3 | hook | a repair needs `--` and restores from the index or `HEAD` only |
+| BUG-027 (J10) | f099e6d | hook | a scanner that loads but throws or returns no result blocks |
+| BUG-066 (J8) | d5f6a18 | hook | command strings, `git -c` and `git config` values, PowerShell links and `[scriptblock]::Create` are read |
+| BUG-080 (J11) | fb8119c | hook | a file put in git's store is named again when a later stage could take it back out |
+| BUG-080 (cost ruling, H6) | 5c88116 | hook | a program's name counts as planted only where the command writes |
+| BUG-074 (cost a, second ruling) | d88f87d | hook | a folder stuck to `-P` or `-B` is a write target |
+| BUG-080 (cost ruling, unset variable) | 339e256 | hook | a guarded or watched name split by a variable reference asks |
+| BUG-080 (cost ruling, runner configuration) | a25edb4 | hook | a command that writes a runner's configuration earns no test-run or script-name exemption |
+| BUG-066 (cost ruling, downloads) | ac118e7 | hook | a download into a watched path asks; a folder the command filled is judged by content |
 
 Documented, not fixed: an obfuscated payload moved out of a code fence
 (BUG-042, S7, f5ecc42), `xargs cp` fed its file names on stdin (S5), a
-copy whose source is held in a variable or made by inline code (BUG-066)
-and inline code that runs an extraction command as a string (G8); all
-are in SECURITY.md, "What the hook is, and what it is not".
+copy whose source is held in a variable or made by inline code (BUG-066),
+inline code that runs an extraction command as a string (G8), a file
+the command wrote and hands on through git's list of untracked files
+(`echo 'rm -rf security' > x.sh; git ls-files -o | xargs sh`, J11) and
+a download whose name the server chooses (`curl -OJ`); all are in
+SECURITY.md, "What the hook is, and what it is not".
 
 Behavior a user will notice after the apply:
 
@@ -197,6 +217,25 @@ Behavior a user will notice after the apply:
   so is a commit whose message comes from `$(cat <<'EOF' ... EOF)`. A
   program that could run the file or hand its content on still asks:
   `printf "\n## Security\n" >> README.md && npx prettier --write README.md`.
+- Any other substitution in a command that writes the word to a file
+  asks, because it can expand to that file's name (J6):
+  `echo 'rm -rf security' > 2026.sh; sh $(date +%Y).sh` asks, and so
+  does
+  `echo "## Security" >> README.md && git push origin "$(git branch --show-current)"`.
+  With no file written,
+  `git commit --allow-empty -m security && git push origin "$(git branch --show-current)"`
+  is silent.
+- Once `git add`, `git commit` or `git stash` has put files in git's
+  store, the file is named again unless every later stage is a `cd`, an
+  assignment, a stage that only reads and has no redirect, `git add`,
+  `git commit` or a `git push` with plain options (J11):
+  `echo security > l.txt; git add l.txt; git diff --cached | grep '^+s' | cut -c2- | xargs rm -rf`
+  asks.
+  `echo "## Security" >> README.md && git add README.md && git commit -m "docs: notes" && git push`
+  is silent; the same command with `npm test` in place of the push
+  asks. A `git diff` that only reads stores nothing, so
+  `echo "## Security" >> README.md && git diff README.md && npm test`
+  is silent.
 - An exempt stage's own redirect is judged the same way (H8):
   `git commit --allow-empty -m security > l.txt; xargs rm -rf < l.txt`
   asks; `pytest -k security > out.txt` is silent.
@@ -215,6 +254,89 @@ Behavior a user will notice after the apply:
   variable can hold the word, so
   `export NODE_ENV=test && npm run security -- $ARGS` asks.
   `printf 'done: %s\n' security` is silent.
+- A variable setter counts as an assignment to the name it sets (J2):
+  `printf -v PATH %s ./bin:/usr/bin; git commit --allow-empty -m security`
+  asks. So does an exempt stage after `printf -v` into a name Guardian
+  does not know as harmless
+  (`printf -v msg '%s' x; git commit -m security`), and after a loop
+  whose name holds an uppercase letter or an underscore
+  (`for file_name in a b; do echo $file_name; done; pytest -k security`).
+  `for f in a b; do echo $f; done; git commit --allow-empty -m "security fix"`
+  is silent.
+- git and gh earn no exemption in a command that writes into `.git`,
+  `.husky`, `.githooks` or the folder `core.hooksPath` names, or that
+  runs `git config` or `git -c` with any key (J1):
+  `cp g.sh .git/hooks/commit-msg && git commit --allow-empty -m security`
+  and `git -c core.hooksPath=.githooks commit --allow-empty -m security`
+  ask. So do `git config --get remote.origin.url && git commit -m security`
+  and `echo "## Security" >> README.md && git -c user.name=ci commit -am docs`.
+  `echo node_modules >> .gitignore && git add .gitignore && git commit -m "security"`
+  is silent.
+- After a `cd`, a program the command can have replaced is handed the
+  word wherever the shell is (J1, second commit):
+  `cp g.sh ~/bin/git; cd src && git commit --allow-empty -m security`
+  asks, and so do `cd src && x=1 rm -rf security` and
+  `export DJANGO_SETTINGS_MODULE=app.test && cd src && pytest security`.
+  `cd src && git commit --allow-empty -m security` is silent.
+- A program's name counts as planted only where the command writes
+  (cost ruling on H6): a redirect target, the destination of a `cp`,
+  `mv` or `ln` with plain options, and every word of a program whose
+  write places Guardian does not know.
+  `python manage.py migrate && python manage.py test security`,
+  `git checkout -b fix/npm && npm run security` and
+  `cp src/* dist/ && git commit -m "security fix"` are silent.
+  `cp evil/git ~/bin/; git commit -m security` asks, and so does
+  `echo "run npm test before a release" >> NOTES.md && npm run security`,
+  because every word of an `echo` with a redirect counts.
+- A starter runs a known program only when every option in front of it
+  is on its list (J3): `npx --package=./e jest security`,
+  `uv run --with=./e pytest security` and
+  `npm --script-shell=./e test security` ask. So do
+  `npm --prefix=web run security` and
+  `uv run --no-project pytest -k security`, whose options the lists
+  lack. `npx -y jest security` and `uv run pytest -k security` are
+  silent, and so is `yarn --cwd src security`: the manager is followed
+  into `src` (H2).
+- A test runner earns the exemption only when every option it is given
+  is on that runner's list of options that choose tests or shape what
+  is printed (J4): `pytest --basetemp=security` asks. With the word in
+  the command, a report, output or config option asks too:
+  `pytest --junitxml=report.xml -k security`,
+  `npx jest security --config jest.config.js` and
+  `python -u manage.py test security`.
+  `pytest -x -k security --tb=short`, `npx jest security --coverage`
+  and `python manage.py test security` are silent.
+- A move the text does not spell out leaves the location uncertain
+  (J5): `cd src && cd ~+/.. && rm -rf security` and
+  `cd src && cd ~- && rm -rf security` ask. `shopt` does the same and
+  takes an exemption with it:
+  `shopt -s globstar && git commit -m security` asks.
+  `pushd src && npx rimraf security && popd` is silent, because a
+  `popd` that ends the command moves nothing before it.
+- Through the PowerShell tool a module or a script beside an exempt
+  stage makes the command not plain, since either can define a function
+  under any name (J7): `Import-Module .\m.psm1; pytest security`,
+  `Import-Module posh-git; git commit -m security` and
+  `.\build.ps1; git commit -m 'security fix'` ask.
+  `.venv\Scripts\Activate.ps1; pytest -k security` is silent, and a
+  `.bat`, `.cmd` or `.exe` changes nothing.
+- A guarded or watched name split by a variable reference asks (cost
+  ruling): a variable that is not set expands to nothing, so
+  `rm -rf secu$U"rity"` deletes `security`. That command and
+  `rm -rf .claude/ho$U"oks"` ask. `cp notes/x.md CLAU${U}DE.md` asks
+  with a clean source or a payload; the spelled copy of a payload is
+  denied. `tar -czf backup-$DATE.tgz src` is silent.
+- A command that writes a runner's configuration earns no test-run or
+  script-name exemption (cost ruling). The files are `package.json`,
+  `conftest.py`, `pytest.ini`, `pyproject.toml`, `setup.cfg`,
+  `tox.ini`, the jest, vitest, vite and mocha configs, `.npmrc`,
+  `.yarnrc`, `bunfig.toml`, `Cargo.toml` and `.cargo/config`; `npm pkg`
+  counts as a write of `package.json`.
+  `printf '{"scripts":{"security":"echo hi"}}' > package.json; npm run security`
+  and `printf 'x' > conftest.py; pytest -k security` ask. So does
+  `cp package.json package.json.bak && npm test -- security`.
+  `npm ci && npm test -- security` and `git pull && pytest -k security`
+  are silent.
 - The word is resolved from the folder the shell is in:
   `cd src && rm -rf security` is the project's own `src/security` and is
   silent; `cd src; npx rimraf security` asks (G6). A `cd` with an option,
@@ -235,10 +357,13 @@ Behavior a user will notice after the apply:
   only reads: `npx rimraf ..` at the root, and with it `docker build ..`,
   `cp src/a.js ..` and `git add ..` (F3b). `env -C .. npx rimraf .` asks
   too (G5). `du -sh ..`, `tree ..` and `df ..` only read and are silent
-  (F3b read-only). A path stuck to an option counts only for `-t`, `-o`
-  and `-d`, the letters that name a write target:
-  `npx cpx 'src/**' -t..` and `javac -d.. A.java` ask, and
-  `gcc -I.. -c a.c` is silent (G7, cost a). A session whose project root is
+  (F3b read-only). A path stuck to an option counts only for `-t`, `-o`,
+  `-d`, `-P` and `-B`, the letters that name a write target:
+  `npx cpx 'src/**' -t..`, `javac -d.. A.java`,
+  `wget -P.. https://example.test/a.tgz` and `cmake -S. -B..` ask.
+  `gcc -I.. -c a.c` and `cmake -S. -Bbuild` are silent, and
+  `gcc -B.. -c a.c` asks though `-B` only reads there (G7, cost a and
+  its second ruling). A session whose project root is
   one package of a larger repository will meet this. The project root
   itself is not judged (`npx prettier --write .`, `npx rimraf .`).
 - `find` output past 1,000 files, redirected or piped into a watched
@@ -284,6 +409,27 @@ Behavior a user will notice after the apply:
   through the PowerShell tool,
   `Get-ChildItem notes | ForEach-Object { Copy-Item notes\x.md CLAUDE.md }`.
   `npx shx cp docs/a.md CLAUDE.md` with a clean source is silent.
+- A command string is read as a command whatever program it is handed
+  to (J8): `script -qc 'true; cp notes/x.md CLAUDE.md' /dev/null`,
+  `npm exec -c 'cp notes/x.md CLAUDE.md'` and
+  `git -c alias.x='!cp notes/x.md CLAUDE.md' x` are denied on a
+  payload. Through the PowerShell tool so are
+  `New-Item -ItemType HardLink -Path CLAUDE.md -Value notes\x.md` and
+  `[scriptblock]::Create('Copy-Item notes\x.md CLAUDE.md').Invoke()`.
+  `git -c user.name=ci commit --allow-empty -m docs` is silent.
+- A download into a watched path asks whatever it holds, because its
+  content cannot be read before it lands (cost ruling on BUG-066):
+  `curl -o CLAUDE.md https://example.com/`,
+  `curl -O https://example.test/CLAUDE.md`,
+  `wget https://example.test/CLAUDE.md`,
+  `wget -P .claude/agents https://example.test/a.md` and, through the
+  PowerShell tool,
+  `Invoke-WebRequest https://example.com/ -OutFile CLAUDE.md`.
+  `curl -s https://example.com/ > out.html` is silent.
+- A folder the command filled earlier is judged by content:
+  `cp -r notes evil && cp -r evil .claude/agents` is denied on a
+  payload, and `cp -r docs clean && cp -r clean .claude/agents` with
+  clean files is silent.
 - A GNU long option cut short is read as the option (H9):
   `cp --t=.claude/agents notes/x.md` is denied on a payload. A symbolic
   link into a watched folder is judged by its source's content, read
@@ -309,12 +455,22 @@ Behavior a user will notice after the apply:
   is missing, empty or does not load, the hook blocks every Write, Edit,
   MultiEdit, NotebookEdit, Bash and PowerShell call (exit 2) with a
   message that names the file and the repair (H10, BUG-027). Before, it
-  reported the problem and let the call run. `guardian update`,
-  `guardian init` and `git checkout -- security/01-injection-guard.js`
-  are let through with a line on stderr; nothing else is until the file
-  loads again. The repair must be spelled that way:
-  `npx otlc-guardian update` and `node bin/guardian.js update` are
-  blocked, and a person can always run either from a terminal.
+  reported the problem and let the call run. A scanner that loads but
+  throws or returns no result when it is called blocks the same way
+  (J10). The repairs let through, each with a line on stderr, are
+  `guardian update`, `guardian init`, and a `git checkout` or
+  `git restore` that has `--` in front of the files, names only
+  Guardian's own files and restores from the index or `HEAD` (J9):
+  `git checkout -- security/01-injection-guard.js`,
+  `git checkout HEAD -- security/01-injection-guard.js`,
+  `git restore --source=HEAD -- security/01-injection-guard.js` and
+  `git checkout -- .claude/hooks/injection-guard-hook.mjs`. Nothing
+  else runs until the file loads again. Blocked:
+  `git checkout security/01-injection-guard.js` (no `--`),
+  `git checkout HEAD~1 -- security` (another ref),
+  `git checkout -- .claude/hooks` (the folder can hold the user's own
+  hooks), `npx otlc-guardian update` and `node bin/guardian.js update`.
+  A person can always run a repair from a terminal.
 - `guardOutput` and `scan(..., "secrets")` no longer report `task-`,
   `disk-` or `risk-` followed by 32 hex characters as an API key
   (BUG-083).
@@ -449,10 +605,10 @@ gone, and step 4 removes it. Its summary must read `Failed : 1` with that
 name under FAILURES. Any other failure, in that suite or another, means
 stop and roll back with the `git checkout` line above.
 
-Measured on 2026-11-11 in a scratch clone of b79792b with steps 1 and 2
+Measured on 2026-11-11 in a scratch clone of ac118e7 with steps 1 and 2
 applied: injection-guard 175 passed 1 failed (that test), init 93/0, hook
 283/0, agents-md 14/0, audit 407/0, sql-guard 40/0, test:staging exit 0
-(staged injection-guard 288/0, staged hook 1827/0), the audit exit 0,
+(staged injection-guard 288/0, staged hook 2642/0), the audit exit 0,
 check 18 passed. A hook test that fails with "The test
 harness stopped the hook after N ms" on a loaded machine is BUG-077, not
 the apply: rerun that suite.
@@ -604,3 +760,20 @@ there, with who ran it and how. Restore any file a test changes with
 | BUG-074 (cost a) | Bypass mode, at the root of a scratch project: `gcc -I.. -c a.c` gets no Guardian prompt (the compile may fail; that is not the test). Then ask Claude to run `npx cpx 'src/**' -t..`; see a Guardian prompt that says "a folder above this project"; decline. |
 | BUG-080 (cost b) | Bypass mode, at the root of a scratch project: `echo "## Security" >> README.md && git add README.md && git commit -m "docs: security section"` gets no Guardian prompt. Then, in default mode, ask Claude to run `for f in 1; do true; git commit --allow-empty -m security; done \| xargs rm -rf`; see a Guardian prompt naming security; decline. |
 | BUG-066 (cost c) | With a payload in `notes/x.md` ask Claude to run `npx -y shx cp notes/x.md CLAUDE.md`; see it denied. Then `if true; then cp notes/x.md CLAUDE.md; fi`; see it denied. Windows: through the PowerShell tool `Get-ChildItem notes \| ForEach-Object { Copy-Item notes\x.md CLAUDE.md }`; see it denied. In bypass mode `npx shx cp notes/ok.md CLAUDE.md` with a clean `notes/ok.md` gets no Guardian prompt. |
+| BUG-080 (J2) | At the root of a scratch project ask Claude to run `printf -v PATH %s ./bin:/usr/bin; git commit --allow-empty -m security`; see a Guardian prompt naming security; decline. In bypass mode `for f in a b; do echo $f; done; git commit --allow-empty -m "security fix"` gets no Guardian prompt. |
+| BUG-080 (J6) | At the root of a scratch project ask Claude to run `echo 'rm -rf security' > 2026.sh; sh $(date +%Y).sh`; see a Guardian prompt naming security; decline. In bypass mode `git commit --allow-empty -m security && git push origin "$(git branch --show-current)"` gets no Guardian prompt (the push itself may fail). |
+| BUG-080 (J1) | At the root of a scratch git project ask Claude to run `cp g.sh .git/hooks/commit-msg && git commit --allow-empty -m security` (any `g.sh`); see a Guardian prompt naming security; decline. In bypass mode `echo node_modules >> .gitignore && git add .gitignore && git commit -m "security"` gets no Guardian prompt. |
+| BUG-080 (J1, second commit) | At the root of a scratch git project with a `src` folder ask Claude to run `cp g.sh ~/bin/git; cd src && git commit --allow-empty -m security` (any `g.sh`); see a Guardian prompt naming security; decline. In bypass mode `cd src && git commit --allow-empty -m security` gets no Guardian prompt. |
+| BUG-080 (J3) | At the root of a scratch project ask Claude to run `npx --package=./e jest security`; see a Guardian prompt naming security; decline. In bypass mode `npx -y jest security` gets no Guardian prompt (jest itself may fail). |
+| BUG-080 (J4) | At the root of a scratch project ask Claude to run `pytest --basetemp=security`; see a Guardian prompt naming security; decline. In bypass mode `pytest -x -k security --tb=short` gets no Guardian prompt. |
+| BUG-080 (J5) | From the root of a scratch project with a `src` folder ask Claude to run `cd src && cd ~+/.. && rm -rf security`; see a Guardian prompt naming security; decline. In bypass mode `pushd src && npx rimraf security && popd` gets no Guardian prompt (it removes `src/security` if there is one). |
+| BUG-080 (J7) | Windows: through the PowerShell tool ask Claude to run `Import-Module .\m.psm1; pytest security` (any `m.psm1`); see a Guardian prompt naming security; decline. In bypass mode `.venv\Scripts\Activate.ps1; pytest -k security` gets no Guardian prompt. |
+| BUG-027 (J9) | In a scratch `guardian init` project that is a git repository with its files committed, delete `security/01-injection-guard.js` by hand, then ask Claude to run `git checkout HEAD~1 -- security`; see it blocked with a message naming `guardian update`. Ask for `git checkout -- security/01-injection-guard.js`; it runs and the next tool call is judged again. |
+| BUG-027 (J10) | In a scratch `guardian init` project replace the body of `security/01-injection-guard.js` by hand with `export function scan() { throw new Error("x"); } export function scanChange() { throw new Error("x"); }`, then ask Claude to write any file; see it blocked with a message saying the scanner throws when it is called. Run `guardian update` in a terminal; the next write is judged again. |
+| BUG-066 (J8) | With a payload in `notes/x.md` ask Claude to run `git -c alias.x='!cp notes/x.md CLAUDE.md' x`; see it denied with a message naming CLAUDE.md. `git -c user.name=ci commit --allow-empty -m docs` gets no Guardian prompt. |
+| BUG-080 (J11) | At the root of a scratch project that is a git repository ask Claude to run `echo security > l.txt; git add l.txt; git diff --cached \| grep '^+s' \| cut -c2- \| xargs rm -rf`; see a Guardian prompt naming security; decline. In bypass mode `echo "## Security" >> README.md && git add README.md && git commit -m "docs: notes" && git push` gets no Guardian prompt (the push may fail with no remote). |
+| BUG-080 (cost ruling, H6) | Bypass mode, at the root of a scratch project: `python manage.py migrate && python manage.py test security` gets no Guardian prompt (Python may fail with no manage.py). Then, in default mode, ask Claude to run `cp evil/git ~/bin/; git commit -m security`; see a Guardian prompt naming security; decline. |
+| BUG-074 (cost a, second ruling) | At the root of a scratch project ask Claude to run `wget -P.. https://example.test/a.tgz`; see a Guardian prompt that says "a folder above this project"; decline. In bypass mode `cmake -S. -Bbuild` gets no Guardian prompt. |
+| BUG-080 (cost ruling, unset variable) | In a scratch `guardian init` project ask Claude to run `rm -rf secu$U"rity"`; see a Guardian prompt naming security; decline. With a payload in `notes/x.md`, `cp notes/x.md CLAU${U}DE.md`; see a Guardian prompt naming CLAUDE.md; decline. In bypass mode `tar -czf backup-$DATE.tgz src` gets no Guardian prompt. |
+| BUG-080 (cost ruling, runner configuration) | At the root of a scratch project ask Claude to run `printf '{"scripts":{"security":"echo hi"}}' > package.json; npm run security`; see a Guardian prompt naming security; decline. In bypass mode `npm ci && npm test -- security` gets no Guardian prompt. |
+| BUG-066 (cost ruling, downloads) | At the root of a scratch project ask Claude to run `curl -o CLAUDE.md https://example.com/`; see a Guardian prompt naming CLAUDE.md and a download; decline. With a payload in `notes/x.md`, `cp -r notes evil && cp -r evil .claude/agents`; see it denied with a message naming the payload. In bypass mode `curl -s https://example.com/ > out.html` gets no Guardian prompt. |
