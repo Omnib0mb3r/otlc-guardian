@@ -233,6 +233,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A program's name counts as planted only where something is
+  written (BUG-080, re-probe 8 cost ruling on H6).** `python manage.py
+  migrate && python manage.py test security`, `git checkout -b fix/npm
+  && npm run security` and `cp src/* dist/ && git commit -m "security
+  fix"` asked, because the first stage names the program of the
+  second. The name now counts in a redirect target, in the last word
+  of `cp`, `mv` or `ln` and the name each source lands under, and in
+  every word of a program whose write places the hook does not know.
+  `cp evil/git ~/bin/; git commit -m security` still asks.
+
 - **Git's store names a file again to what comes after (BUG-080,
   re-probe 8 J11).** `echo security > l.txt; git add l.txt; git diff
   --cached | grep '^+s' | cut -c2- | xargs rm -rf` was silent: `git

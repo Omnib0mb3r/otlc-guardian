@@ -2059,6 +2059,12 @@ const PROGRAM_FOLDER = /^(?:\.[\\/])?(?:node_modules[\\/]\.bin|\.?venv[\\/](?:bi
 const PROGRAM_EXTENSIONS = ["", ".exe", ".cmd", ".bat", ".com", ".ps1"];
 const PROGRAM_EXTENSION = /\.(?:exe|cmd|bat|com|ps1)$/;
 const programStem = (name) => name.toLowerCase().replace(PROGRAM_EXTENSION, "");
+// cp, mv and ln write where their last word says when every option is
+// one of these, which name no file. -t names the folder, -S the ending
+// of a backup and -b makes one (cp -b -S t x ~/bin/gi leaves ~/bin/git),
+// so with any other option every word counts.
+const PLAIN_COPIERS = new Set(["cp", "mv", "ln"]);
+const PLAIN_COPY_FLAGS = /^(?:-[rRafpvnuisLPdTlH]+|--(?:recursive|archive|force|verbose|no-clobber|update|symbolic|preserve|dereference|no-dereference))$/;
 /** Whether a word holds a file that would run under a program's name: bin/git, ~/bin/git.cmd, open('/x/git','w'). */
 const holdsProgram = (word, stem) => word.split(/[\s\\/=:'"\x60(),;|&<>]+/).some((part) => part !== "" && programStem(part) === stem);
 
@@ -2520,8 +2526,11 @@ function substitutionText(sub, dialect) {
  *   as spelled, is absolute and outside the project
  * @param {((spelled: string) => boolean)|null} hooksFolder - whether a
  *   path, as spelled, is in a folder git is configured to take hooks from
+ * @param {((spelled: string) => string[]|null)|null} matched - the names
+ *   of the files on disk that a path whose last segment is a glob
+ *   matches, or null when they cannot be listed
  */
-function bareWordText(text, dialect, plainSink = null, outside = null, hooksFolder = null) {
+function bareWordText(text, dialect, plainSink = null, outside = null, hooksFolder = null, matched = null) {
   const { tokens, heredocs, comments, uncertain } = lexShell(text, dialect);
   if (uncertain) return { text, unplaced: [] };
   /** Whether a path, as spelled, is a file git runs: in .git, .husky or .githooks, or in the configured hooks folder (J1). */
@@ -2738,6 +2747,58 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
     if (spelled && !(outside?.(program) || PROGRAM_FOLDER.test(program) || commandName(program) === "manage.py")) return false;
     return !replaced(s, names, spelled);
   };
+  const redirectTargets = new Set(tokens.filter((tok, i) => tok.word !== undefined && WRITE_REDIRECTS.has(tokens[i - 1]?.op)));
+  /**
+   * The words of a stage that can put a file where they say (re-probe 8,
+   * the cost ruling on H6): a program's name counts as planted only where
+   * something is written, and an argument that is only read plants
+   * nothing (python manage.py migrate, git checkout -b fix/npm). Every
+   * word counts unless the reader knows the program's write places:
+   *   - a program that only reads, its redirects apart, and rm: the
+   *     redirect targets alone. tee's files are write places, and what
+   *     echo and printf say can be a script the redirect writes (echo
+   *     'cp evil ~/bin/git' > Makefile; make), so their words all count;
+   *   - git making or switching a branch: the branch is no file here;
+   *   - the script an interpreter or a shell is given as its first word
+   *     is read and run, and every word after it counts;
+   *   - cp, mv and ln with options that name no file: the last word, and
+   *     each source by the name it lands under (`landed`).
+   * @returns {{ whole: object[], landed: object[] }}
+   */
+  const writePlaces = (s) => {
+    const targets = s.filter((tok) => redirectTargets.has(tok));
+    const words = s.filter((tok) => !redirectTargets.has(tok));
+    const name = commandName(words[0]?.word ?? "");
+    const rest = words.slice(1);
+    const bare = words[0]?.word === name;
+    if (bare && name === "rm") return { whole: targets, landed: [] };
+    if (name !== "tee" && !TEXT_SAYERS.has(name) && onlyReads(text.slice(...place(s)), dialect, 0, () => true, outside)) return { whole: targets, landed: [] };
+    if (bare && name === "git" && !rest.some((tok) => tok.word === "--" || COMMAND_STRING.test(tok.word)) &&
+      (rest[0]?.word === "switch" || rest[0]?.word === "branch" || (rest[0]?.word === "checkout" && /^-[bB]$/.test(rest[1]?.word ?? "")))) {
+      return { whole: targets, landed: [] };
+    }
+    if (bare && (INTERPRETERS.has(name) || SHELLS.has(name)) && rest[0] && !rest[0].word.startsWith("-")) {
+      return { whole: [...targets, ...rest.slice(1)], landed: [] };
+    }
+    if (bare && PLAIN_COPIERS.has(name) && rest.every((tok) => !tok.word.startsWith("-") || PLAIN_COPY_FLAGS.test(tok.word))) {
+      const paths = rest.filter((tok) => !tok.word.startsWith("-"));
+      if (paths.length >= 2) return { whole: [...targets, paths.at(-1)], landed: paths.slice(0, -1) };
+    }
+    return { whole: [...targets, ...rest], landed: [] };
+  };
+  /**
+   * Whether a source a copy is given can land as a file that runs under a
+   * program's name: by its last segment as spelled (cp tools/git ~/bin/),
+   * or, when that is a glob, by a file the glob matches on disk. A glob
+   * whose folder cannot be listed counts when the pattern matches the name.
+   */
+  const landsAs = (tok, stem) => spellings(tok).some((one) => expandBraces(one).split(/\s+/).some((spelled) => {
+    const last = spelled.replace(/\\/g, "/").split("/").pop().toLowerCase();
+    if (!/[*?[]/.test(last)) return programStem(last) === stem;
+    const names = matched?.(spelled) ?? null;
+    if (names === null) return PROGRAM_EXTENSIONS.some((ending) => Boolean(globRegex(last)?.test(`${stem}${ending}`)));
+    return names.some((file) => programStem(file.toLowerCase()) === stem);
+  }));
   /**
    * Whether the command can have put something else in the place of a
    * program a stage runs: a file under its name, a hook or a
@@ -2761,12 +2822,17 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
     }
     for (const other of all) {
       if (other === s || kind(other).quiet) continue;
-      if (other.slice(1).some((tok) => spellings(tok).some((one) => stems.some((stem) => holdsProgram(one, stem))))) return true;
+      const { whole, landed } = writePlaces(other);
+      if (whole.some((tok) => spellings(tok).some((one) => stems.some((stem) => holdsProgram(one, stem))))) return true;
+      if (landed.some((tok) => stems.some((stem) => landsAs(tok, stem)))) return true;
     }
     for (const arg of plain.opens) {
       const from = holder(arg.start);
       if (!from || from === s || kind(from).quiet) continue;
-      if (stems.some((stem) => PROGRAM_EXTENSIONS.some((ending) => expandsTo(arg, `${stem}${ending}`)))) return true;
+      const { whole, landed } = writePlaces(from);
+      if (whole.some((tok) => tok.start === arg.start) &&
+        stems.some((stem) => PROGRAM_EXTENSIONS.some((ending) => expandsTo(arg, `${stem}${ending}`)))) return true;
+      if (landed.some((tok) => tok.start === arg.start) && stems.some((stem) => landsAs(arg, stem))) return true;
       // A word the reader cannot spell out can be the program's file,
       // unless its stage writes no file (git add) or what it says is
       // known and is not the program's name (cost (b)).
@@ -2947,7 +3013,34 @@ function guardedNameIn(texts, dialect, cwd, root, watches = () => false) {
     // `cd src &&` the word is src/security (re-probe 6, G6). A base the
     // in-order reading never visits (a chdir() in inline code) counts for
     // every word.
-    const { text: left, unplaced } = bareWordText(text, dialect, plainSink, outside, hooksFolder);
+    // The files a copy's source glob matches now, from every folder the
+    // command can be in (the cost ruling on H6): `cp src/* dist/` lands
+    // no file named git unless src holds one. Null, which counts as any
+    // name, when the folder is not spelled out, cannot be read, or holds
+    // more files than a copy is judged by.
+    const matched = (spelled) => {
+      const word = drivePath(spelled.replace(/^~(?=$|\/)/, os.homedir())).replace(/\\/g, "/");
+      const cut = word.lastIndexOf("/");
+      const folder = cut < 0 ? "." : word.slice(0, cut) || "/";
+      const re = globRegex(word.slice(cut + 1).toLowerCase());
+      if (!certain || !re || /[$\x60*?[\]{}]/.test(folder)) return null;
+      const names = [];
+      for (const base of bases) {
+        const dir = path.resolve(base, folder);
+        if (!statSync(dir, { throwIfNoEntry: false })?.isDirectory()) continue;
+        let entries;
+        try {
+          entries = readdirSync(dir);
+        } catch (err) {
+          process.stderr.write(`${TAG} could not list ${dir} (${err?.message ?? "unknown"}); what a copy takes from it is not known.\n`);
+          return null;
+        }
+        if (entries.length > MAX_TREE_FILES) return null;
+        names.push(...entries.filter((entry) => re.test(entry.toLowerCase())));
+      }
+      return names;
+    };
+    const { text: left, unplaced } = bareWordText(text, dialect, plainSink, outside, hooksFolder, matched);
     // In a stage whose program the command can have replaced, the word
     // counts wherever the shell is: that program need not resolve it
     // from the shell's folder (J1).
