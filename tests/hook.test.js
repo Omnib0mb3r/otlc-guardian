@@ -7565,6 +7565,38 @@ describe("PreToolUse hook - a package manager's config with an option before the
   }
 });
 
+describe("PreToolUse hook - a package manager's config write behind any option (re-probe 11, M2 and Lex decision N2)", () => {
+  for (const command of [
+    // M2: an option whose value was not on a list stood where the verb was looked for.
+    "npm config --loglevel silent set script-shell ./e.sh; npm run security",
+    "npm config --registry https://example.test set script-shell ./e.sh; npm run security",
+    "npm config --cache /tmp/c set script-shell ./e.sh && npm test -- security",
+    "pnpm config --dir . set script-shell ./e.sh; pnpm run security",
+    "npm c --loglevel silent delete script-shell; npm run security",
+    "npm config --editor vi edit; npm run security",
+    "npm config --loglevel warn fix; npm run security",
+    "yarn config --cwd . set scriptShell ./e.sh && yarn security",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // get and list only read, whatever options come first.
+    "npm config --loglevel silent get registry && npm test -- security",
+    "npm config --registry https://example.test list; npm run security",
+    "pnpm config --dir . get store-dir && pnpm test -- security",
+    "npm config get script-shell --loglevel silent; npm run security",
+    "npm config ls -l && npm run security",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
 describe("PreToolUse hook - git tag and git stash list after a commit are harmless (re-probe 9, K7)", () => {
   for (const command of [
     'echo "- security fix" >> CHANGELOG.md && git add CHANGELOG.md && git commit -m "chore: changelog" && git tag v1.2.3 && git push --tags',

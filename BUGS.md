@@ -2087,6 +2087,14 @@ Tests: `tests/hook.test.js`, "a package manager's config with an option before t
 
 Smoke test after applying: at the root of a scratch project ask Claude to run `npm config --location=project set script-shell=./e.sh; npm run security`; see a Guardian prompt naming security; decline.
 
+**Re-probe 11, M2 and Lex decision N2 (2026-11-12): a config write behind any option. Fixed in staging, not yet live.** `npm config --loglevel silent set script-shell ./e.sh; npm run security`, and the same with `--registry URL`, `--cache DIR` and pnpm's `--dir .`, were silent at ba7c5b4: `configVerb()` skipped the next word only for the seven options on `PACKAGE_CONFIG_VALUE_OPTIONS`, so the value of any other option was taken as the verb. Lex's decision N2: `npm|pnpm|yarn config` counts as runner config when any word after `config` is a writing verb, whatever options come before it; `get` and `list` stay silent; no option list to maintain. Change in `staging/hooks/injection-guard-hook.mjs`: `configVerb()` and `PACKAGE_CONFIG_VALUE_OPTIONS` are removed; the new `configWrites()` is true when any word after `config` or `c` is on `PACKAGE_CONFIG_WRITES` (`set`, `delete`, `rm`, `unset`, `edit`, `fix`: Lex's four plus the two aliases K6 already read).
+
+Tests: `tests/hook.test.js`, "a package manager's config write behind any option (re-probe 11, M2 and Lex decision N2)": 8 ask (npm with `--loglevel`, `--registry`, `--cache`, `c ... delete`, `--editor vi edit`, `fix`; pnpm `--dir`; yarn `--cwd`), 5 silent in bypass mode (`get`, `list` and `ls` behind and before options). Against the hook at 29b2dd4 all 8 asks were silent. Staged hook suite before: 2947 passed. After: 2960 passed, 0 failed. Verdict diff, 29b2dd4's staged hook against this one: of the 2,614 commands in every re-probe list and re-probe 11's own lists, the 719 that name npm, pnpm or yarn, plus the everyday lists and w-lists in full, were run; 4 changed, all silent to ask and all M2 forms; no everyday command changed. The full diff is re-probe 12's (Lex).
+
+Cost: a config command that only reads asks when one of its values is spelled like a writing verb (`npm config get set`), with a script run of a guarded name in the same command.
+
+Smoke test after applying: at the root of a scratch project ask Claude to run `npm config --loglevel silent set script-shell ./e.sh; npm run security`; see a Guardian prompt naming security; decline.
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

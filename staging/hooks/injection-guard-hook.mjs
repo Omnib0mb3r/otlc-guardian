@@ -1859,24 +1859,18 @@ function shellWords(text, dialect, depth = 0) {
 const PACKAGE_MANAGERS  = new Set(["npm", "pnpm", "yarn", "bun"]);
 // The config subcommands that write a package manager's settings file (re-probe 9, K6).
 const PACKAGE_CONFIG_WRITES = new Set(["set", "delete", "rm", "unset", "edit", "fix"]);
-// Options of npm, pnpm and yarn config that take the next word as their
-// value when no "=" joins them (re-probe 10, L2): which file is meant
-// (--location project, -L user), not what is done to it.
-const PACKAGE_CONFIG_VALUE_OPTIONS = new Set(["--location", "-L", "--userconfig", "--globalconfig", "--workspace", "-w", "--prefix"]);
 /**
- * The verb of a package manager's config command: the first word after
- * `config` or `c` that is neither an option nor an option's value, so
- * `npm config --location=project set ...` and `npm config -L user set
- * ...` are read as the `set` they are (re-probe 10, L2).
+ * Whether the words after a package manager's `config` or `c` make it
+ * a write: any of them is a writing verb, whatever options and option
+ * values come before it (`npm config --location=project set`, `npm
+ * config --loglevel silent set`). The verb is not looked for in one
+ * place, since which options take a value is not a list anyone can
+ * keep whole (re-probe 10, L2; re-probe 11, M2 and Lex decision N2).
+ * `get` and `list` have no such word unless a value is spelled like one.
  * @param {{ word: string }[]} tokens - the words after `config`
  */
-function configVerb(tokens) {
-  for (let k = 0; k < tokens.length; k++) {
-    const word = tokens[k].word;
-    if (!word.startsWith("-")) return word;
-    if (PACKAGE_CONFIG_VALUE_OPTIONS.has(word)) k++;
-  }
-  return undefined;
+function configWrites(tokens) {
+  return tokens.some((tok) => PACKAGE_CONFIG_WRITES.has(tok.word));
 }
 const PACKAGE_RUNNERS   = new Set(["npx", "pnpx", "bunx"]);
 const TEST_SCRIPT       = /^(?:t|test)$/;
@@ -3110,12 +3104,12 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
    * package.json without naming it, and `npm config set` (`npm set`,
    * `npm c set`, and pnpm's and yarn's config set and delete), which
    * write .npmrc or .yarnrc and can name the shell scripts run in
-   * (re-probe 9, K6), with options before the verb too (L2).
+   * (re-probe 9, K6), with any options before the verb too (L2, N2).
    */
   const configWritten = (s) => all.some((other) => {
     if (other === s || quiet(other)) return false;
     if (PACKAGE_MANAGERS.has(commandName(other[0].word)) && other.some((tok, k) => tok.word === "pkg" || tok.word === "set-script" ||
-      (k === 1 && tok.word === "set") || ((tok.word === "config" || tok.word === "c") && PACKAGE_CONFIG_WRITES.has(configVerb(other.slice(k + 1)))))) return true;
+      (k === 1 && tok.word === "set") || ((tok.word === "config" || tok.word === "c") && configWrites(other.slice(k + 1))))) return true;
     const { whole, landed } = writePlaces(other);
     return whole.some(namesConfig) || landed.some((tok) => landsUnder(tok, (name) => RUNNER_CONFIG.test(name), configGlob));
   });

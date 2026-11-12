@@ -37,7 +37,7 @@ and on 2026-11-12 for the ninth (Lex's decisions K1 to K7).
 
 | Staged file | Live file | Size of the change |
 |---|---|---|
-| `staging/hooks/injection-guard-hook.mjs` | `.claude/hooks/injection-guard-hook.mjs` | 5,469 lines added, 272 removed |
+| `staging/hooks/injection-guard-hook.mjs` | `.claude/hooks/injection-guard-hook.mjs` | 5,463 lines added, 272 removed |
 | `staging/hooks/web-content-guard.mjs` | `.claude/hooks/web-content-guard.mjs` | 26 added, 21 removed |
 | `staging/security/01-injection-guard.js` | `security/01-injection-guard.js` | 433 added, 60 removed |
 | (edit) | `.claude/settings.json` (this repo only) | both hook commands anchored, web guard matcher widened |
@@ -170,6 +170,7 @@ one of the cost rulings of re-probe 7 ((a), (b) and (c)) and re-probe 8.
 | BUG-080 (K3) | b58001b | hook | a hook written after a `cd` into `.git`, `.husky` or `.githooks` is seen |
 | BUG-066 (L1) | b171173 | hook | a folder an archive extractor fills is unread content: a copy out of it into a watched path, and an unpack straight into one, ask; `7z x` and `7z e` are read |
 | BUG-080 (L2) | ba7c5b4 | hook | `npm`, `pnpm` and `yarn` `config` with an option before the verb (`--location`, `-L`, `-g`, `-H`) is runner configuration |
+| BUG-066 (N1) | 29b2dd4 | hook | a glob copy or move out of a folder the command unpacks, clones or downloads into, or that is not on disk, lands on the target folder itself: the project root and a watched folder ask; cmd `copy` and `move` wildcards are read |
 
 Documented, not fixed: an obfuscated payload moved out of a code fence
 (BUG-042, S7, f5ecc42), `xargs cp` fed its file names on stdin (S5), a
@@ -502,7 +503,10 @@ Behavior a user will notice after the apply:
   `npm config set script-shell ./e.sh; npm run security` asks, and
   so do the forms with an option before the verb (L2):
   `npm config --location=project set script-shell=./e.sh; npm run security`,
-  `npm config -L user set ...` and `pnpm config -g set ...`;
+  `npm config -L user set ...` and `pnpm config -g set ...`, and
+  with any other option and its value there (N2):
+  `npm config --loglevel silent set script-shell ./e.sh; npm run security`
+  and `pnpm config --dir . set script-shell ./e.sh; pnpm run security`;
   `npm config get registry && npm test -- security` and
   `npm config --location=project get registry && npm test -- security`
   are silent.
@@ -872,5 +876,6 @@ there, with who ran it and how. Restore any file a test changes with
 | BUG-080 (K4) | At the root of a scratch project in bypass mode, through the PowerShell tool, ask for `Add-Content README.md "## Security"`; no Guardian prompt. Then `Add-Content x.ps1 'Remove-Item -Recurse security'; .\x.ps1`; see it denied. |
 | BUG-080 (K6) | In a scratch `guardian init` project ask Claude to run `` rm -rf secu`:`rity ``; see a Guardian prompt naming security; decline. In bypass mode `tar czf backup-$(date +%F).tgz src` and `npm config get registry && npm test -- security` get no Guardian prompt. |
 | BUG-080 (L2) | At the root of a scratch project ask Claude to run `npm config --location=project set script-shell=./e.sh; npm run security`; see a Guardian prompt naming security; decline. In bypass mode `npm config --location=project get registry && npm test -- security` gets no Guardian prompt. |
+| BUG-080 (N2) | At the root of a scratch project ask Claude to run `npm config --loglevel silent set script-shell ./e.sh; npm run security`; see a Guardian prompt naming security; decline. In bypass mode `npm config --loglevel silent get registry && npm test -- security` gets no Guardian prompt. |
 | BUG-080 (K7) | In bypass mode, in a scratch git repository, ask Claude to run `echo "- note" >> CHANGELOG.md && git add CHANGELOG.md && git commit -m "chore: security changelog" && git tag v0.0.1`; no Guardian prompt. |
 | BUG-080 (K3) | In a scratch git repository with Guardian installed ask Claude to run `cd .git/hooks && cp ../../g.sh commit-msg && cd ../.. && git commit -m security`; see a Guardian prompt naming security; decline. In bypass mode `cd src && echo '## Security' >> notes.md && cd .. && git add -A && git commit -m docs` gets no Guardian prompt. |
