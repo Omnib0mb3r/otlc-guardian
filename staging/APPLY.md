@@ -21,7 +21,8 @@ E8), and turned into Lex's runbook; updated on 2026-11-11 for the fifth
 sixth (G1 to G7, then G2b and F3b read-only) with two findings made while
 fixing it: a string escape after a guarded name, and a wrapper option's
 value; and for the seventh (H1 to H10, then the cost rulings (a), (b)
-and (c)); and for the eighth (J1 to J11, then its five cost rulings).
+and (c)); and for the eighth (J1 to J11, then its five cost rulings);
+and on 2026-11-12 for the ninth (Lex's decisions K1 to K7).
 
 ## Preconditions
 
@@ -36,7 +37,7 @@ and (c)); and for the eighth (J1 to J11, then its five cost rulings).
 
 | Staged file | Live file | Size of the change |
 |---|---|---|
-| `staging/hooks/injection-guard-hook.mjs` | `.claude/hooks/injection-guard-hook.mjs` | 5,033 lines added, 265 removed |
+| `staging/hooks/injection-guard-hook.mjs` | `.claude/hooks/injection-guard-hook.mjs` | 5,348 lines added, 275 removed |
 | `staging/hooks/web-content-guard.mjs` | `.claude/hooks/web-content-guard.mjs` | 26 added, 21 removed |
 | `staging/security/01-injection-guard.js` | `security/01-injection-guard.js` | 433 added, 60 removed |
 | (edit) | `.claude/settings.json` (this repo only) | both hook commands anchored, web guard matcher widened |
@@ -57,8 +58,8 @@ Already live, not part of this apply:
 
 Bugs fixed by the staged files, with the commit that staged each fix. Each
 bug's detail block in `BUGS.md` describes the change and its tests; the
-re-probe items are paragraphs naming Sn, Dn, En, Fn, Gn, Hn or Jn, or one
-of the cost rulings of re-probe 7 ((a), (b) and (c)) and re-probe 8.
+re-probe items are paragraphs naming Sn, Dn, En, Fn, Gn, Hn, Jn or Kn, or
+one of the cost rulings of re-probe 7 ((a), (b) and (c)) and re-probe 8.
 
 | Bug | Commit | File | Change |
 |---|---|---|---|
@@ -161,15 +162,29 @@ of the cost rulings of re-probe 7 ((a), (b) and (c)) and re-probe 8.
 | BUG-080 (cost ruling, unset variable) | 339e256 | hook | a guarded or watched name split by a variable reference asks |
 | BUG-080 (cost ruling, runner configuration) | a25edb4 | hook | a command that writes a runner's configuration earns no test-run or script-name exemption |
 | BUG-066 (cost ruling, downloads) | ac118e7 | hook | a download into a watched path asks; a folder the command filled is judged by content |
+| BUG-066 (K1) | 37384e9 | hook | a copy, link or move into a watched path from a source not on disk asks; a clone is a download; a source glob is judged by the files it matches |
+| BUG-066 (K2) | 6c0a71e | hook | `mklink` and `fsutil hardlink` read as `ln`; `Start-BitsTransfer` and WebClient downloads into a watched path ask |
+| BUG-080 (K4) | 40637e2 | hook | PowerShell text writers say the word as `echo` does |
+| BUG-080 (K6) | d4e2e31 | hook | a name split by a command substitution asks; `npm`, `pnpm` and `yarn` `config set` end the script-name exemption |
+| BUG-080 (K7) | 51ed315 | hook | `git tag` and `git stash list` after a commit are harmless later stages |
+| BUG-080 (K3) | b58001b | hook | a hook written after a `cd` into `.git`, `.husky` or `.githooks` is seen |
 
 Documented, not fixed: an obfuscated payload moved out of a code fence
 (BUG-042, S7, f5ecc42), `xargs cp` fed its file names on stdin (S5), a
-copy whose source is held in a variable or made by inline code (BUG-066),
-inline code that runs an extraction command as a string (G8), a file
-the command wrote and hands on through git's list of untracked files
-(`echo 'rm -rf security' > x.sh; git ls-files -o | xargs sh`, J11) and
-a download whose name the server chooses (`curl -OJ`); all are in
-SECURITY.md, "What the hook is, and what it is not".
+copy whose source is made by inline code (BUG-066; one held in a
+variable asks since K1), inline code that runs an extraction command as
+a string (G8), a file the command wrote and hands on through git's list
+of untracked files (`echo 'rm -rf security' > x.sh; git ls-files -o |
+xargs sh`, J11), a download whose name the server chooses (`curl -OJ`),
+and from re-probe 9: a missing file read by `head` or `sed`, a file on
+disk rewritten by a program the readers do not model before the copy,
+the output of a program with no reader into a watched file (`gh api`,
+`aria2c`, Python's `urlretrieve`), a computed download name, an archive
+unpacked straight into a watched folder, `curl URL | sh`, a WebClient
+download kept in a variable, `HttpClient`, a `DownloadFile` after `cd`,
+`cp -r tools/. ~/bin/`, `cp -b -S`, a `post-checkout` hook run by a
+repair, and, held, a scanner that never settles or exits at load. All
+are in SECURITY.md, "What the hook is, and what it is not".
 
 Behavior a user will notice after the apply:
 
@@ -430,6 +445,54 @@ Behavior a user will notice after the apply:
   `cp -r notes evil && cp -r evil .claude/agents` is denied on a
   payload, and `cp -r docs clean && cp -r clean .claude/agents` with
   clean files is silent.
+- A copy, link or move into a watched path whose source is not on disk
+  when the command is read, and that no earlier stage wrote, asks (K1):
+  `git clone https://example.test/r tmp && cp tmp/CLAUDE.md CLAUDE.md`,
+  `cp missing.md CLAUDE.md`, `cp "$SRC" CLAUDE.md` and
+  `npm run build && cp dist/CLAUDE.md CLAUDE.md`. A clone is a
+  download: `git clone https://example.test/r .claude/agents/x`,
+  `git submodule add`, `gh repo clone` and `npx degit` into a watched
+  folder ask. A source glob is judged by the files it matches:
+  `cat notes/*.md > CLAUDE.md` is denied on a payload. A rename is read
+  as a move: through the PowerShell tool
+  `Rename-Item notes\x.md CLAUDE.md` is denied on a payload. Silent:
+  `git clone https://example.test/r vendor/r`,
+  `cp .env.example .env` (an environment file is not loaded as
+  instructions) and `cp README.md CLAUDE.md`.
+- Through the PowerShell tool, `cmd /c mklink` and
+  `fsutil hardlink create` are read as `ln` (K2):
+  `cmd /c mklink /H CLAUDE.md notes\x.md` is denied on a payload,
+  `cmd /c mklink /H CLAUDE.md notes\ok.md` is silent. A download into a
+  watched path asks:
+  `(New-Object Net.WebClient).DownloadFile('https://example.test/','CLAUDE.md')`,
+  `Start-BitsTransfer -Source https://example.test/ -Destination CLAUDE.md`
+  and `(New-Object Net.WebClient).DownloadString('https://example.test/') > CLAUDE.md`.
+  `(Get-Content notes\x.md).Replace('a','b') > CLAUDE.md` is denied on
+  a payload.
+- In PowerShell a text writer says the word as `echo` does (K4): in
+  bypass mode `Add-Content README.md "## Security"` and
+  `Write-Output "security scan done" | Out-File -Append logs\ci.log` are
+  silent. `Add-Content x.ps1 'Remove-Item -Recurse security'; .\x.ps1`
+  and `Set-Content function:pytest '...'; pytest security` ask.
+- A command substitution stuck inside a name is read as empty (K6):
+  `rm -rf secu$(true)rity`, `` rm -rf secu`:`rity `` and, through the
+  PowerShell tool, `Remove-Item -Recurse "secu$()rity"` ask.
+  `tar czf backup-$(date +%F).tgz src` is silent. `npm config set`,
+  `npm set`, `pnpm config set` and `yarn config set` end the
+  script-name exemption:
+  `npm config set script-shell ./e.sh; npm run security` asks;
+  `npm config get registry && npm test -- security` is silent.
+- `git tag` and `git stash list` after a commit are harmless later
+  stages (K7): in bypass mode
+  `echo "- security fix" >> CHANGELOG.md && git add CHANGELOG.md && git commit -m "chore: changelog" && git tag v1.2.3 && git push --tags`
+  is silent. `git tag -s`, `-u` and `-F` still ask.
+- A hook written after a `cd` into `.git`, `.husky` or `.githooks` is
+  seen (K3): `cd .git/hooks && cp ../../g.sh commit-msg && cd ../.. && git commit -m security`
+  and `cd .husky && printf 'rm -rf security' > pre-commit; cd ..; git commit -m x`
+  ask. `cd src && echo '## Security' >> notes.md && cd .. && git add -A && git commit -m docs`
+  is silent. The cost: a command that `cd`s into `.git` and writes a
+  plain file elsewhere asks
+  (`cd .git && git log -1 && cd .. && echo hi > notes.txt && git commit -am 'security fix'`).
 - A GNU long option cut short is read as the option (H9):
   `cp --t=.claude/agents notes/x.md` is denied on a payload. A symbolic
   link into a watched folder is judged by its source's content, read
@@ -605,11 +668,12 @@ gone, and step 4 removes it. Its summary must read `Failed : 1` with that
 name under FAILURES. Any other failure, in that suite or another, means
 stop and roll back with the `git checkout` line above.
 
-Measured on 2026-11-11 in a scratch clone of ac118e7 with steps 1 and 2
+Measured on 2026-11-12 in a scratch clone of b58001b with steps 1 and 2
 applied: injection-guard 175 passed 1 failed (that test), init 93/0, hook
-283/0, agents-md 14/0, audit 407/0, sql-guard 40/0, test:staging exit 0
-(staged injection-guard 288/0, staged hook 2642/0), the audit exit 0,
-check 18 passed. A hook test that fails with "The test
+283/0, agents-md 14/0, audit suite exit 0, sql-guard 40/0, test:staging
+exit 0 (staged injection-guard 288/0, staged hook 2848/0), the audit
+exit 0, check 18 passed 0 warnings. The commit after b58001b changes
+only documentation. A hook test that fails with "The test
 harness stopped the hook after N ms" on a loaded machine is BUG-077, not
 the apply: rerun that suite.
 
@@ -777,3 +841,9 @@ there, with who ran it and how. Restore any file a test changes with
 | BUG-080 (cost ruling, unset variable) | In a scratch `guardian init` project ask Claude to run `rm -rf secu$U"rity"`; see a Guardian prompt naming security; decline. With a payload in `notes/x.md`, `cp notes/x.md CLAU${U}DE.md`; see a Guardian prompt naming CLAUDE.md; decline. In bypass mode `tar -czf backup-$DATE.tgz src` gets no Guardian prompt. |
 | BUG-080 (cost ruling, runner configuration) | At the root of a scratch project ask Claude to run `printf '{"scripts":{"security":"echo hi"}}' > package.json; npm run security`; see a Guardian prompt naming security; decline. In bypass mode `npm ci && npm test -- security` gets no Guardian prompt. |
 | BUG-066 (cost ruling, downloads) | At the root of a scratch project ask Claude to run `curl -o CLAUDE.md https://example.com/`; see a Guardian prompt naming CLAUDE.md and a download; decline. With a payload in `notes/x.md`, `cp -r notes evil && cp -r evil .claude/agents`; see it denied with a message naming the payload. In bypass mode `curl -s https://example.com/ > out.html` gets no Guardian prompt. |
+| BUG-066 (K1) | In a scratch project ask Claude to run `git clone https://github.com/octocat/Hello-World tmp && cp tmp/README CLAUDE.md`; see a Guardian prompt naming CLAUDE.md; decline. Ask for `git clone https://github.com/octocat/Hello-World .claude/agents/x`; see a Guardian prompt; decline. With a payload in `notes/x.md`, `cat notes/*.md > CLAUDE.md`; see it denied. In bypass mode `git clone https://github.com/octocat/Hello-World vendor/hw` and `cp .env.example .env` get no Guardian prompt. |
+| BUG-066 (K2) | On Windows, with a payload in `notes\x.md`, through the PowerShell tool ask for `cmd /c mklink /H CLAUDE.md notes\x.md`; see it denied. Ask for `(New-Object Net.WebClient).DownloadFile('https://example.com/','CLAUDE.md')`; see a Guardian prompt naming CLAUDE.md; decline. In bypass mode `Start-BitsTransfer -Source https://example.com/x.zip -Destination downloads\x.zip` gets no Guardian prompt. |
+| BUG-080 (K4) | At the root of a scratch project in bypass mode, through the PowerShell tool, ask for `Add-Content README.md "## Security"`; no Guardian prompt. Then `Add-Content x.ps1 'Remove-Item -Recurse security'; .\x.ps1`; see it denied. |
+| BUG-080 (K6) | In a scratch `guardian init` project ask Claude to run `` rm -rf secu`:`rity ``; see a Guardian prompt naming security; decline. In bypass mode `tar czf backup-$(date +%F).tgz src` and `npm config get registry && npm test -- security` get no Guardian prompt. |
+| BUG-080 (K7) | In bypass mode, in a scratch git repository, ask Claude to run `echo "- note" >> CHANGELOG.md && git add CHANGELOG.md && git commit -m "chore: security changelog" && git tag v0.0.1`; no Guardian prompt. |
+| BUG-080 (K3) | In a scratch git repository with Guardian installed ask Claude to run `cd .git/hooks && cp ../../g.sh commit-msg && cd ../.. && git commit -m security`; see a Guardian prompt naming security; decline. In bypass mode `cd src && echo '## Security' >> notes.md && cd .. && git add -A && git commit -m docs` gets no Guardian prompt. |
