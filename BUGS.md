@@ -1327,6 +1327,16 @@ Tests: `tests/hook.test.js`, "a path stuck to an option that names no write targ
 
 Smoke test after applying: at the root of a scratch project, in bypass mode, ask Claude to run `gcc -I.. -c a.c`: no Guardian prompt (the compile may fail; that is not the test). Then `npx cpx 'src/**' -t..`: a Guardian prompt naming a folder above this project; decline.
 
+**Cost (a), second ruling (re-probe 8, Costs), Lex's decision of 2026-11-11: `P` and `B` join the stuck-path letters. Fixed in staging, not yet live.** Cost (a) reads a path stuck to `-t`, `-o` or `-d` as a folder the command writes to. The re-probe measured two more letters that name one: `wget -P.. URL` and `cmake -S. -B..` write above the project and were silent at 5c88116. They asked only with the folder as a word of its own (`wget -P .. URL`, `cmake -B ..`).
+
+Change in `staging/hooks/injection-guard-hook.mjs`: `STUCK_PATH_OPTION` is `-t`, `-o`, `-d`, `-P` or `-B`, then `.`, `..`, a slash or `~`.
+
+Cost: none measured. `wget -Pdownloads URL`, `cmake -S. -Bbuild`, `cmake -S. -B./build`, `cmake -S.. -B.` (the source folder is read), `make -B` and `grep -P 'a..b' src/a.js` stay silent. A program that takes `-P` or `-B` with a folder above the project it only reads would ask (`gcc -B..`, which names where the compiler's own programs are); none is in the everyday lists.
+
+Tests: `tests/hook.test.js`, "a folder above the project stuck to -P or -B (re-probe 8, cost (a))": 10 ask, 7 silent. Against the hook at 5c88116, 10 failed. Staged hook suite before: 2517 passed, 10 failed. After: 2527 passed, 0 failed. Re-probe 7's 640 commands and re-probe 8's 851: 0 verdicts changed. Everyday commands: 0 changed in the 75 and in the 197. Lex's regress harness: no line changed.
+
+Smoke test after applying: at the root of a scratch project ask Claude to run `wget -P.. https://example.test/a.tgz`; see a Guardian prompt naming a folder above this project; decline. In bypass mode `cmake -S. -Bbuild` gets no Guardian prompt (cmake itself may fail).
+
 ### BUG-075: Shell forms the readers do not parse change Guardian's files silently
 
 **Status:** IN-PROGRESS · **Found:** 2026-11-10

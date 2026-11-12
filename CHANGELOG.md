@@ -233,6 +233,11 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A folder above the project stuck to `-P` or `-B` asks (BUG-074,
+  re-probe 8 cost (a)).** `wget -P.. URL` and `cmake -S. -B..` write
+  above the project and were silent. `-P` and `-B` are now read as
+  `-t`, `-o` and `-d` are. `cmake -S. -Bbuild` stays silent.
+
 - **A program's name counts as planted only where something is
   written (BUG-080, re-probe 8 cost ruling on H6).** `python manage.py
   migrate && python manage.py test security`, `git checkout -b fix/npm

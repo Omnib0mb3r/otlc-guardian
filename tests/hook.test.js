@@ -6798,6 +6798,48 @@ describe("PreToolUse hook - a program's name counts as planted only where someth
 });
 
 // ---------------------------------------------------------------------------
+// RE-PROBE 8, COST (a) (staged): -P (wget's folder) and -B (cmake's build
+// folder) name where a program writes, as -t, -o and -d do. With a path
+// stuck to them that reaches above the project the command asks.
+
+describe("PreToolUse hook - a folder above the project stuck to -P or -B (re-probe 8, cost (a))", () => {
+  for (const command of [
+    "wget -P.. https://example.test/a.tgz",
+    "wget -P../ https://example.test/a.tgz",
+    "wget -P../.. https://example.test/a.tgz",
+    "wget -P~ https://example.test/a.tgz",
+    "cmake -S. -B..",
+    "cmake -S. -B../",
+    "cmake -S src -B..",
+    "cmake -B.. -S.",
+    "npx some-tool -P..",
+    "npx some-tool -B../..",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // A folder inside the project.
+    "wget -Pdownloads https://example.test/a.tgz",
+    "wget -P./downloads https://example.test/a.tgz",
+    "cmake -S. -Bbuild",
+    "cmake -S. -B./build",
+    // The source folder is read.
+    "cmake -S.. -B.",
+    // The letters as flags.
+    "make -B",
+    "grep -P 'a..b' src/a.js",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 
