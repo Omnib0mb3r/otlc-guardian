@@ -2039,6 +2039,14 @@ Tests: `tests/hook.test.js`, "a name split by a command substitution, and a pack
 
 Smoke test after applying: at the root of a scratch project ask Claude to run `` rm -rf secu`:`rity ``; see a Guardian prompt naming security; decline. In bypass mode `tar czf backup-$(date +%F).tgz src` and `npm config get registry && npm test -- security` get no Guardian prompt.
 
+**Re-probe 9, Costs item 4, Lex's decision K7 (2026-11-12): git tag and git stash list after a commit are harmless later stages. Fixed in staging, not yet live.** J11 made a file in git's store count as named again unless every later stage only reads, adds, commits or pushes, so the release line `echo "- security fix" >> CHANGELOG.md && git add CHANGELOG.md && git commit -m "chore: changelog" && git tag v1.2.3 && git push --tags` was denied in bypass mode. Lex took the re-probe's option.
+
+Change in `staging/hooks/injection-guard-hook.mjs`, `bareWordText()`: `keptOnly()` also passes `gitTags()`, a `git tag` with every word spelled out and only options that sign nothing and read no file (`GIT_TAG_FLAGS`: `-a`, `-f`, `-d`, `-l`, alone or in a cluster, `-m` and `--message` with their value), and `gitStashList()`, `git stash list` with nothing after it. `-s` and `-u` run gpg, `-F` takes the message from a file, `--cleanup` and any other option are not on the list, and `git stash list -p` prints the stored content: each still asks.
+
+Tests: `tests/hook.test.js`, "git tag and git stash list after a commit are harmless (re-probe 9, K7)": 5 silent in bypass mode, all failing at d4e2e31, and 7 that keep asking. One test moved, none removed: J11's cost ask `echo "## Security" >> README.md && git add README.md && git commit -m docs && git tag v1` is silent by this ruling and now sits in this group's silent list. Staged hook suite before: 2832 passed, 5 failed. After: 2837 passed, 0 failed. Compared with d4e2e31 in bypass mode over re-probe 9's lists (1575 commands): 4 changed (two commands, each listed twice), the J11 tag costs, deny to silent.
+
+Smoke test after applying: in bypass mode ask Claude to run `echo "- note" >> CHANGELOG.md && git add CHANGELOG.md && git commit -m "chore: security changelog" && git tag v0.0.1`; no Guardian prompt.
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

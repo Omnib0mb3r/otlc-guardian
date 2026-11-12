@@ -2015,6 +2015,10 @@ function messageSpans(stage) {
 // git takes a long option cut short, so only these, as spelled, pass.
 const GIT_PUSH_FLAGS = new Set(["-u", "--set-upstream", "-f", "--force", "--force-with-lease", "--force-if-includes", "--tags", "--follow-tags",
   "--all", "--atomic", "--prune", "-d", "--delete", "-n", "--dry-run", "-q", "--quiet", "-v", "--verbose", "--progress", "--no-verify"]);
+// The options of git tag that sign nothing and read no file, alone or in
+// a cluster (-a, -f, -d, -l; -m takes the next word), as spelled
+// (re-probe 9, K7).
+const GIT_TAG_FLAGS = /^(?:-(?=[afdlm])[afdl]*m?|--annotate|--force|--delete|--list|--message)$/;
 
 // The folders whose files git runs as hooks, by name, wherever they
 // stand in a path: .git (hooks, config), .husky, and .githooks, the usual
@@ -2910,6 +2914,15 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
   // spelled out, it hands nothing to a program here.
   const gitPushes = (s) => s[0].word === "git" && s[1]?.word === "push" &&
     s.slice(2).every((tok) => !/[$\x60]/.test(singleQuotesOut(text.slice(tok.start, tok.end))) && (!tok.word.startsWith("-") || GIT_PUSH_FLAGS.has(tok.word)));
+  // git tag makes, lists or deletes a ref, and git stash list prints the
+  // stash's names; neither puts a stored file in the working tree or
+  // hands it to a program (re-probe 9, K7). With every word spelled out,
+  // and for git tag only options that sign nothing (-s and -u run gpg) and
+  // take the message from the command, not a file (-F).
+  const gitTags = (s) => s[0].word === "git" && s[1]?.word === "tag" &&
+    s.slice(2).every((tok, k, rest) => !/[$\x60]/.test(singleQuotesOut(text.slice(tok.start, tok.end))) &&
+      (!tok.word.startsWith("-") || GIT_TAG_FLAGS.test(tok.word) || /^-[afdl]*m$|^--message$/.test(rest[k - 1]?.word ?? "") || /^--message=/.test(tok.word)));
+  const gitStashList = (s) => s.length === 3 && s[0].word === "git" && s[1].word === "stash" && s[2].word === "list";
   /**
    * Whether nothing after a stage that puts files in git's store can
    * take them back out (re-probe 8, J11): git's index and history hand a
@@ -2917,10 +2930,10 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
    * l.txt; git diff --cached | xargs rm -rf). Every later stage, and
    * every other one when something runs in the background, moves,
    * assigns, only reads with no redirect to a file, or is git add, git
-   * commit or git push itself.
+   * commit or git push itself, git tag, or git stash list.
    */
   const keptOnly = (s) => all.every((other) => other === s || (!background && other[0].start < s[0].start) ||
-    quiet(other) || gitKeeps(other) || gitPushes(other));
+    quiet(other) || gitKeeps(other) || gitPushes(other) || gitTags(other) || gitStashList(other));
   /**
    * Whether a stage neither runs a file it is given nor hands its
    * content to a program (cost (b)). It stands in a plain statement and

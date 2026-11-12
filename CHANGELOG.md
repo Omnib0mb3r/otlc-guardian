@@ -233,6 +233,13 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **git tag and git stash list after a commit no longer ask (BUG-080,
+  re-probe 9 K7).** `echo "- security fix" >> CHANGELOG.md && git add
+  CHANGELOG.md && git commit -m "..." && git tag v1.2.3 && git push
+  --tags` was denied in bypass mode. A `git tag` that signs nothing and
+  reads no file, and a bare `git stash list`, now count as harmless
+  later stages, as `git push` does.
+
 - **A name split by a command substitution asks, and so does a
   package manager's config set before a run (BUG-080, re-probe 9
   K6).** `rm -rf secu$(true)rity`, `` rm -rf secu`:`rity `` and

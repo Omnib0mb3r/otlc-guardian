@@ -6659,7 +6659,7 @@ describe("PreToolUse hook - git's store names a file again to what comes after (
     // The cost: asking now.
     "echo \"## Security\" >> README.md && git add README.md && git commit -m \"docs: notes\" && npm test",
     "echo \"## Security\" >> README.md && git add CHANGELOG.md && npm test",
-    "echo \"## Security\" >> README.md && git add README.md && git commit -m docs && git tag v1",
+    // `... && git tag v1` was a cost here too; re-probe 9, K7 made it silent (see that group).
   ]) {
     stagedOnly(`asks: ${command}`, () => {
       const out = runGuarded(command);
@@ -7391,6 +7391,38 @@ describe("PreToolUse hook - a name split by a command substitution, and a packag
   ]) {
     stagedOnly(`silent${tool ? ` (${tool})` : ""}: ${command}`, () => {
       expectSilent(runGuarded(command, { mode: "bypassPermissions", tool }));
+    });
+  }
+});
+
+describe("PreToolUse hook - git tag and git stash list after a commit are harmless (re-probe 9, K7)", () => {
+  for (const command of [
+    'echo "- security fix" >> CHANGELOG.md && git add CHANGELOG.md && git commit -m "chore: changelog" && git tag v1.2.3 && git push --tags',
+    'echo "- security fix" >> CHANGELOG.md && git commit -am "chore: changelog" && git tag -a v1.2.3 -m "security release" && git push --tags',
+    'echo "- security fix" >> CHANGELOG.md && git commit -am "chore: changelog" && git tag -am "- security release" v1.2.3',
+    'echo "## Security" >> README.md && git stash && git stash list',
+    // Asked under J11 as a cost; moved here by the ruling.
+    'echo "## Security" >> README.md && git add README.md && git commit -m docs && git tag v1',
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+
+  for (const command of [
+    // A signed tag runs gpg, -F reads a file, a word not spelled out can be anything.
+    'echo "## Security" >> README.md && git add README.md && git commit -m docs && git tag -s v1 -m x',
+    'echo "## Security" >> README.md && git add -A && git commit -m docs && git tag -u key v1',
+    'echo "## Security" >> README.md && git add README.md && git commit -m docs && git tag -F msg.txt v1',
+    'echo "## Security" >> README.md && git add README.md && git commit -m docs && git tag $T',
+    'echo "## Security" >> README.md && git add -A && git commit -m docs && git tag --cleanup=verbatim v1',
+    // What git stored is taken back out.
+    'echo "## Security" >> README.md && git stash && git stash list -p | sh',
+    'echo "## Security" >> README.md && git add -A && git commit -m docs && git tag v1 && git show HEAD:README.md | sh',
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
     });
   }
 });
