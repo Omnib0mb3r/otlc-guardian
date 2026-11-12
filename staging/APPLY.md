@@ -169,6 +169,7 @@ one of the cost rulings of re-probe 7 ((a), (b) and (c)) and re-probe 8.
 | BUG-080 (K7) | 51ed315 | hook | `git tag` and `git stash list` after a commit are harmless later stages |
 | BUG-080 (K3) | b58001b | hook | a hook written after a `cd` into `.git`, `.husky` or `.githooks` is seen |
 | BUG-066 (L1) | b171173 | hook | a folder an archive extractor fills is unread content: a copy out of it into a watched path, and an unpack straight into one, ask; `7z x` and `7z e` are read |
+| BUG-080 (L2) | ba7c5b4 | hook | `npm`, `pnpm` and `yarn` `config` with an option before the verb (`--location`, `-L`, `-g`, `-H`) is runner configuration |
 
 Documented, not fixed: an obfuscated payload moved out of a code fence
 (BUG-042, S7, f5ecc42), `xargs cp` fed its file names on stdin (S5), a
