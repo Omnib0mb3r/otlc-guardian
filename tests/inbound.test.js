@@ -501,6 +501,172 @@ describe("Check 5 - archives", () => {
 });
 
 // ---------------------------------------------------------------------------
+// CHECK 3 - OFFICE
+// ---------------------------------------------------------------------------
+
+const MSI_CLSID = "000c1084-0000-0000-c000-000000000046";
+const REL = fx.REL_TYPES;
+const relationship = (id, type, target, external = true) =>
+  `<Relationship Id="${id}" Type="${REL}/${type}" Target="${target}"${external ? ' TargetMode="External"' : ""}/>`;
+
+describe("Check 3 - Office documents", () => {
+  test("pass: a plain .docx is ooxml-word and passes", () => {
+    const r = judge(fx.docx(), "notes.docx");
+    assert.equal(r.file.detected_type, "ooxml-word");
+    assert.equal(r.checks.office, "pass", JSON.stringify(r.reasons));
+    assert.ok(!r.file.inner, "a document's parts are not archive entries");
+  });
+
+  test("pass: a plain .xlsx with a hyperlink is ooxml-excel and passes", () => {
+    const r = judge(fx.xlsx({ parts: [{ name: "xl/worksheets/_rels/sheet1.xml.rels",
+      data: `<Relationships>${relationship("rId1", "hyperlink", "https://example.com/")}</Relationships>` }] }), "rates.xlsx");
+    assert.equal(r.file.detected_type, "ooxml-excel");
+    assert.equal(r.checks.office, "pass", JSON.stringify(r.reasons));
+  });
+
+  test("fail: a .docm with a VBA project blocks (office-macro), the macro inert", () => {
+    const r = judge(fx.docx({ vba: true }), "report.docm");
+    assert.match(hasReason(r, "office-macro", "block").detail, /vbaProject\.bin/);
+    assert.equal(r.checks.office, "block");
+  });
+
+  test("fail: an .xlsm with a VBA project blocks", () => {
+    hasReason(judge(fx.xlsx({ vba: true }), "rates.xlsm"), "office-macro", "block");
+  });
+
+  test("fail: an Excel 4.0 macro sheet in an .xlsx blocks (office-xlm)", () => {
+    const r = judge(fx.xlsx({ parts: [{ name: "xl/macrosheets/sheet1.xml", data: "<xm:macrosheet/>" }] }), "a.xlsx");
+    hasReason(r, "office-xlm", "block");
+  });
+
+  test("fail: a remote template (attachedTemplate, external) blocks", () => {
+    const r = judge(fx.docx({ settingsRels: relationship("rId1", "attachedTemplate", "https://example.test/t.dotm") }), "a.docx");
+    assert.match(hasReason(r, "office-remote-template", "block").detail, /example\.test/);
+  });
+
+  test("fail: an external oleObject relationship blocks", () => {
+    const r = judge(fx.docx({ rels: relationship("rId9", "oleObject", "mhtml:https://example.test/x!x-usc:https://example.test/x") }), "a.docx");
+    hasReason(r, "office-remote-object", "block");
+  });
+
+  test("fail: a DDEAUTO field split across runs blocks (office-dde)", () => {
+    const body = '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> DDE</w:instrText></w:r>' +
+      '<w:r><w:instrText>AUTO c:\\\\windows\\\\system32\\\\cmd.exe "/k calc"</w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>';
+    hasReason(judge(fx.docx({ body }), "a.docx"), "office-dde", "block");
+  });
+
+  test("fail: a DDE formula in a cell blocks", () => {
+    const sheet = `<sheetData><row r="1"><c r="A1"><f>cmd|' /C calc'!A0</f></c></row></sheetData>`;
+    hasReason(judge(fx.xlsx({ sheet }), "a.xlsx"), "office-dde", "block");
+  });
+
+  test("fail: an external workbook link holds (office-external-link)", () => {
+    const r = judge(fx.xlsx({ parts: [{ name: "xl/externalLinks/externalLink1.xml", data: "<externalLink><externalBook/></externalLink>" }] }), "a.xlsx");
+    hasReason(r, "office-external-link", "hold");
+  });
+
+  test("fail: an INCLUDEPICTURE field fetching a URL holds", () => {
+    const body = '<w:p><w:fldSimple w:instr=" INCLUDEPICTURE &quot;https://example.test/p.png&quot; \\d "/></w:p>';
+    hasReason(judge(fx.docx({ body }), "a.docx"), "office-external-link", "hold");
+  });
+
+  test("fail: an ActiveX control holds (office-activex)", () => {
+    hasReason(judge(fx.docx({ parts: [{ name: "word/activeX/activeX1.xml", data: "<ax:ocx/>" }] }), "a.docx"), "office-activex", "hold");
+  });
+
+  test("fail: an embedded OLE package holding a program holds and the program blocks", () => {
+    const r = judge(fx.docx({ parts: [{ name: "word/embeddings/oleObject1.bin", data: fx.olePackage("invoice.exe", fx.pe()) }] }), "a.docx");
+    hasReason(r, "office-embedded-package", "hold");
+    assert.match(hasReason(r, "executable", "block").detail, /invoice\.exe|pe/);
+    assert.equal(r.verdict, "block");
+  });
+
+  test("pass: an embedded .xlsx in a .docx is read and passes", () => {
+    const r = judge(fx.docx({ parts: [{ name: "word/embeddings/Microsoft_Excel_Worksheet.xlsx", data: fx.xlsx() }] }), "a.docx");
+    assert.equal(r.checks.office, "pass", JSON.stringify(r.reasons));
+  });
+
+  test("fail: a macro in an .xlsm embedded in a .docx blocks", () => {
+    const r = judge(fx.docx({ parts: [{ name: "word/embeddings/x.xlsm", data: fx.xlsx({ vba: true }) }] }), "a.docx");
+    hasReason(r, "office-macro", "block");
+  });
+
+  test("pass: a legacy .doc with no macros is cfb-word and passes", () => {
+    const r = judge(fx.cfb([{ name: "WordDocument", data: fx.wordDocumentStream() }, { name: "1Table", data: Buffer.alloc(5000) }]), "old.doc");
+    assert.equal(r.file.detected_type, "cfb-word");
+    assert.equal(r.checks.office, "pass", JSON.stringify(r.reasons));
+  });
+
+  test("fail: a legacy .doc with a Macros storage blocks", () => {
+    const r = judge(fx.cfb([{ name: "WordDocument", data: fx.wordDocumentStream() },
+      { name: "Macros", children: [{ name: "VBA", children: [{ name: "dir", data: Buffer.alloc(8) }] }] }]), "old.doc");
+    hasReason(r, "office-macro", "block");
+  });
+
+  test("fail: a legacy .xls with an Excel 4.0 macro sheet blocks (BOUNDSHEET type 1)", () => {
+    const wb = fx.biffWorkbook({ sheets: [{ name: "Sheet1", type: 0 }, { name: "Macro1", type: 1 }] });
+    const r = judge(fx.cfb([{ name: "Workbook", data: wb }]), "old.xls");
+    assert.equal(r.file.detected_type, "cfb-excel");
+    assert.match(hasReason(r, "office-xlm", "block").detail, /Macro1/);
+  });
+
+  test("pass: a legacy .xls with plain sheets passes", () => {
+    const r = judge(fx.cfb([{ name: "Workbook", data: fx.biffWorkbook() }]), "old.xls");
+    assert.equal(r.checks.office, "pass", JSON.stringify(r.reasons));
+  });
+
+  test("fail: an encrypted .xls (FILEPASS) holds as encrypted", () => {
+    hasReason(judge(fx.cfb([{ name: "Workbook", data: fx.biffWorkbook({ encrypted: true }) }]), "old.xls"), "encrypted", "hold");
+  });
+
+  test("fail: an encrypted .doc (FIB flag) holds as encrypted", () => {
+    hasReason(judge(fx.cfb([{ name: "WordDocument", data: fx.wordDocumentStream({ encrypted: true }) }]), "old.doc"), "encrypted", "hold");
+  });
+
+  test("fail: a password-protected .docx (EncryptedPackage) holds as encrypted", () => {
+    const r = judge(fx.cfb([{ name: "EncryptionInfo", data: Buffer.alloc(200) }, { name: "EncryptedPackage", data: Buffer.alloc(5000) }]), "locked.docx");
+    assert.equal(r.file.detected_type, "ooxml-encrypted");
+    hasReason(r, "encrypted", "hold");
+    lacks(r, "type-mismatch");
+  });
+
+  test("fail: an MSI installer blocks as a program, even named .doc", () => {
+    const r = judge(fx.cfb([{ name: "\u4840\u3f3f", data: Buffer.alloc(10) }], { clsid: MSI_CLSID }), "setup.doc");
+    assert.equal(r.file.detected_type, "msi");
+    hasReason(r, "executable", "block");
+    hasReason(r, "type-mismatch-executable", "block");
+  });
+
+  test("fail: a damaged compound file holds (office-unreadable)", () => {
+    const good = fx.cfb([{ name: "WordDocument", data: fx.wordDocumentStream() }]);
+    const bad = Buffer.from(good);
+    bad.writeUInt32LE(0x7FFFFFF0, 48); // directory starts past the end
+    hasReason(judge(bad, "bad.doc"), "office-unreadable", "hold");
+  });
+
+  test("fail: an RTF carrying an OLE object holds (office-embedded-object)", () => {
+    const rtf = "{\\rtf1\\ansi{\\object\\objemb{\\*\\objclass Package}{\\*\\objdata 0105000002000000}}}";
+    hasReason(judge(Buffer.from(rtf), "a.rtf"), "office-embedded-object", "hold");
+  });
+
+  test("pass: a plain RTF passes", () => {
+    const r = judge(Buffer.from("{\\rtf1\\ansi Line 3 transfer notes.\\par}"), "a.rtf");
+    assert.equal(r.checks.office, "pass");
+  });
+
+  test("fail: OpenDocument with Basic macros blocks", () => {
+    const odt = fx.zip([
+      { name: "mimetype", data: "application/vnd.oasis.opendocument.text", method: 0 },
+      { name: "content.xml", data: "<office:document-content/>" },
+      { name: "Basic/Standard/Module1.xml", data: "<script:module/>" },
+    ]);
+    const r = judge(odt, "a.odt");
+    assert.equal(r.file.detected_type, "odf");
+    hasReason(r, "office-macro", "block");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // CHECK 6 - ENCRYPTION
 // ---------------------------------------------------------------------------
 

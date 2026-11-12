@@ -171,6 +171,196 @@ export function gzip(data, name) {
 }
 
 // ---------------------------------------------------------------------------
+// COMPOUND FILES ([MS-CFB] version 3)
+// ---------------------------------------------------------------------------
+
+const FREESECT = 0xFFFFFFFF;
+const ENDOFCHAIN = 0xFFFFFFFE;
+const FATSECT = 0xFFFFFFFD;
+const NOSTREAM = 0xFFFFFFFF;
+
+function guidBytes(text) {
+  const h = text.replace(/-/g, "");
+  const b = Buffer.from(h, "hex");
+  // The first three groups are little-endian on disk.
+  return Buffer.concat([Buffer.from(b.subarray(0, 4)).reverse(), Buffer.from(b.subarray(4, 6)).reverse(),
+    Buffer.from(b.subarray(6, 8)).reverse(), b.subarray(8, 16)]);
+}
+
+/**
+ * A version 3 compound file. `tree` is a list of nodes: a stream
+ * { name, data } or a storage { name, children, clsid }. Streams under
+ * 4096 bytes go in the mini stream, as Office writes them.
+ */
+export function cfb(tree, { clsid } = {}) {
+  const dir = [{ name: "Root Entry", type: 5, clsid, children: tree }];
+  const flatten = (nodes) => nodes.map((n) => {
+    const index = dir.length;
+    const entry = { name: n.name, type: n.children ? 1 : 2, clsid: n.clsid, data: n.data === undefined ? undefined : Buffer.isBuffer(n.data) ? n.data : Buffer.from(n.data, "latin1") };
+    dir.push(entry);
+    if (n.children) entry.childIdx = flatten(n.children);
+    return index;
+  });
+  dir[0].childIdx = flatten(tree);
+  for (const e of dir) {
+    e.left = NOSTREAM; e.right = NOSTREAM; e.child = NOSTREAM;
+    if (e.childIdx?.length) e.child = e.childIdx[0];
+  }
+  for (const e of dir) (e.childIdx ?? []).forEach((idx, k, all) => { dir[idx].right = all[k + 1] ?? NOSTREAM; });
+
+  // Mini stream.
+  const miniParts = [];
+  const miniFat = [];
+  for (const e of dir) {
+    if (e.type !== 2 || e.data.length >= 4096) continue;
+    const count = Math.ceil(e.data.length / 64);
+    e.start = count ? miniFat.length : ENDOFCHAIN;
+    for (let i = 0; i < count; i++) miniFat.push(i === count - 1 ? ENDOFCHAIN : miniFat.length + 1);
+    miniParts.push(Buffer.concat([e.data, Buffer.alloc(count * 64 - e.data.length)]));
+  }
+  const miniStream = Buffer.concat(miniParts);
+
+  // Regular sectors: mini stream container, big streams, mini FAT, directory, FAT.
+  const sectors = [];
+  const fat = [];
+  const place = (data) => {
+    const count = Math.ceil(data.length / 512);
+    if (count === 0) return ENDOFCHAIN;
+    const start = sectors.length;
+    for (let i = 0; i < count; i++) {
+      sectors.push(Buffer.concat([data.subarray(i * 512, i * 512 + 512), Buffer.alloc(Math.max(0, 512 - data.subarray(i * 512, i * 512 + 512).length))]));
+      fat.push(i === count - 1 ? ENDOFCHAIN : start + i + 1);
+    }
+    return start;
+  };
+  dir[0].start = place(miniStream);
+  dir[0].size = miniStream.length;
+  for (const e of dir) {
+    if (e.type === 2) {
+      if (e.data.length >= 4096) e.start = place(e.data);
+      e.size = e.data.length;
+    } else if (e.type === 1) { e.start = 0; e.size = 0; }
+  }
+  const miniFatBuf = Buffer.concat(miniFat.map(u32));
+  const miniFatStart = miniFat.length ? place(miniFatBuf) : ENDOFCHAIN;
+  const dirBuf = Buffer.concat(dir.map((e) => {
+    const b = Buffer.alloc(128);
+    const name = Buffer.from(`${e.name}\0`, "utf16le");
+    name.copy(b, 0, 0, Math.min(64, name.length));
+    b.writeUInt16LE(Math.min(64, name.length), 64);
+    b[66] = e.type;
+    b[67] = 1;
+    b.writeUInt32LE(e.left, 68); b.writeUInt32LE(e.right, 72); b.writeUInt32LE(e.child, 76);
+    if (e.clsid) guidBytes(e.clsid).copy(b, 80);
+    b.writeUInt32LE(e.start >>> 0, 116);
+    b.writeUInt32LE(e.size ?? 0, 120);
+    return b;
+  }));
+  const dirStart = place(dirBuf);
+  let fatCount = 1;
+  while (sectors.length + fatCount > fatCount * 128) fatCount++;
+  const fatStart = sectors.length;
+  for (let i = 0; i < fatCount; i++) fat.push(FATSECT);
+  while (fat.length < fatCount * 128) fat.push(FREESECT);
+  const fatBuf = Buffer.concat(fat.map(u32));
+  for (let i = 0; i < fatCount; i++) sectors.push(fatBuf.subarray(i * 512, i * 512 + 512));
+
+  const header = Buffer.alloc(512);
+  Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]).copy(header, 0);
+  header.writeUInt16LE(0x3E, 24); header.writeUInt16LE(3, 26); header.writeUInt16LE(0xFFFE, 28);
+  header.writeUInt16LE(9, 30); header.writeUInt16LE(6, 32);
+  header.writeUInt32LE(fatCount, 44); header.writeUInt32LE(dirStart, 48);
+  header.writeUInt32LE(4096, 56); header.writeUInt32LE(miniFatStart >>> 0, 60);
+  header.writeUInt32LE(Math.ceil(miniFatBuf.length / 512), 64);
+  header.writeUInt32LE(ENDOFCHAIN, 68); header.writeUInt32LE(0, 72);
+  for (let i = 0; i < 109; i++) header.writeUInt32LE(i < fatCount ? fatStart + i : FREESECT, 76 + i * 4);
+  return Buffer.concat([header, ...sectors]);
+}
+
+/** A VBA project with the storages Office writes and no code in it. Inert. */
+export const vbaProject = () => cfb([
+  { name: "VBA", children: [{ name: "dir", data: Buffer.alloc(16) }, { name: "_VBA_PROJECT", data: Buffer.from([0xCC, 0x61, 0xFF, 0xFF, 0, 0, 0]) }] },
+  { name: "PROJECT", data: "ID=\"{00000000-0000-0000-0000-000000000000}\"\r\nName=\"GuardianTest\"\r\n" },
+]);
+
+/** An OLE Package (Ole10Native) wrapping `data` as `fileName`. */
+export function olePackage(fileName, data) {
+  const temp = Buffer.from(`C:\\tmp\\${fileName}\0`, "latin1");
+  const native = Buffer.concat([
+    u16(2), Buffer.from(`${fileName}\0C:\\tmp\\${fileName}\0`, "latin1"), u32(0x00030000),
+    u32(temp.length), temp, u32(data.length), data,
+  ]);
+  return cfb([{ name: "\u0001Ole10Native", data: Buffer.concat([u32(native.length), native]) }],
+    { clsid: "0003000c-0000-0000-c000-000000000046" });
+}
+
+/** A BIFF8 Workbook stream: BOF, optional FILEPASS, one BOUNDSHEET per sheet, EOF. */
+export function biffWorkbook({ sheets = [{ name: "Sheet1", type: 0 }], encrypted = false } = {}) {
+  const rec = (type, data) => Buffer.concat([u16(type), u16(data.length), data]);
+  const parts = [rec(0x0809, Buffer.from([0, 6, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]))];
+  if (encrypted) parts.push(rec(0x002F, Buffer.alloc(6)));
+  for (const s of sheets) {
+    const name = Buffer.from(s.name, "latin1");
+    parts.push(rec(0x0085, Buffer.concat([u32(0), Buffer.from([0, s.type, name.length, 0]), name])));
+  }
+  parts.push(rec(0x000A, Buffer.alloc(0)));
+  return Buffer.concat(parts);
+}
+
+/** A WordDocument stream whose FIB says Word, with the encrypted flag when asked. */
+export function wordDocumentStream({ encrypted = false } = {}) {
+  const b = Buffer.alloc(1024);
+  b.writeUInt16LE(0xA5EC, 0);
+  b.writeUInt16LE(0x00C1, 2);
+  b.writeUInt16LE(encrypted ? 0x0100 : 0, 0x0A);
+  b.write("Guardian test document text.", 0x200, "latin1");
+  return b;
+}
+
+// ---------------------------------------------------------------------------
+// OFFICE OPEN XML
+// ---------------------------------------------------------------------------
+
+const W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+const REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+/**
+ * A minimal .docx (or .docm with `vba`). `body` is WordprocessingML
+ * inside <w:body>; `rels` adds relationships to document.xml.rels;
+ * `settingsRels` to settings.xml.rels; `parts` adds raw parts.
+ */
+export function docx({ body = "<w:p><w:r><w:t>Line 3 transfer notes.</w:t></w:r></w:p>", rels = "", settingsRels = "", vba = false, parts = [] } = {}) {
+  const entries = [
+    { name: "[Content_Types].xml", data: '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>' },
+    { name: "_rels/.rels", data: `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/officeDocument" Target="word/document.xml"/></Relationships>` },
+    { name: "word/document.xml", data: `<?xml version="1.0"?><w:document ${W_NS}><w:body>${body}</w:body></w:document>` },
+    { name: "word/_rels/document.xml.rels", data: `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${rels}</Relationships>` },
+  ];
+  if (settingsRels) {
+    entries.push({ name: "word/settings.xml", data: `<?xml version="1.0"?><w:settings ${W_NS}><w:attachedTemplate r:id="rId1"/></w:settings>` });
+    entries.push({ name: "word/_rels/settings.xml.rels", data: `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${settingsRels}</Relationships>` });
+  }
+  if (vba) entries.push({ name: "word/vbaProject.bin", data: vbaProject() });
+  return zip([...entries, ...parts]);
+}
+
+/** A minimal .xlsx; `parts` adds raw parts (macro sheets, external links). */
+export function xlsx({ sheet = '<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Belt speed</t></is></c></row></sheetData>', vba = false, parts = [] } = {}) {
+  const entries = [
+    { name: "[Content_Types].xml", data: '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/></Types>' },
+    { name: "_rels/.rels", data: `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
+    { name: "xl/workbook.xml", data: '<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>' },
+    { name: "xl/worksheets/sheet1.xml", data: `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${sheet}</worksheet>` },
+  ];
+  if (vba) entries.push({ name: "xl/vbaProject.bin", data: vbaProject() });
+  return zip([...entries, ...parts]);
+}
+
+export const REL_TYPES = REL;
+
+// ---------------------------------------------------------------------------
 // DEFENDER RUNNERS (mocked; the real one is opt-in)
 // ---------------------------------------------------------------------------
 
