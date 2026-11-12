@@ -483,6 +483,17 @@ const SOURCE_GLOB = /[*?[]/;
  * the pattern itself (re-probe 9, K1).
  */
 function globFiles(pattern) {
+  const files = globMatches(pattern)?.filter((file) => statSync(file, { throwIfNoEntry: false })?.isFile());
+  return files?.length > 0 ? files : null;
+}
+
+/**
+ * Every path, file or folder, an absolute glob matches on disk, by the
+ * rules globFiles() states; null when they cannot be named for certain
+ * or nothing matches. `dots`: a wildcard matches a name that starts with
+ * a dot too, as PowerShell's and cmd's do (re-probe 11, M1).
+ */
+function globMatches(pattern, { dots = false } = {}) {
   if (pattern.includes("**")) return null;
   const parts = pattern.split("/");
   const first = parts.findIndex((part) => SOURCE_GLOB.test(part));
@@ -502,14 +513,14 @@ function globFiles(pattern) {
         continue; // not a folder, or not there: nothing under it matches
       }
       for (const name of names) {
-        if (re.test(name) && (!name.startsWith(".") || part.startsWith("."))) next.push(`${folder.replace(/\/$/, "")}/${name}`);
+        if (re.test(name) && (dots || !name.startsWith(".") || part.startsWith("."))) next.push(`${folder.replace(/\/$/, "")}/${name}`);
       }
       if (next.length > MAX_TREE_FILES) return null;
     }
     found = next;
   }
-  const files = found.filter((file) => statSync(file, { throwIfNoEntry: false })?.isFile());
-  return files.length > 0 ? files : null;
+  const there = found.filter((p) => existsSync(p));
+  return there.length > 0 ? there : null;
 }
 
 /**
@@ -521,10 +532,38 @@ function globFiles(pattern) {
  *   intoDir   otherwise src lands under dest by its own name, else as dest.
  * A folder is descended into only when the command copies folders
  * (`recursive`), except for "src/*", whose top-level files are copied anyway.
+ *
+ * Any other glob (re-probe 11, M1 and Lex decision N1): when its folder
+ * holds what this command unpacks, clones or downloads, or is not there
+ * at all, what it matches is not known, so the copy lands on the target
+ * itself, as "src/." does, carrying the glob as its source; the root or
+ * a watched folder then asks. Otherwise it is expanded as the shell
+ * would, from disk and from what this command put there, and each path
+ * it matches is copied as if named. `expanded` marks a path that came
+ * out of that expansion, whose own name may hold a glob character.
  */
-function addCopy(dir, ctx, src, dest, { intoDir, recursive, slashMeansContents }) {
+function addCopy(dir, ctx, src, dest, { intoDir, recursive, slashMeansContents, expanded = false }) {
   const { add, abs } = ctx;
   const spelled = src.replace(/\\/g, "/");
+  if (!expanded && SOURCE_GLOB.test(spelled) && !/^(.*?)\/\*$/.test(spelled)) {
+    const parts = spelled.split("/");
+    const first = parts.findIndex((part) => SOURCE_GLOB.test(part));
+    const folder = abs(dir, parts.slice(0, first).join("/") || (spelled.startsWith("/") ? "/" : "."));
+    if (ctx.unread(folder)) {
+      add(dir, dest, [abs(dir, src)]);
+      return;
+    }
+    const matches = globPaths(ctx, abs(dir, spelled), folder);
+    if (matches.length > 0) {
+      for (const match of matches) {
+        addCopy(dir, ctx, match, dest, { intoDir: intoDir || matches.length > 1, recursive, slashMeansContents: false, expanded: true });
+      }
+      return;
+    }
+  } else if (!expanded && /^(.*?)\/\*$/.test(spelled) && ctx.unread(abs(dir, spelled.slice(0, -2) || "/"))) {
+    add(dir, dest, [abs(dir, src)]);
+    return;
+  }
   const inside = /^(.*?)\/(\.|\*)$/.exec(spelled);
   const contents = Boolean(inside) || (slashMeansContents && /\/$/.test(spelled));
   const folder = inside ? inside[1] || "." : spelled.replace(/\/+$/, "") || "/";
@@ -547,6 +586,29 @@ function addCopy(dir, ctx, src, dest, { intoDir, recursive, slashMeansContents }
     add(dir, `${base}/${rel}`, [abs(dir, `${folder}/${rel}`)]);
     if (ontoFile && !rel.includes("/")) add(dir, dest, [abs(dir, `${folder}/${rel}`)]);
   }
+}
+
+/**
+ * The paths an absolute glob matches, as the shell would expand it:
+ * on disk, and among the files this command wrote under `folder` (the
+ * glob's last folder without a wildcard), each cut to the glob's depth.
+ * In PowerShell and cmd a wildcard matches a name that starts with a dot.
+ */
+function globPaths(ctx, pattern, folder) {
+  const dots = ctx.dialect !== "bash";
+  const found = new Set(globMatches(pattern, { dots }) ?? []);
+  const base = folder.endsWith("/") ? folder : `${folder}/`;
+  const segments = pattern.slice(base.length).split("/");
+  const res = segments.map((segment) => (SOURCE_GLOB.test(segment) ? findGlob(segment) : null));
+  for (const rel of ctx.under(folder)) {
+    const names = rel.split("/");
+    if (names.length < segments.length) continue;
+    const matches = segments.every((segment, k) => (res[k]
+      ? res[k].test(names[k]) && (dots || !names[k].startsWith(".") || segment.startsWith("."))
+      : segment.toLowerCase() === names[k].toLowerCase()));
+    if (matches) found.add(`${base}${names.slice(0, segments.length).join("/")}`);
+  }
+  return [...found];
 }
 
 /**
@@ -4396,7 +4458,16 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
   const under = (folder) => [...targets.keys()].filter((key) => key.startsWith(`${folder}/`)).map((key) => key.slice(folder.length + 1));
   /** Whether a file sits in a folder this command has written (unpacked, cloned or copied) so far. */
   const within = (file) => [...targets.keys()].some((key) => file.startsWith(`${key}/`));
-  const ctx = { add, abs, recurse, present, under, within, dialect, decoded: found.decoded, quiet: [], filter, root: found.root };
+  /**
+   * Whether what a folder holds cannot be known when the command is
+   * read: this command unpacks, clones or downloads into it (or into a
+   * folder above it), or it is not there and nothing was written under
+   * it (re-probe 11, M1).
+   */
+  const unread = (folder) => [...targets].some(([key, entry]) => (folder === key || folder.startsWith(`${key}/`)) &&
+      [...entry.sources].some((s) => s.startsWith(UNJUDGED))) ||
+    (!present(folder) && under(folder).length === 0);
+  const ctx = { add, abs, recurse, present, under, within, unread, dialect, decoded: found.decoded, quiet: [], filter, root: found.root };
 
   const { tokens, subs, heredocs, uncertain } = lexShell(command, dialect);
   if (uncertain) found.uncertain = true;
@@ -5375,8 +5446,12 @@ function cmdWrites(name, operands, dir, ctx, args) {
     const sources = (operands.length > 1 ? operands.slice(0, -1) : operands).flatMap((s) => s.split("+")).filter(Boolean);
     const intoDir = dest === "." || /[\\/]$/.test(dest) || Boolean(statSync(abs(dir, dest), { throwIfNoEntry: false })?.isDirectory());
     const from = (src) => (name === "move" ? missingMoveSource(ctx, dir, src) : null) ?? abs(dir, src);
-    if (intoDir) for (const src of sources) add(dir, `${dest}/${path.posix.basename(slashed(src))}`, [from(src)]);
-    else add(dir, dest, sources.map(from));
+    // A wildcard source is read as cp's is (re-probe 11, M1): the files it matches, top level only.
+    const globs = sources.filter((src) => SOURCE_GLOB.test(src));
+    const plain = sources.filter((src) => !SOURCE_GLOB.test(src));
+    for (const src of globs) addCopy(dir, ctx, src, dest, { intoDir, recursive: false, slashMeansContents: false });
+    if (intoDir) for (const src of plain) add(dir, `${dest}/${path.posix.basename(slashed(src))}`, [from(src)]);
+    else if (plain.length > 0) add(dir, dest, plain.map(from));
     if (name === "move") for (const src of sources) add(dir, src);
   } else if (CMD_RENAMERS.has(name)) {
     const [target, newName] = operands;

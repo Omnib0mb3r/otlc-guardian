@@ -7307,6 +7307,76 @@ describe("PreToolUse hook - a folder an archive is unpacked into (re-probe 10, R
   }
 });
 
+describe("PreToolUse hook - a glob copy out of a folder (re-probe 11, M1 and Lex decision N1)", () => {
+  // What a glob matches in a folder this command unpacks, clones or that
+  // is not there is not known when the command is read: the copy lands on
+  // the target folder itself, as "tmp/." does, and the root or a watched
+  // folder asks.
+  for (const [command, tool] of [
+    // M1: unpacked or cloned, then globbed into the root.
+    ["tar -xf a.tar -C tmp && cp -r tmp/* ."],
+    ["unzip a.zip -d tmp && cp -r tmp/* ."],
+    ["unzip a.zip -d tmp && cp -r tmp/* ./"],
+    ["unzip a.zip -d tmp && cp tmp/* ."],
+    ["unzip a.zip -d tmp && cp tmp/*.md ."],
+    ["unzip a.zip -d tmp && cp -r tmp/pack/* ."],
+    ["unzip a.zip -d tmp && mv tmp/* ."],
+    ["unzip a.zip -d tmp && cp -r tmp/** ."],
+    ["curl -L https://example.test/kit.zip -o kit.zip && unzip -o kit.zip -d kit && cp -r kit/* . && rm -rf kit kit.zip"],
+    ["unzip -o starter.zip -d /tmp/starter && cp -r /tmp/starter/* ."],
+    ["7z x a.zip -otmp && cp -r tmp/* ."],
+    ["python -m zipfile -e a.zip tmp && cp -r tmp/* ."],
+    ["git clone https://example.test/r tmp && cp -r tmp/* ."],
+    ["git clone https://example.test/r tmp && mv tmp/* ."],
+    ["cp -r missingdir/* ."],
+    ["cmd /c \"tar -xf a.tar -C tmp && copy tmp\\* .\""],
+    // Into a watched folder.
+    ["unzip a.zip -d tmp && cp tmp/*.md .claude/agents/"],
+    ["git clone https://example.test/r tmp && cp tmp/agents/*.md .claude/agents/"],
+    ["unzip a.zip -d tmp && cp tmp/CLAUDE.m? CLAUDE.md"],
+    // An unpacked folder that is on disk from an earlier call: what is on disk is not what lands.
+    ["unzip -o a.zip -d notes && cp notes/*.md .claude/agents/"],
+    // PowerShell's * also matches .claude.
+    ["Expand-Archive agents.zip tmp; Copy-Item -Recurse tmp\\* .", "PowerShell"],
+    ["Expand-Archive kit.zip -DestinationPath tmp; Copy-Item -Path tmp\\* -Destination . -Recurse -Force", "PowerShell"],
+    ["Expand-Archive kit.zip tmp; Move-Item tmp\\* .", "PowerShell"],
+    ["Expand-Archive kit.zip tmp; Copy-Item tmp\\*.md .", "PowerShell"],
+    ["git clone https://example.test/r tmp; Copy-Item -Recurse tmp\\* .", "PowerShell"],
+    ["Expand-Archive kit.zip tmp; Copy-Item tmp\\*.md .claude\\agents\\", "PowerShell"],
+    // An on-disk folder: the glob is expanded as the shell would, so a payload it names is judged.
+    ["cp notes/*.md .claude/agents/"],
+    ["cp notes/x.m? CLAUDE.md"],
+    ["cp notes/x.md pack/CLAUDE.md && cp pack/*.md ."],
+    ["cmd /c \"copy notes\\*.md .claude\\agents\""],
+  ]) {
+    stagedOnly(`asks or denies${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      const out = runGuarded(command, { tool });
+      assert.ok(["ask", "deny"].includes(decisionOf(out)), `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  // An ordinary target stays silent (L1), and so does a glob copy from an
+  // ordinary folder that names no watched file.
+  for (const [command, tool] of [
+    ["unzip a.zip -d tmp && cp -r tmp/* src/"],
+    ["unzip a.zip -d tmp && cp -r tmp/*.md docs/"],
+    ["git clone https://example.test/r tmp && cp tmp/*.js src/"],
+    ["tar -xzf release.tgz -C vendor && cp vendor/*.d.ts types/"],
+    ["cp notes/*.md docs/"],
+    ["cp src/*.js dist/"],
+    ["cp -r src/* build/"],
+    ["mv notes/*.md archive/"],
+    ["npm run build && cp build/*.js public/"],
+    ["cmd /c \"copy notes\\*.md docs\""],
+    ["Expand-Archive data.zip -DestinationPath data; Copy-Item data\\*.csv src\\", "PowerShell"],
+    ["Copy-Item notes\\*.md docs\\", "PowerShell"],
+  ]) {
+    stagedOnly(`silent${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions", tool }));
+    });
+  }
+});
+
 describe("PreToolUse hook - PowerShell downloads, mklink and fsutil hardlink (re-probe 9, K2)", () => {
   for (const command of [
     // The re-probe's download forms, and their like.

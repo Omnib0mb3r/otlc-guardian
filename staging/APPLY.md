@@ -37,7 +37,7 @@ and on 2026-11-12 for the ninth (Lex's decisions K1 to K7).
 
 | Staged file | Live file | Size of the change |
 |---|---|---|
-| `staging/hooks/injection-guard-hook.mjs` | `.claude/hooks/injection-guard-hook.mjs` | 5,394 lines added, 272 removed |
+| `staging/hooks/injection-guard-hook.mjs` | `.claude/hooks/injection-guard-hook.mjs` | 5,469 lines added, 272 removed |
 | `staging/hooks/web-content-guard.mjs` | `.claude/hooks/web-content-guard.mjs` | 26 added, 21 removed |
 | `staging/security/01-injection-guard.js` | `security/01-injection-guard.js` | 433 added, 60 removed |
 | (edit) | `.claude/settings.json` (this repo only) | both hook commands anchored, web guard matcher widened |
@@ -478,6 +478,16 @@ Behavior a user will notice after the apply:
   `Expand-Archive agents.zip -DestinationPath .claudegents` ask. In
   bypass mode `unzip -o fonts.zip -d assets/fonts` and
   `tar -xzf node-v24.tar.gz -C /tmp/node` are silent.
+- A glob copy out of a folder whose content is not known lands on the
+  target folder itself (N1): `unzip a.zip -d tmp && cp -r tmp/* .`,
+  `unzip a.zip -d tmp && mv tmp/* .`,
+  `git clone https://example.test/r tmp && cp -r tmp/* .`,
+  `cp -r missingdir/* .`,
+  `unzip a.zip -d tmp && cp tmp/*.md .claude/agents/` and, through the
+  PowerShell tool, `Expand-Archive agents.zip tmp; Copy-Item -Recurse tmp\* .`
+  ask. `cp notes/*.md .claude/agents/` is denied on a payload in
+  `notes`. In bypass mode `unzip a.zip -d tmp && cp -r tmp/* src/`,
+  `cp notes/*.md docs/` and `cp src/*.js dist/` are silent.
 - In PowerShell a text writer says the word as `echo` does (K4): in
   bypass mode `Add-Content README.md "## Security"` and
   `Write-Output "security scan done" | Out-File -Append logs\ci.log` are
@@ -858,6 +868,7 @@ there, with who ran it and how. Restore any file a test changes with
 | BUG-066 (K1) | In a scratch project ask Claude to run `git clone https://github.com/octocat/Hello-World tmp && cp tmp/README CLAUDE.md`; see a Guardian prompt naming CLAUDE.md; decline. Ask for `git clone https://github.com/octocat/Hello-World .claude/agents/x`; see a Guardian prompt; decline. With a payload in `notes/x.md`, `cat notes/*.md > CLAUDE.md`; see it denied. In bypass mode `git clone https://github.com/octocat/Hello-World vendor/hw` and `cp .env.example .env` get no Guardian prompt. |
 | BUG-066 (K2) | On Windows, with a payload in `notes\x.md`, through the PowerShell tool ask for `cmd /c mklink /H CLAUDE.md notes\x.md`; see it denied. Ask for `(New-Object Net.WebClient).DownloadFile('https://example.com/','CLAUDE.md')`; see a Guardian prompt naming CLAUDE.md; decline. In bypass mode `Start-BitsTransfer -Source https://example.com/x.zip -Destination downloads\x.zip` gets no Guardian prompt. |
 | BUG-066 (L1) | In a scratch project, with an archive `agents.zip` holding `helper.md` with a payload, ask Claude to run `unzip -oq agents.zip -d tmp && cp -r tmp/. .claude/agents/`; see a Guardian prompt naming `.claude/agents`; decline. Ask for `unzip agents.zip -d .claude/agents`; see a Guardian prompt; decline. In bypass mode `unzip -o agents.zip -d assets/x` gets no Guardian prompt. |
+| BUG-066 (N1) | In a scratch project with its own `CLAUDE.md`, and an archive `kit.zip` holding a `CLAUDE.md` with a payload, ask Claude to run `unzip -o kit.zip -d kit && cp -r kit/* .`; see a Guardian prompt naming the project folder; decline, and check `CLAUDE.md` is unchanged. Through the PowerShell tool ask for `Expand-Archive kit.zip tmp; Copy-Item -Recurse tmp\* .`; see a Guardian prompt; decline. In bypass mode `unzip -o kit.zip -d kit && cp -r kit/* src/` gets no Guardian prompt. |
 | BUG-080 (K4) | At the root of a scratch project in bypass mode, through the PowerShell tool, ask for `Add-Content README.md "## Security"`; no Guardian prompt. Then `Add-Content x.ps1 'Remove-Item -Recurse security'; .\x.ps1`; see it denied. |
 | BUG-080 (K6) | In a scratch `guardian init` project ask Claude to run `` rm -rf secu`:`rity ``; see a Guardian prompt naming security; decline. In bypass mode `tar czf backup-$(date +%F).tgz src` and `npm config get registry && npm test -- security` get no Guardian prompt. |
 | BUG-080 (L2) | At the root of a scratch project ask Claude to run `npm config --location=project set script-shell=./e.sh; npm run security`; see a Guardian prompt naming security; decline. In bypass mode `npm config --location=project get registry && npm test -- security` gets no Guardian prompt. |
