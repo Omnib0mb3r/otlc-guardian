@@ -170,6 +170,7 @@ one of the cost rulings of re-probe 7 ((a), (b) and (c)) and re-probe 8.
 | BUG-080 (K3) | b58001b | hook | a hook written after a `cd` into `.git`, `.husky` or `.githooks` is seen |
 | BUG-066 (L1) | b171173 | hook | a folder an archive extractor fills is unread content: a copy out of it into a watched path, and an unpack straight into one, ask; `7z x` and `7z e` are read |
 | BUG-080 (L2) | ba7c5b4 | hook | `npm`, `pnpm` and `yarn` `config` with an option before the verb (`--location`, `-L`, `-g`, `-H`) is runner configuration |
+| BUG-080 (N2) | f2ddb47 | hook | `npm`, `pnpm` and `yarn` `config` is a write when any word after `config` is `set`, `delete`, `rm`, `unset`, `edit` or `fix`, whatever options come before it |
 | BUG-066 (N1) | 29b2dd4 | hook | a glob copy or move out of a folder the command unpacks, clones or downloads into, or that is not on disk, lands on the target folder itself: the project root and a watched folder ask; cmd `copy` and `move` wildcards are read |
 
 Documented, not fixed: an obfuscated payload moved out of a code fence
@@ -476,7 +477,7 @@ Behavior a user will notice after the apply:
   `tar -xf agents.tar -C tmp && cp -r tmp/. .claude/agents/`,
   `unzip agents.zip -d .claude/agents`, `7z x a.7z -o.claude/agents`
   and, through the PowerShell tool,
-  `Expand-Archive agents.zip -DestinationPath .claudegents` ask. In
+  `Expand-Archive agents.zip -DestinationPath .claude\agents` ask. In
   bypass mode `unzip -o fonts.zip -d assets/fonts` and
   `tar -xzf node-v24.tar.gz -C /tmp/node` are silent.
 - A glob copy out of a folder whose content is not known lands on the
@@ -673,7 +674,7 @@ about settings protection; the BUG-045 smoke test below does that.
 
 ## Step 3: checks
 
-Run the six suites one at a time, not through `npm test`: that script is
+Run the seven suites one at a time, not through `npm test`: that script is
 an `&&` chain, so the one expected failure would stop it and hide any
 other.
 
@@ -684,6 +685,7 @@ node tests/hook.test.js              # exit 0
 node tests/agents-md.test.js         # exit 0
 node tests/audit.test.js             # exit 0
 node tests/sql-guard.test.js         # exit 0
+node tests/inbound.test.js           # exit 0 (it reads the scanner's rules)
 npm run test:staging                 # exit 0 (staged == live now)
 node security/03-audit.js . --fail-on-error   # exit 0
 node bin/guardian.js check                    # exit 0, and no relative-command warnings
@@ -696,12 +698,13 @@ gone, and step 4 removes it. Its summary must read `Failed : 1` with that
 name under FAILURES. Any other failure, in that suite or another, means
 stop and roll back with the `git checkout` line above.
 
-Measured on 2026-11-12 in a scratch clone of b58001b with steps 1 and 2
-applied: injection-guard 175 passed 1 failed (that test), init 93/0, hook
-283/0, agents-md 14/0, audit suite exit 0, sql-guard 40/0, test:staging
-exit 0 (staged injection-guard 288/0, staged hook 2848/0), the audit
-exit 0, check 18 passed 0 warnings. The commit after b58001b changes
-only documentation. A hook test that fails with "The test
+Measured on 2026-11-12 in a scratch clone of f2ddb47 (N2) with steps 1
+and 2 applied: injection-guard 175 passed 1 failed (that test), init
+93/0, hook 283/0, agents-md 14/0, audit suite 407/0, sql-guard 40/0,
+inbound 230/0, test:staging exit 0 (staged injection-guard 288/0, staged
+hook 2960/0, run with `GUARDIAN_TEST_HOOK_TIMEOUT_MS=90000`), the audit
+exit 0, check 18 passed 0 warnings. The commit after f2ddb47 changes
+only this file. A hook test that fails with "The test
 harness stopped the hook after N ms" on a loaded machine is BUG-077, not
 the apply: rerun that suite.
 
@@ -714,7 +717,7 @@ repo before the apply still runs the old hook until it restarts.
    `liveOnly(...)` test (today only in `tests/injection-guard.test.js`) and
    turn every `stagedOnly(` call into `test(`. Keep the `stagedOnly()` and
    `liveOnly()` helpers and `TESTING_STAGED`: the next staged fix uses them.
-   Then run the six suites one at a time again; each exits 0, and so does
+   Then run the seven suites one at a time again; each exits 0, and so does
    `npm run test:staging`.
 2. `CHANGELOG.md`, `[1.5.0]`: move every entry under "### Staged (fixed in
    staging/, not yet live)" into "### Fixed" and delete the Staged section.
