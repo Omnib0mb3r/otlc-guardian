@@ -361,6 +361,58 @@ export function xlsx({ sheet = '<sheetData><row r="1"><c r="A1" t="inlineStr"><i
 export const REL_TYPES = REL;
 
 // ---------------------------------------------------------------------------
+// PDF
+// ---------------------------------------------------------------------------
+
+/**
+ * A PDF written by hand to ISO 32000. Each object is a string (its
+ * body) or a stream { dict, data, flate }. Objects are numbered from 1
+ * and an xref table is written. `trailer` adds trailer entries.
+ */
+export function pdf(objects, { trailer = "" } = {}) {
+  const parts = [Buffer.from("%PDF-1.7\n%\xE2\xE3\xCF\xD3\n", "latin1")];
+  const offsets = [];
+  let length = parts[0].length;
+  objects.forEach((o, i) => {
+    let body;
+    if (typeof o === "string") body = Buffer.from(o, "latin1");
+    else {
+      const data = o.flate ? zlib.deflateSync(Buffer.isBuffer(o.data) ? o.data : Buffer.from(o.data, "latin1")) : (Buffer.isBuffer(o.data) ? o.data : Buffer.from(o.data, "latin1"));
+      const filter = o.flate ? " /Filter /FlateDecode" : "";
+      body = Buffer.concat([Buffer.from(`<< ${o.dict} /Length ${data.length}${filter} >>\nstream\n`, "latin1"), data, Buffer.from("\nendstream", "latin1")]);
+    }
+    const obj = Buffer.concat([Buffer.from(`${i + 1} 0 obj\n`, "latin1"), body, Buffer.from("\nendobj\n", "latin1")]);
+    offsets.push(length);
+    parts.push(obj);
+    length += obj.length;
+  });
+  const xref = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("")}`;
+  parts.push(Buffer.from(`${xref}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R ${trailer}>>\nstartxref\n${length}\n%%EOF\n`, "latin1"));
+  return Buffer.concat(parts);
+}
+
+/** Catalog, pages and one page whose content stream shows `text`. Objects 1 to 4. */
+export function pdfPage(text = "Line 3 transfer notes", { catalogExtra = "" } = {}) {
+  return [
+    `<< /Type /Catalog /Pages 2 0 R ${catalogExtra}>>`,
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >>",
+    { dict: "", data: `BT /F1 12 Tf 72 720 Td (${text}) Tj ET`, flate: true },
+  ];
+}
+
+/** An object stream holding [num, body] pairs, Flate-compressed. */
+export function pdfObjectStream(pairs) {
+  let offsets = "";
+  let bodies = "";
+  for (const [num, body] of pairs) {
+    offsets += `${num} ${bodies.length} `;
+    bodies += `${body}\n`;
+  }
+  return { dict: `/Type /ObjStm /N ${pairs.length} /First ${offsets.length}`, data: offsets + bodies, flate: true };
+}
+
+// ---------------------------------------------------------------------------
 // DEFENDER RUNNERS (mocked; the real one is opt-in)
 // ---------------------------------------------------------------------------
 

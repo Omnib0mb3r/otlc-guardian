@@ -39,6 +39,8 @@ import {
 } from "../security/inbound/index.js";
 import { Budget } from "../security/inbound/limits.js";
 import { detectType } from "../security/inbound/checks/type.js";
+import { decodeStream } from "../security/inbound/readers/pdf.js";
+import zlib from "zlib";
 import * as fx from "./inbound-fixtures.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -663,6 +665,106 @@ describe("Check 3 - Office documents", () => {
     const r = judge(odt, "a.odt");
     assert.equal(r.file.detected_type, "odf");
     hasReason(r, "office-macro", "block");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CHECK 4 - PDF
+// ---------------------------------------------------------------------------
+
+describe("Check 4 - PDF", () => {
+  test("pass: a plain one-page PDF passes", () => {
+    const r = judge(fx.pdf(fx.pdfPage()), "notes.pdf");
+    assert.equal(r.file.detected_type, "pdf");
+    assert.equal(r.checks.pdf, "pass", JSON.stringify(r.reasons));
+  });
+
+  test("fail: /OpenAction running JavaScript blocks (inert app.alert)", () => {
+    const objs = fx.pdfPage("x", { catalogExtra: "/OpenAction 5 0 R " });
+    objs.push("<< /Type /Action /S /JavaScript /JS (app.alert\\('Guardian test'\\);) >>");
+    const r = judge(fx.pdf(objs), "a.pdf");
+    assert.match(hasReason(r, "pdf-javascript", "block").detail, /object 5/);
+    assert.equal(r.verdict, "block");
+  });
+
+  test("fail: a /Launch action blocks", () => {
+    const objs = fx.pdfPage("x", { catalogExtra: "/OpenAction 5 0 R " });
+    objs.push("<< /S /Launch /Win << /F (cmd.exe) >> >>");
+    hasReason(judge(fx.pdf(objs), "a.pdf"), "pdf-launch", "block");
+  });
+
+  test("fail: a name hidden with #xx escapes (/J#61vaScript) blocks", () => {
+    const objs = fx.pdfPage("x", { catalogExtra: "/OpenAction 5 0 R " });
+    objs.push("<< /S /J#61vaScript /J#53 (app.alert\\(1\\);) >>");
+    hasReason(judge(fx.pdf(objs), "a.pdf"), "pdf-javascript", "block");
+  });
+
+  test("fail: JavaScript inside a Flate object stream blocks", () => {
+    const objs = fx.pdfPage("x", { catalogExtra: "/OpenAction 6 0 R " });
+    objs.push(fx.pdfObjectStream([[6, "<< /S /JavaScript /JS (app.alert\\(1\\);) >>"]]));
+    assert.match(hasReason(judge(fx.pdf(objs), "a.pdf"), "pdf-javascript", "block").detail, /object stream/);
+  });
+
+  test("fail: JavaScript in an ASCIIHex then Flate object stream blocks", () => {
+    const inner = zlib.deflateSync(Buffer.from("6 0 << /S /JavaScript /JS (x) >>\n"));
+    const objs = fx.pdfPage("x");
+    objs.push({ dict: "/Type /ObjStm /N 1 /First 4 /Filter [/ASCIIHexDecode /FlateDecode]", data: `${inner.toString("hex")}>` });
+    hasReason(judge(fx.pdf(objs), "a.pdf"), "pdf-javascript", "block");
+  });
+
+  for (const [key, body] of [
+    ["SubmitForm", "<< /S /SubmitForm /F (https://example.test/) >>"],
+    ["GoToR", "<< /S /GoToR /F (other.pdf) /D [0 /Fit] >>"],
+    ["RichMedia", "<< /Type /Annot /Subtype /RichMedia >>"],
+  ]) {
+    test(`fail: /${key} holds (pdf-active-content)`, () => {
+      const objs = fx.pdfPage("x");
+      objs.push(body);
+      hasReason(judge(fx.pdf(objs), "a.pdf"), "pdf-active-content", "hold");
+    });
+  }
+
+  test("fail: an encrypted PDF (/Encrypt) holds as encrypted", () => {
+    const objs = fx.pdfPage("x");
+    objs.push("<< /Filter /Standard /V 2 /R 3 /O (x) /U (y) /P -4 >>");
+    hasReason(judge(fx.pdf(objs, { trailer: "/Encrypt 5 0 R " }), "a.pdf"), "encrypted", "hold");
+  });
+
+  test("fail: an embedded program blocks, named from its file specification", () => {
+    const objs = fx.pdfPage("x", { catalogExtra: "/Names << /EmbeddedFiles << /Names [(invoice) 5 0 R] >> >> " });
+    objs.push("<< /Type /Filespec /F (invoice.exe) /UF (invoice.exe) /EF << /F 6 0 R >> >>");
+    objs.push({ dict: "/Type /EmbeddedFile", data: fx.pe(), flate: true });
+    const r = judge(fx.pdf(objs), "a.pdf");
+    hasReason(r, "executable", "block");
+    assert.match(hasReason(r, "executable-name", "block").detail, /\.exe/);
+  });
+
+  test("pass: an embedded clean text file is read and passes", () => {
+    const objs = fx.pdfPage("x");
+    objs.push("<< /Type /Filespec /F (notes.txt) /EF << /F 6 0 R >> >>");
+    objs.push({ dict: "/Type /EmbeddedFile", data: "plain notes\n", flate: true });
+    const r = judge(fx.pdf(objs), "a.pdf");
+    assert.equal(r.checks.pdf, "pass", JSON.stringify(r.reasons));
+    assert.equal(r.checks.executable, "pass");
+  });
+
+  test("fail: a stream with a filter Guardian cannot decode holds", () => {
+    const objs = fx.pdfPage("x");
+    objs.push({ dict: "/Filter /FooDecode", data: "abc" });
+    hasReason(judge(fx.pdf(objs), "a.pdf"), "pdf-unreadable-stream", "hold");
+  });
+
+  test("pass: a JPEG image stream is left encoded and passes", () => {
+    const objs = fx.pdfPage("x");
+    objs.push({ dict: "/Type /XObject /Subtype /Image /Width 1 /Height 1 /Filter /DCTDecode", data: fx.jpeg() });
+    assert.equal(judge(fx.pdf(objs), "a.pdf").checks.pdf, "pass");
+  });
+
+  test("decoders: LZW (the ISO 32000 example), ASCII85, RunLength", () => {
+    const b = new Budget();
+    assert.equal(decodeStream("/Filter /LZWDecode", Buffer.from("800B6050220C0C8501", "hex"), b).toString("latin1"), "-----A---B");
+    assert.equal(decodeStream("/Filter /ASCII85Decode", Buffer.from("<~87cURD]i,\"Ebo80~>"), b).toString("latin1"), "Hello World!");
+    assert.equal(decodeStream("/Filter /RunLengthDecode", Buffer.from([2, 0x61, 0x62, 0x63, 254, 0x7A, 128]), b).toString("latin1"), "abczzz");
   });
 });
 
