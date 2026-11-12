@@ -7305,6 +7305,52 @@ describe("PreToolUse hook - PowerShell downloads, mklink and fsutil hardlink (re
   }
 });
 
+describe("PreToolUse hook - PowerShell text writers say the word, as echo does (re-probe 9, K4)", () => {
+  for (const command of [
+    // The re-probe's forms.
+    'Add-Content README.md "## Security"',
+    'Set-Content -Path docs\\notes.md -Value "# Security notes"',
+    'Write-Output "security scan done" | Out-File -Append logs\\ci.log',
+    'Add-Content README.md "## Security"; git add README.md; git commit -m "docs: security"; git push',
+    // Their like: a value on its own, an alias, a parameter that says how.
+    '"## Security" >> README.md',
+    '"## Security" | Add-Content README.md',
+    'Add-Content -Path CHANGELOG.md -Value "- security fix"',
+    "ac README.md 'security'",
+    "sc -Path notes.txt -Value 'security'",
+    "Add-Content -Value 'security' -Path README.md -Encoding utf8",
+    'Write-Output "security" | Tee-Object -FilePath logs\\a.log',
+  ]) {
+    stagedOnly(`silent (PowerShell): ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions", tool: "PowerShell" }));
+    });
+  }
+
+  for (const command of [
+    // The file is run, or its content handed to a program, afterwards.
+    "Add-Content x.ps1 'Remove-Item -Recurse security'; .\\x.ps1",
+    "'Remove-Item -Recurse security' | Out-File x.ps1; powershell -File x.ps1",
+    "'Remove-Item -Recurse security' > x.ps1; & .\\x.ps1",
+    "Add-Content README.md 'security'; Get-Content README.md | Invoke-Expression",
+    "'Remove-Item -Recurse security' | iex",
+    // Not a plain file: a function, an alias, a stream, a variable, a hook, a runner's configuration.
+    "Set-Content function:pytest 'Remove-Item -Recurse -Force $args[0]'; pytest security",
+    "Set-Content alias:git notepad; git commit -m security",
+    "Add-Content README.md -Stream s 'security'",
+    "Add-Content $f 'security'",
+    "Set-Content .git\\hooks\\pre-commit 'security'",
+    "Add-Content package.json 'security'; npm test",
+    // A runner's configuration is a write place of the writer.
+    "Add-Content conftest.py 'x'; pytest security",
+    "sc package.json '{}'; npm test -- security",
+  ]) {
+    stagedOnly(`asks (PowerShell): ${command}`, () => {
+      const out = runGuarded(command, { tool: "PowerShell" });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------

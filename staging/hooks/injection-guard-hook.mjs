@@ -2929,7 +2929,8 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
    * nothing (python manage.py migrate, git checkout -b fix/npm). Every
    * word counts unless the reader knows the program's write places:
    *   - a program that only reads, its redirects apart, and rm: the
-   *     redirect targets alone. tee's files are write places, and what
+   *     redirect targets alone. tee's files are write places, as are
+   *     those of PowerShell's text writers (Set-Content), and what
    *     echo and printf say can be a script the redirect writes (echo
    *     'cp evil ~/bin/git' > Makefile; make), so their words all count;
    *   - git making or switching a branch, and git add: the branch is no
@@ -2947,7 +2948,8 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
     const rest = words.slice(1);
     const bare = words[0]?.word === name;
     if (bare && name === "rm") return { whole: targets, landed: [] };
-    if (name !== "tee" && !TEXT_SAYERS.has(name) && onlyReads(text.slice(...place(s)), dialect, 0, () => true, outside)) return { whole: targets, landed: [] };
+    const textWriter = name === "tee" || (dialect === "powershell" && PS_TEXT_WRITERS.has(PS_CMDLET_ALIASES[name] ?? name));
+    if (!textWriter && !TEXT_SAYERS.has(name) && onlyReads(text.slice(...place(s)), dialect, 0, () => true, outside)) return { whole: targets, landed: [] };
     if (bare && name === "git" && !rest.some((tok) => tok.word === "--" || COMMAND_STRING.test(tok.word)) &&
       (rest[0]?.word === "switch" || rest[0]?.word === "branch" || rest[0]?.word === "add" ||
         (rest[0]?.word === "checkout" && /^-[bB]$/.test(rest[1]?.word ?? "")))) {
@@ -3831,6 +3833,16 @@ const PS_PROPERTY = /^(?:\.[A-Za-z_]\w*|\[-?\d+\])+$/;
 // command.
 const PS_VALUE = String.raw`(?:\$[A-Za-z_]\w*(?:\.[A-Za-z_]\w*|\[-?\d+\])*|'[^']*'|"[^"$]*"|-?\d+(?:\.\d+)?(?:kb|mb|gb)?|\[[\w.]+(?:\[\])?\])`;
 const PS_VALUES = new RegExp(`^(?:,|,?${PS_VALUE}(?:,${PS_VALUE})*,?)$`, "i");
+// The cmdlets that write the text they are given to a file, and their
+// parameters that name the file or say how it is written (re-probe 9, K4).
+// -Stream writes to a part of the file the name does not show.
+// A path on a drive that is no folder of files (function:pytest,
+// alias:git, env:PATH, HKCU:\x) or with its provider spelled out
+// (FileSystem::C:\x) defines what a command runs or is not read as a file.
+const PS_PROVIDER_PATH = /^[^\\/:]{2,}:|::/;
+const PS_TEXT_WRITERS = new Set(["set-content", "add-content", "out-file", "tee-object"]);
+const PS_TEXT_WRITER_PARAMS = new Set(["path", "literalpath", "filepath", "value", "inputobject", "encoding", "nonewline", "append", "force",
+  "noclobber", "width", "passthru"]);
 const PS_QUOTED_LITERAL = /^(?:'[^']*'|"[^"$]*")$/;
 
 /**
@@ -3932,6 +3944,21 @@ function onlyReads(command, dialect, depth = 0, plainSink = null, outside = null
       const property = PS_PROPERTY.test(w[0]) && closing !== "(";
       if (PS_OPERATOR.test(w[0]) || (property && (w.length === 1 || PS_OPERATOR.test(w[1])))) {
         return toks.slice(property ? 1 : 0).every((tok) => PS_OPERATOR.test(tok.word) || PS_VALUES.test(command.slice(tok.start, tok.end)));
+      }
+    }
+    if (dialect === "powershell") {
+      // A value on its own prints itself, as echo does ("## Security" >>
+      // README.md), and Set-Content, Add-Content, Out-File and Tee-Object
+      // write what they are given to their files, as tee does: a read
+      // with a redirect when each file is one a redirect may write and
+      // every parameter says only how (re-probe 9, K4).
+      if (toks.length === 1 && PS_VALUES.test(command.slice(toks[0].start, toks[0].end))) return true;
+      const cmdlet = PS_CMDLET_ALIASES[commandName(w[0])] ?? commandName(w[0]);
+      if (PS_TEXT_WRITERS.has(cmdlet)) {
+        const { named } = psParse(w.slice(1), cmdlet);
+        const files = psPaths(w.slice(1), cmdlet, ["path", "literalpath", "filepath"], 0);
+        return plainSink !== null && [...named.keys()].every((key) => PS_TEXT_WRITER_PARAMS.has(key)) &&
+          files.length > 0 && files.every((file) => !PS_PROVIDER_PATH.test(file) && plainSink(file));
       }
     }
     // A value set in front of a command can be what it runs (LESSOPEN,

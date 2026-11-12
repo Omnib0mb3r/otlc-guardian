@@ -233,6 +233,14 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **PowerShell text writers say the word as echo does (BUG-080,
+  re-probe 9 K4).** `Add-Content README.md "## Security"`,
+  `Set-Content -Path docs\notes.md -Value "# Security notes"` and
+  `... | Out-File -Append logs\ci.log` were denied in bypass mode where
+  `echo "## Security" >> README.md` was silent. A text writer, or a
+  string on its own before `>>`, now counts as a reading stage writing
+  an ordinary file, under the same conditions as bash's redirect.
+
 - **PowerShell downloads, `mklink` and `fsutil hardlink` are read
   (BUG-066, re-probe 9 K2).** `cmd /c mklink /H CLAUDE.md notes\x.md`,
   `fsutil hardlink create`, `Start-BitsTransfer` and

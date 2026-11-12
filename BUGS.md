@@ -2016,6 +2016,18 @@ Tests: `tests/hook.test.js`, "a command that writes a runner's configuration ear
 
 Smoke test after applying: at the root of a scratch project ask Claude to run `printf '{"scripts":{"security":"echo hi"}}' > package.json; npm run security`; see a Guardian prompt naming security; decline. In bypass mode `npm ci && npm test -- security` gets no Guardian prompt (npm itself may fail).
 
+**Re-probe 9, Z4 (LOW, false ask), Lex's decision K4 (2026-11-12): PowerShell text writers say the word as echo does. Fixed in staging, not yet live.** Denied in bypass mode at 1398e04 through the PowerShell tool, while the bash forms were silent: `Add-Content README.md "## Security"`, `Set-Content -Path docs\notes.md -Value "# Security notes"`, `Write-Output "security scan done" | Out-File -Append logs\ci.log`, and the commit line `Add-Content README.md "## Security"; git add README.md; git commit -m "docs: security"; git push`. Cause: the F1b sink rule reached `onlyReads()` through bash redirects and `tee` only; a PowerShell text writer, and a string on its own before `>>`, were no reading stage.
+
+Change in `staging/hooks/injection-guard-hook.mjs`, `onlyReads()`, PowerShell only: a value on its own (a string, a number, a variable; `PS_VALUES`) prints itself, as `echo` does; `Set-Content`, `Add-Content`, `Out-File` and `Tee-Object` and their aliases (`PS_TEXT_WRITERS`) read with a redirect, as `tee` does, when every parameter they are given names the file or says how it is written (`PS_TEXT_WRITER_PARAMS`; `-Stream` is not one) and each file is one a redirect may write (`plainSink`: named once, not watched, not Guardian's, not where git runs files). A path on a drive that holds no files (`function:pytest`, `alias:git`, `env:PATH`) or with its provider spelled out is no such file (`PS_PROVIDER_PATH`): writing `function:pytest` defines what `pytest` runs.
+
+`writePlaces()` keeps a text writer's words as write places, as it does for `tee`, so a runner's configuration it writes still ends the test-run exemption (`Set-Content package.json $evil; npm run security` asks).
+
+Found while building, each caught before commit: without `PS_PROVIDER_PATH`, `Set-Content function:pytest 'Remove-Item -Recurse -Force $args[0]'; pytest security` (re-probe 9's own list) went from deny to silent; without the `writePlaces()` change the existing test `Set-Content package.json $evil; npm run security` went silent. Both are tests.
+
+Tests: `tests/hook.test.js`, "PowerShell text writers say the word, as echo does (re-probe 9, K4)": 11 silent in bypass mode, all failing at 6c0a71e, and 13 that keep asking (the file run or fed to `Invoke-Expression` afterwards, a function, an alias, a stream, a variable, a git hook, `package.json` or `conftest.py` before a test run). Staged hook suite before: 2792 passed, 11 failed. After: 2803 passed, 0 failed. Compared with 6c0a71e in bypass mode over re-probe 9's lists (1575 commands): 4 changed, the four Z4 forms, deny to silent.
+
+Smoke test after applying: at the root of a scratch project in bypass mode, through the PowerShell tool, ask Claude to run `Add-Content README.md "## Security"`; no Guardian prompt. Then `Add-Content x.ps1 'Remove-Item -Recurse security'; .\x.ps1`; it is denied.
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10
