@@ -187,6 +187,8 @@ const DEFAULT_WATCH_DIR_PATTERNS = [
   "/memory/",
 ];
 
+// .env and .env.NAME: watched for the secrets they hold.
+const ENV_FILE = /(?:^|\/)\.env(?:\..+)?$/i;
 const DEFAULT_WATCH_FILE_PATTERNS = [
   // Cross-agent instruction files
   /(?:^|\/)CLAUDE\.md$/i,
@@ -197,7 +199,7 @@ const DEFAULT_WATCH_FILE_PATTERNS = [
   /(?:^|\/)\.aider\.conf\.ya?ml$/i,
   /(?:^|\/)copilot-instructions\.md$/i,
   // Environment / secrets
-  /(?:^|\/)\.env(?:\..+)?$/i,
+  ENV_FILE,
   // Memory index used by the auto-memory system
   /(?:^|\/)MEMORY\.md$/i,
 ];
@@ -469,6 +471,47 @@ function treeFiles(absDir, deep, quiet = false) {
   return files;
 }
 
+// What marks a source as a shell glob: the files it names are the ones
+// it matches on disk.
+const SOURCE_GLOB = /[*?[]/;
+/**
+ * The regular files an absolute path with a glob in it (*, ?, [...])
+ * matches on disk, as the shell would expand it: a name that starts with
+ * a dot is matched only by a pattern that starts with one. null when the
+ * files cannot be named for certain: "**", more than MAX_TREE_FILES
+ * matches, or no match at all, in which case the shell hands the program
+ * the pattern itself (re-probe 9, K1).
+ */
+function globFiles(pattern) {
+  if (pattern.includes("**")) return null;
+  const parts = pattern.split("/");
+  const first = parts.findIndex((part) => SOURCE_GLOB.test(part));
+  let found = [parts.slice(0, first).join("/") || "/"];
+  for (const part of parts.slice(first)) {
+    const next = [];
+    const re = SOURCE_GLOB.test(part) ? findGlob(part) : null;
+    for (const folder of found) {
+      if (!re) {
+        next.push(`${folder.replace(/\/$/, "")}/${part}`);
+        continue;
+      }
+      let names;
+      try {
+        names = readdirSync(folder);
+      } catch (err) {
+        continue; // not a folder, or not there: nothing under it matches
+      }
+      for (const name of names) {
+        if (re.test(name) && (!name.startsWith(".") || part.startsWith("."))) next.push(`${folder.replace(/\/$/, "")}/${name}`);
+      }
+      if (next.length > MAX_TREE_FILES) return null;
+    }
+    found = next;
+  }
+  const files = found.filter((file) => statSync(file, { throwIfNoEntry: false })?.isFile());
+  return files.length > 0 ? files : null;
+}
+
 /**
  * Records a copy of `src` to `dest`, both as the command spells them. A
  * folder is recorded file by file at the path each file lands on, so its
@@ -497,7 +540,47 @@ function addCopy(dir, ctx, src, dest, { intoDir, recursive, slashMeansContents }
   }
   const base = contents || !intoDir ? dest : `${dest}/${path.posix.basename(folder)}`;
   add(dir, base, tree?.unjudged ? [`${UNJUDGED}${abs(dir, folder)}`] : []);
-  for (const rel of new Set([...(tree ?? []), ...filled])) add(dir, `${base}/${rel}`, [abs(dir, `${folder}/${rel}`)]);
+  // "src/*" onto a path that is no folder: with one file in src the
+  // shell hands cp that file, and it lands on the path itself (K1).
+  const ontoFile = inside?.[2] === "*" && !intoDir;
+  for (const rel of new Set([...(tree ?? []), ...filled])) {
+    add(dir, `${base}/${rel}`, [abs(dir, `${folder}/${rel}`)]);
+    if (ontoFile && !rel.includes("/")) add(dir, dest, [abs(dir, `${folder}/${rel}`)]);
+  }
+}
+
+/**
+ * A move takes its source away, which makes the path one the command
+ * writes; so whether the file was there to move is asked when the move
+ * is read (re-probe 9, K1).
+ * @returns {string|null} the marker for a source that is not on disk and
+ *   that this command neither wrote nor put files under earlier, else null
+ */
+function missingMoveSource(ctx, dir, src) {
+  const file = ctx.abs(dir, src);
+  return !SOURCE_GLOB.test(src) && !ctx.present(file) && ctx.under(file).length === 0 ? `${UNJUDGED}${file}` : null;
+}
+
+// Options of git clone and git submodule add that take the next word.
+const GIT_CLONE_VALUE_OPTIONS = new Set(["-b", "--branch", "-o", "--origin", "-u", "--upload-pack", "--reference", "--reference-if-able",
+  "--separate-git-dir", "--depth", "--shallow-since", "--shallow-exclude", "-c", "--config", "--template", "-j", "--jobs", "--filter",
+  "--server-option", "--bundle-uri", "--revision", "--name"]);
+// Programs that fetch a repository's files into a folder, as git clone does.
+const TEMPLATE_CLONERS = new Set(["degit", "tiged"]);
+/**
+ * A clone is a download of a whole folder (re-probe 9, K1): `git clone
+ * REPO [DIR]`, `git submodule add REPO [PATH]`, `gh repo clone REPO
+ * [DIR]`. The folder it fills, DIR or the repository's name under the
+ * working folder, is written with content that cannot be read before it
+ * lands. Into a watched path that asks; anywhere else the folder is
+ * marked, and a later copy out of it is not judged by what was on disk.
+ * @param {string[]} words - what follows the subcommand
+ */
+function cloneWrites(words, dir, ctx) {
+  const operands = words.filter((a, k) => !a.startsWith("-") && !GIT_CLONE_VALUE_OPTIONS.has(words[k - 1]));
+  if (operands.length === 0) return;
+  const named = operands[1] ?? operands[0].replace(/[\\/]+$/, "").replace(/\.git$/i, "").split(/[\\/:]/).pop();
+  if (named) ctx.add(dir, named, [DOWNLOADED]);
 }
 
 /**
@@ -933,6 +1016,8 @@ const DELETE_COMMANDS   = new Set(["rm", "unlink", "truncate", "shred"]);
 const METADATA_COMMANDS = new Set(["chmod", "chown", "chgrp", "chattr", "setfacl", "icacls", "cacls", "takeown"]);
 // Commands whose stdout is (a selection of) the files they read.
 const CONTENT_PASSERS   = new Set(["cat", "tac", "head", "tail", "sort", "uniq", "nl", "paste", "cut", "grep", "egrep", "fgrep", "sed", "awk", "type", "more"]);
+// The ones whose every operand is a file.
+const FILE_ONLY_PASSERS = new Set(["cat", "tac", "nl", "type", "more"]);
 const MAX_SHELL_DEPTH   = 4;
 
 // ---------------------------------------------------------------------------
@@ -4186,7 +4271,9 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
   const present = (file) => existsSync(file) || targets.has(file);
   /** The files this command has written under a folder so far, each as its path inside the folder. */
   const under = (folder) => [...targets.keys()].filter((key) => key.startsWith(`${folder}/`)).map((key) => key.slice(folder.length + 1));
-  const ctx = { add, abs, recurse, present, under, dialect, decoded: found.decoded, quiet: [], filter, root: found.root };
+  /** Whether a file sits in a folder this command has written (unpacked, cloned or copied) so far. */
+  const within = (file) => [...targets.keys()].some((key) => file.startsWith(`${key}/`));
+  const ctx = { add, abs, recurse, present, under, within, dialect, decoded: found.decoded, quiet: [], filter, root: found.root };
 
   const { tokens, subs, heredocs, uncertain } = lexShell(command, dialect);
   if (uncertain) found.uncertain = true;
@@ -4386,7 +4473,16 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   }
   // A command that copies what it reads to stdout (cat, sort, head...)
   // carries its file operands' content; any other carries its stdin's.
-  const out = CONTENT_PASSERS.has(name) ? [...stdin, ...operands.map((p) => abs(dir, p))] : stdin;
+  // Every operand of cat, tac, nl, more and cmd's type is a file, so one
+  // that is not on disk is a source Guardian cannot read (re-probe 9,
+  // K1). An operand of the others can be a script, a count or a key (sed
+  // 's/a/b/', head -n 5, sort -k 2; bash's type takes command names): it
+  // is a file when it is on disk, when this command wrote it, when it is
+  // a glob, or when it sits in a folder this command wrote.
+  const fileOnly = FILE_ONLY_PASSERS.has(name) && !(name === "type" && ctx.dialect === "bash");
+  // find's {} stands for a file find matches.
+  const isFile = (p) => fileOnly || p.includes("{}") || ctx.present(abs(dir, p)) || SOURCE_GLOB.test(p) || ctx.within(abs(dir, p));
+  const out = CONTENT_PASSERS.has(name) ? [...stdin, ...operands.filter(isFile).map((p) => abs(dir, p))] : stdin;
 
   if (["cd", "pushd", "chdir", "set-location", "sl", "push-location"].includes(name)) {
     return { dir: operands[0] && operands[0] !== "-" ? abs(dir, operands[0]) : dir, out };
@@ -4446,7 +4542,7 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
       else if (/^\/o[a-z]*$/i.test(a)) target = args[++k] ?? null;
       else if (!a.startsWith("-")) inputs.push(a);
     }
-    if (target) add(dir, target, [...stdin, ...inputs.map((p) => abs(dir, p))]);
+    if (target) add(dir, target, [...stdin, ...inputs.filter(isFile).map((p) => abs(dir, p))]);
   } else if (name === "uniq") {
     // "uniq IN OUT" writes to OUT. -f, -s and -w take a number.
     const files = args.filter((a, k) => !a.startsWith("-") && !/^-[fsw]$/.test(args[k - 1] ?? ""));
@@ -4521,7 +4617,14 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
           add(dir, intoDir ? `${dest}/${path.posix.basename(src.replace(/\\/g, "/"))}` : dest, [`${UNJUDGED}${abs(linkFolder, src)}`]);
           continue;
         }
-        for (const from of symbolic ? [src, abs(linkFolder, src)] : [src]) {
+        const gone = name === "mv" ? missingMoveSource(ctx, dir, src) : null;
+        if (gone) {
+          add(dir, intoDir ? `${dest}/${path.posix.basename(src.replace(/\\/g, "/"))}` : dest, [gone]);
+          continue;
+        }
+        // Of a symbolic link's two readings, the ones that are there (K1:
+        // the other is a path nothing is at, not a source that is missing).
+        for (const from of symbolic ? [src, abs(linkFolder, src)].filter((p) => ctx.present(abs(dir, p))) : [src]) {
           // rsync always puts a folder under the destination, by name unless
           // "src/"; a single file onto a path that is not a folder replaces it.
           const folder = (name === "rsync" || symbolic) && isFolder(abs(dir, from));
@@ -4591,6 +4694,13 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
       }
     }
     return { dir, out: toStdout ? [...out, DOWNLOADED] : out };
+  } else if (TEMPLATE_CLONERS.has(name)) {
+    // degit REPO [DIR] fills DIR, or the working folder, as a clone does (K1).
+    if (operands.length > 0) add(dir, operands[1] ?? ".", [DOWNLOADED]);
+  } else if (name === "gh" && operands[0] === "repo" && operands[1] === "clone") {
+    // gh repo clone REPO [DIR] [-- git clone flags]
+    const own = args.slice(args.indexOf("clone") + 1);
+    cloneWrites(own.includes("--") ? own.slice(0, own.indexOf("--")) : own, dir, ctx);
   } else if (!READ_ONLY_COMMANDS.has(name) && !TEXT_SAYERS.has(name)) {
     // No reader knows the program, so it may be one that starts another
     // (re-probe 7, cost (c)).
@@ -4722,6 +4832,10 @@ function gitWrites(args, dir, ctx) {
     // or under the working directory; which ones is not visible (BUG-065).
     const specs = dashes >= 0 ? rest.slice(dashes + 1) : rest.filter((a, k) => !a.startsWith("-") && !["-e", "--exclude"].includes(rest[k - 1]));
     paths = specs.length > 0 ? specs : ["."];
+  } else if (sub === "clone") {
+    cloneWrites(rest, cwd, ctx);
+  } else if (sub === "submodule" && operands(rest)[0] === "add") {
+    cloneWrites(rest.slice(rest.indexOf("add") + 1), cwd, ctx);
   }
   for (const p of paths) add(cwd, p);
 }
@@ -4950,7 +5064,7 @@ function powershellWrites(name, args, dir, ctx, stdin) {
             add(dir, dest, [`${UNJUDGED}${abs(linkFolder, src)}`]);
             continue;
           }
-          for (const from of symbolic ? [src, abs(linkFolder, src)] : [src]) {
+          for (const from of symbolic ? [src, abs(linkFolder, src)].filter((p) => ctx.present(abs(dir, p))) : [src]) {
             const folder = Boolean(statSync(abs(dir, from), { throwIfNoEntry: false })?.isDirectory());
             addCopy(dir, ctx, from, dest, { intoDir: false, recursive: folder, slashMeansContents: false });
           }
@@ -4963,7 +5077,11 @@ function powershellWrites(name, args, dir, ctx, stdin) {
     if (dest) {
       const intoDir = sources.length > 1 || /[\\/]$/.test(dest) || Boolean(statSync(abs(dir, dest), { throwIfNoEntry: false })?.isDirectory());
       const recursive = PS_MOVERS.has(name) || named.has("recurse");
-      for (const src of sources) addCopy(dir, ctx, src, dest, { intoDir, recursive, slashMeansContents: false });
+      for (const src of sources) {
+        const gone = PS_MOVERS.has(name) ? missingMoveSource(ctx, dir, src) : null;
+        if (gone) add(dir, intoDir ? `${dest}/${path.posix.basename(src.replace(/\\/g, "/"))}` : dest, [gone]);
+        else addCopy(dir, ctx, src, dest, { intoDir, recursive, slashMeansContents: false });
+      }
     }
     if (PS_MOVERS.has(name)) for (const src of sources) add(dir, src);
   } else if (PS_REMOVERS.has(name)) {
@@ -4975,8 +5093,15 @@ function powershellWrites(name, args, dir, ctx, stdin) {
   } else if (PS_RENAMERS.has(name)) {
     const [target] = psPaths(args, name, ["path", "literalpath"], 0);
     const [newName] = psPaths(args, name, ["newname"], 1);
+    // A rename is a move inside one folder: the file's content, or the
+    // folder's files, land under the new name (K1).
+    if (target && newName) {
+      const renamed = path.join(path.dirname(target), newName);
+      const gone = missingMoveSource(ctx, dir, target);
+      if (gone) add(dir, renamed, [gone]);
+      else addCopy(dir, ctx, target, renamed, { intoDir: false, recursive: true, slashMeansContents: false });
+    }
     if (target) add(dir, target);
-    if (target && newName) add(dir, path.join(path.dirname(target), newName));
   } else {
     return false;
   }
@@ -5035,7 +5160,7 @@ const CMD_RENAMERS = new Set(["ren", "rename"]);
 // adds its own cmdlets or built-ins.
 const STARTED_PROGRAMS = new Set([...COPY_COMMANDS, ...DELETE_COMMANDS, ...METADATA_COMMANDS, ...TAR_COMMANDS, ...CONTENT_PASSERS,
   ...SHELLS, ...CMD_SHELLS, ...POWERSHELLS, ...INTERPRETERS, ...COMMAND_WRAPPERS,
-  "tee", "dd", "patch", "unzip", "find", "curl", "wget", "robocopy", "xcopy", "git", "eval"]);
+  "tee", "dd", "patch", "unzip", "find", "curl", "wget", "robocopy", "xcopy", "git", "eval", ...TEMPLATE_CLONERS]);
 const PS_STARTED_PROGRAMS = new Set([...PS_WRITERS, ...PS_COPIERS, ...PS_REMOVERS, ...PS_RENAMERS, ...PS_CONTENT_PASSERS, ...PS_DOWNLOADERS, ...PS_EVALUATORS]);
 const CMD_STARTED_PROGRAMS = new Set([...CMD_DELETERS, ...CMD_COPIERS, ...CMD_RENAMERS, "mklink"]);
 
@@ -5068,13 +5193,20 @@ function cmdWrites(name, operands, dir, ctx) {
     const dest = operands.length > 1 ? operands[operands.length - 1] : ".";
     const sources = (operands.length > 1 ? operands.slice(0, -1) : operands).flatMap((s) => s.split("+")).filter(Boolean);
     const intoDir = dest === "." || /[\\/]$/.test(dest) || Boolean(statSync(abs(dir, dest), { throwIfNoEntry: false })?.isDirectory());
-    if (intoDir) for (const src of sources) add(dir, `${dest}/${path.posix.basename(slashed(src))}`, [abs(dir, src)]);
-    else add(dir, dest, sources.map((s) => abs(dir, s)));
+    const from = (src) => (name === "move" ? missingMoveSource(ctx, dir, src) : null) ?? abs(dir, src);
+    if (intoDir) for (const src of sources) add(dir, `${dest}/${path.posix.basename(slashed(src))}`, [from(src)]);
+    else add(dir, dest, sources.map(from));
     if (name === "move") for (const src of sources) add(dir, src);
   } else if (CMD_RENAMERS.has(name)) {
     const [target, newName] = operands;
+    // A rename is a move inside one folder (K1).
+    if (target && newName) {
+      const renamed = path.posix.join(path.posix.dirname(slashed(target)), newName);
+      const gone = missingMoveSource(ctx, dir, target);
+      if (gone) add(dir, renamed, [gone]);
+      else addCopy(dir, ctx, target, renamed, { intoDir: false, recursive: true, slashMeansContents: false });
+    }
     if (target) add(dir, target);
-    if (target && newName) add(dir, path.posix.join(path.posix.dirname(slashed(target)), newName));
   } else if (name === "mklink") {
     if (operands[0]) add(dir, operands[0]);
   } else {
@@ -5755,7 +5887,13 @@ process.stdin.on("end", () => {
     // For Bash, only a path the command writes can make it ask; a watched
     // path it merely names (grep, git commit, cat) earns an advisory.
     const isWatched = (t) => t && !isIgnoredPath(t, settings, projectRoot) && isWatchedPath(t, settings);
-    const written = bashWrites.filter(isWatched);
+    // A folder that content is copied or cloned onto as a whole is
+    // watched when every file in it would be: the files a clone or a
+    // folder that is not on disk brings are not named in the command
+    // (re-probe 9, K1). "x" stands for any of them.
+    const cloned = (t) => Boolean(bashTargets.get(t)?.sources.has(DOWNLOADED));
+    const filled = (t) => (bashTargets.get(t)?.sources.size ?? 0) > 0;
+    const written = bashWrites.filter((t) => isWatched(t) || (filled(t) && isWatched(`${t}/x`)));
     const watched = [...written, ...write.targets.filter(isWatched)];
     if (watched.length === 0) emitVerdict(findings);
 
@@ -5785,12 +5923,41 @@ process.stdin.on("end", () => {
     // not in the command text, so the sources are read and judged the
     // way a Write of the result would be.
     let unjudgedTarget = null;
+    // The folders this command clones into: what a clone puts there is
+    // not what was on disk when the command was read.
+    const clonedFolders = bashWrites.filter((t) => cloned(t));
+    // A source that is a file's path brings nothing Guardian can read
+    // when the file is not on disk and no earlier stage of this command
+    // wrote it, or when it sits in a folder the command clones into
+    // (re-probe 9, K1): the file is put there by a program whose output
+    // is not known (git clone, an archive, a build), or the text does not
+    // spell its name out (a variable). Read as an empty file, it let
+    // `git clone URL tmp && cp tmp/CLAUDE.md CLAUDE.md` through. A glob
+    // stands for the files it matches. Nothing is read from a null device.
+    // find's {} is read once per file find matches (E5), and a folder
+    // the command put files under is judged by those files.
+    const fromClone = (s) => clonedFolders.some((folder) => s.startsWith(`${folder}/`));
+    const notOnDisk = (s) => {
+      if (/^(?:[A-Za-z]:)?\/dev\/(?:null|stdin|zero|tty|fd\/\d+)$/.test(s) || /(?:^|\/)nul$/i.test(s) || s.includes("{}")) return false;
+      if (SOURCE_GLOB.test(s) && !existsSync(s)) return globFiles(s) === null;
+      return !existsSync(s) && !bashTargets.has(s) && !bashWrites.some((t) => t.startsWith(`${s}/`));
+    };
     for (const target of written) {
       const { sources, append } = bashTargets.get(target);
       if (sources.size === 0) continue;
+      // An environment file is watched for what it holds, not loaded as
+      // instructions, and copying one from a name the text does not spell
+      // out is everyday work (cp .env.$ENV .env): a source that is not on
+      // disk, or that comes out of a clone (git clone URL app && cd app &&
+      // cp .env.example .env), does not make that copy ask. A download
+      // straight into it still does.
+      const instructions = !ENV_FILE.test(watchKey(target));
       // Also behind a line filter: curl URL | grep -v x > CLAUDE.md.
-      const unjudged = (s) => s.startsWith(UNJUDGED) ||
-        (s.startsWith("filter:") && shellRead.filters[Number(s.slice(7))].inputs.some(unjudged));
+      const unjudged = (s) => {
+        if (s.startsWith(UNJUDGED)) return true;
+        if (s.startsWith("filter:")) return shellRead.filters[Number(s.slice(7))].inputs.some(unjudged);
+        return instructions && !s.startsWith("patch:") && (fromClone(s) || notOnDisk(s));
+      };
       if ([...sources].some(unjudged)) unjudgedTarget ??= target;
       const sourceText = (s) => {
         if (s.startsWith("patch:")) return addedLines(readSource(s.slice(6)));
@@ -5799,6 +5966,7 @@ process.stdin.on("end", () => {
           const { inputs, apply } = shellRead.filters[Number(s.slice(7))];
           return apply(inputs.map(sourceText).join("\n").replace(/\r\n/g, "\n"));
         }
+        if (SOURCE_GLOB.test(s) && !existsSync(s)) return (globFiles(s) ?? []).map(readSource).join("\n");
         return readSource(s);
       };
       const incoming = [...sources].map(sourceText).join("\n");
@@ -5823,9 +5991,10 @@ process.stdin.on("end", () => {
     if (unjudgedTarget) {
       const target = unjudgedTarget;
       record(confirmOrDeny,
-        `${TAG} This command copies, links or downloads a folder or file into ${safeEchoPath(target, 120)}, which agents load as ` +
+        `${TAG} This command copies, links, downloads or clones a folder or file into ${safeEchoPath(target, 120)}, which agents load as ` +
         `instructions, and Guardian could not read all of it (more than ${MAX_TREE_FILES} files, a folder it cannot list, ` +
-        `a link to a file that is not there yet, or a download), so that content is not judged. ` +
+        `a link to a file that is not there yet, a download or a clone, or a source file that is not on disk when the ` +
+        `command is read), so that content is not judged. ` +
         `Approve only if you know what it holds.${bypassNote}`);
     }
 

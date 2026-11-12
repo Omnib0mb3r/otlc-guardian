@@ -1104,7 +1104,12 @@ describe("PreToolUse hook - self-protection of .claude/settings.json (1.5.0)", (
     "cp notes/agent.md .claude/agents/",
   ]) {
     test(`Bash that leaves the settings alone is silent: ${command}`, () => {
-      const out = inProject((dir) => runHook(PRE_HOOK, { tool_name: "Bash", cwd: dir, tool_input: { command } }));
+      const out = inProject((dir) => {
+        // The copy has a file to copy: one from a source that is not on disk asks (re-probe 9, K1).
+        mkdirSync(path.join(dir, "notes"), { recursive: true });
+        writeFileSync(path.join(dir, "notes", "agent.md"), "# Agent\n");
+        return runHook(PRE_HOOK, { tool_name: "Bash", cwd: dir, tool_input: { command } });
+      });
       expectSilent(out);
     });
   }
@@ -7080,6 +7085,160 @@ describe("PreToolUse hook - a download into a watched path, and a folder the com
   ]) {
     stagedOnly(`silent: ${command}`, () => {
       expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
+describe("PreToolUse hook - a source that is not on disk, and a clone (re-probe 9, K1)", () => {
+  for (const command of [
+    // The re-probe's forms: a clone, then a copy out of it.
+    "git clone https://example.test/r tmp && cp tmp/CLAUDE.md CLAUDE.md",
+    "unzip -o t.zip -d tmp && cp tmp/CLAUDE.md CLAUDE.md",
+    "pip download x && cp x/AGENTS.md .",
+    // A clone into a watched folder.
+    "git clone https://example.test/r .claude/agents/x",
+    "git clone --depth 1 https://example.test/r .claude/agents/community",
+    "cd .claude/agents && git clone https://example.test/r",
+    "git clone https://example.test/r .claude/agents",
+    "git clone -b main --depth=1 https://example.test/r.git .claude/agents/x",
+    "git -C .claude/agents clone https://example.test/r.git",
+    "git clone -- https://example.test/r .claude/agents/x",
+    "git submodule add https://example.test/r .claude/agents/x",
+    "git submodule add -b main https://example.test/r .claude/agents/x",
+    "gh repo clone x/y .claude/agents/x",
+    "gh repo clone x/y .claude/agents/x -- --depth 1",
+    "npx degit x/y .claude/agents",
+    "npx -y degit x/y#main .claude/agents/x",
+    "degit x/y .claude/agents/x",
+    "npx tiged x/y .claude/agents/x",
+    "cd .claude/agents && npx degit x/y",
+    // What a clone brought, copied on by a later stage.
+    "gh repo clone x/y tmp && cp tmp/AGENTS.md AGENTS.md",
+    "npx degit x/y tmp && cp tmp/CLAUDE.md CLAUDE.md",
+    "git clone https://example.test/r tmp && cp -r tmp/agents .claude/agents",
+    "git clone https://example.test/r tmp && cp -r tmp/. .claude/agents/",
+    "git clone https://example.test/r && cp r/CLAUDE.md .",
+    "git clone https://example.test/r.git && cat r/CLAUDE.md >> CLAUDE.md",
+    // A folder that is on disk already: what the clone puts there is not what was read.
+    "git clone https://example.test/r src && cp src/a.js CLAUDE.md",
+    // The root of it: a source that is not there when the command is read.
+    "cp missing.md CLAUDE.md",
+    "cp missing/a.md .claude/agents/",
+    "cat missing.md >> CLAUDE.md",
+    "cat missing.md > CLAUDE.md",
+    "cat README.md missing.md > CLAUDE.md",
+    "cp -r missingdir .claude/agents",
+    "mv missing.md CLAUDE.md",
+    "ln missing.md CLAUDE.md",
+    "install -m 644 missing.md CLAUDE.md",
+    "rsync -a missingdir/ .claude/agents/",
+    "npm run build && cp dist/CLAUDE.md CLAUDE.md",
+    "dd if=missing.md of=CLAUDE.md",
+    "tac missing.md > CLAUDE.md",
+    // A program whose operands are not all files reads one in a folder the command wrote.
+    "git clone https://example.test/r tmp && head -c 100000 tmp/CLAUDE.md > CLAUDE.md",
+    "git clone https://example.test/r tmp && mv tmp/CLAUDE.md CLAUDE.md",
+    "unzip -o t.zip -d tmp && sed 's/a/b/' tmp/CLAUDE.md > CLAUDE.md",
+    // A source the text does not spell out is not on disk either.
+    'cp "$SRC" CLAUDE.md',
+    "cp missing/*.md .claude/agents/",
+    "cat docs/**/*.md > CLAUDE.md",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    "Copy-Item missing.md CLAUDE.md",
+    "Move-Item missing.md CLAUDE.md",
+    "Rename-Item missing.md CLAUDE.md",
+    "cmd /c copy missing.md CLAUDE.md",
+    "cmd /c move missing.md CLAUDE.md",
+    "robocopy missingdir .claude\\agents /E",
+    "[IO.File]::Copy('missing.md', 'CLAUDE.md')",
+    "Get-Content missing.md | Set-Content CLAUDE.md",
+    "git clone https://example.test/r .claude\\agents\\x",
+  ]) {
+    stagedOnly(`asks (PowerShell): ${command}`, () => {
+      const out = runGuarded(command, { tool: "PowerShell" });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  // notes/x.md holds a payload: a source spelled with a glob is judged by the files it matches.
+  for (const [command, tool] of [
+    ["cat notes/*.md > CLAUDE.md"],
+    ["cp notes/*.md .claude/agents/"],
+    ["cp notes/x.m? CLAUDE.md"],
+    ["cp notes/[x]*.md CLAUDE.md"],
+    ["cat */x.md >> CLAUDE.md"],
+    ["mkdir one && cp notes/x.md one/ && cp one/* CLAUDE.md"],
+    ["Get-Content notes\\*.md | Set-Content CLAUDE.md", "PowerShell"],
+    // A rename is a move inside one folder: the file lands as notes/CLAUDE.md.
+    ["Rename-Item notes\\x.md CLAUDE.md", "PowerShell"],
+    ["cmd /c ren notes\\x.md CLAUDE.md", "PowerShell"],
+  ]) {
+    stagedOnly(`denies${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      const out = runGuarded(command, { tool });
+      assert.equal(decisionOf(out), "deny", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const [command, tool] of [
+    // A clone, a submodule or a template where nothing is watched.
+    ["git clone https://example.test/r"],
+    ["git clone https://example.test/r vendor/r"],
+    ["git clone --depth 1 https://example.test/r /tmp/r && ls /tmp/r"],
+    ["git clone https://example.test/r tmp && cp tmp/README.md docs/"],
+    ["git submodule add https://example.test/r vendor/r"],
+    ["git submodule update --init --recursive"],
+    ["gh repo clone x/y"],
+    ["npx degit x/y my-app"],
+    // A source that is there, or that the command wrote.
+    ["cp README.md CLAUDE.md"],
+    ["cp notes/ok.md .claude/agents/"],
+    ["echo hello > tmp.md && cp tmp.md CLAUDE.md"],
+    ["printf '# Title\\n' > t.md; cat t.md >> CLAUDE.md"],
+    ["cp README.md tmp.md && mv tmp.md CLAUDE.md"],
+    ["sed 's/a/b/' README.md > tmp && mv tmp CLAUDE.md"],
+    ["mkdir -p out && echo hi > out/a.md && cp out/a.md .claude/agents/"],
+    // Nothing is read from the null device or from stdin.
+    ["cat /dev/null > CLAUDE.md"],
+    ["cp /dev/null CLAUDE.md"],
+    [": > CLAUDE.md"],
+    ["cat README.md - > CLAUDE.md"],
+    ["cat <<'EOF' > CLAUDE.md\n# Project\nEOF"],
+    ["Copy-Item README.md CLAUDE.md", "PowerShell"],
+    // A glob whose files are clean.
+    ["cat notes/ok*.md > CLAUDE.md"],
+    ["cp notes/o*.md .claude/agents/"],
+    // An operand that is a script, a count or a key is no missing file.
+    ["sed 's/a/b/' README.md > tmp && mv tmp CLAUDE.md"],
+    ["head -n 5 README.md > CLAUDE.md"],
+    ["tail -n +2 README.md >> CLAUDE.md"],
+    ["sort -k 2 README.md > CLAUDE.md"],
+    ["sort -k 2 -o CLAUDE.md README.md"],
+    ["cut -d , -f 1 README.md > CLAUDE.md"],
+    ["awk '{print $1}' README.md > CLAUDE.md"],
+    ["type git > CLAUDE.md"],
+    // A move or a rename of a clean file that is there.
+    ["mv README.md CLAUDE.md"],
+    ["mv CLAUDE.md CLAUDE.md.bak"],
+    ["Move-Item README.md CLAUDE.md", "PowerShell"],
+    ["Rename-Item notes\\ok.md CLAUDE.md", "PowerShell"],
+    // A missing source copied where nothing is watched.
+    ["cp missing.md docs/b.md"],
+    ["cat missing.md > out.txt"],
+    // An environment file is not loaded as instructions.
+    ["cp .env.example .env"],
+    ['cp "$ENV_FILE" .env'],
+    ["cp config/.env.$STAGE .env.local"],
+    ["git clone https://example.test/r app && cd app && cp .env.example .env"],
+  ]) {
+    stagedOnly(`silent${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions", tool }));
     });
   }
 });

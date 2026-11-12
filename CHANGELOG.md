@@ -233,6 +233,16 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A copy from a file that is not on disk asks, and a clone is a
+  download (BUG-066, re-probe 9 K1).** `git clone URL tmp && cp
+  tmp/CLAUDE.md CLAUDE.md`, `git clone URL .claude/agents/x`, `gh repo
+  clone`, `npx degit` and `cp missing.md CLAUDE.md` were silent: a
+  source that is not there when the command is read was judged as an
+  empty file. A copy, link or move into a watched path from such a
+  source now asks, and so does a clone into a watched folder. A source
+  spelled with a glob is judged by the files it matches (`cat
+  notes/*.md > CLAUDE.md`), and a rename is read as a move.
+
 - **A download into a watched path asks, and a folder the command
   filled is read (BUG-066, re-probe 8 cost ruling).** `curl -o
   CLAUDE.md URL`, `curl -O https://example.test/CLAUDE.md` and `curl
