@@ -439,6 +439,8 @@ function readSource(absPath) {
 const MAX_TREE_FILES = 1000;
 // A source marker: this folder's files were not all read.
 const UNJUDGED = "unjudged:";
+// The same for what a download brings, which cannot be read before it lands.
+const DOWNLOADED = `${UNJUDGED}download`;
 function treeFiles(absDir, deep, quiet = false) {
   if (!statSync(absDir, { throwIfNoEntry: false })?.isDirectory()) return null;
   const files = [];
@@ -483,14 +485,19 @@ function addCopy(dir, ctx, src, dest, { intoDir, recursive, slashMeansContents }
   const inside = /^(.*?)\/(\.|\*)$/.exec(spelled);
   const contents = Boolean(inside) || (slashMeansContents && /\/$/.test(spelled));
   const folder = inside ? inside[1] || "." : spelled.replace(/\/+$/, "") || "/";
-  const tree = recursive || inside?.[2] === "*" ? treeFiles(abs(dir, folder), recursive) : null;
-  if (tree === null) {
+  const whole = recursive || inside?.[2] === "*";
+  const tree = whole ? treeFiles(abs(dir, folder), recursive) : null;
+  // What this command put in the folder earlier is part of what the
+  // folder holds, on disk yet or not (re-probe 8, the cost ruling on a
+  // filled folder): cp -r notes evil && cp -r evil .claude/agents.
+  const filled = whole ? ctx.under(abs(dir, folder)).filter((rel) => recursive || !rel.includes("/")) : [];
+  if (tree === null && filled.length === 0) {
     add(dir, intoDir ? `${dest}/${path.posix.basename(spelled)}` : dest, [abs(dir, src)]);
     return;
   }
   const base = contents || !intoDir ? dest : `${dest}/${path.posix.basename(folder)}`;
-  add(dir, base, tree.unjudged ? [`${UNJUDGED}${abs(dir, folder)}`] : []);
-  for (const rel of tree) add(dir, `${base}/${rel}`, [abs(dir, `${folder}/${rel}`)]);
+  add(dir, base, tree?.unjudged ? [`${UNJUDGED}${abs(dir, folder)}`] : []);
+  for (const rel of new Set([...(tree ?? []), ...filled])) add(dir, `${base}/${rel}`, [abs(dir, `${folder}/${rel}`)]);
 }
 
 /**
@@ -4177,7 +4184,9 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
   const filter = (inputs, apply) => `filter:${found.filters.push({ inputs, apply }) - 1}`;
   /** Whether a file is there: on disk, or written earlier in this command. */
   const present = (file) => existsSync(file) || targets.has(file);
-  const ctx = { add, abs, recurse, present, dialect, decoded: found.decoded, quiet: [], filter, root: found.root };
+  /** The files this command has written under a folder so far, each as its path inside the folder. */
+  const under = (folder) => [...targets.keys()].filter((key) => key.startsWith(`${folder}/`)).map((key) => key.slice(folder.length + 1));
+  const ctx = { add, abs, recurse, present, under, dialect, decoded: found.decoded, quiet: [], filter, root: found.root };
 
   const { tokens, subs, heredocs, uncertain } = lexShell(command, dialect);
   if (uncertain) found.uncertain = true;
@@ -4386,6 +4395,7 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   // else is an external program (git, bash, node, curl) and is read the
   // same way whichever shell runs it (BUG-048).
   if (ctx.dialect === "powershell" && (powershellWrites(name, args, dir, ctx, stdin) || PS_CONTENT_PASSERS.has(name))) {
+    if (PS_DOWNLOADERS.has(name)) return { dir, out: [...out, DOWNLOADED] };
     return { dir, out: PS_CONTENT_PASSERS.has(name) ? [...out, ...psPaths(args, name, ["path", "literalpath"], 0).map((p) => abs(dir, p))] : out };
   }
   if (ctx.dialect === "cmd" && cmdWrites(name, operands, dir, ctx)) return { dir, out };
@@ -4546,12 +4556,41 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     // curl -o FILE and wget -O FILE, alone or in a cluster (-sSLo FILE),
     // with the file stuck to the letter (-oFILE; G7) or after "=". The
     // long option may be cut short (--out FILE, --output-doc=FILE; H9).
+    // What a download brings cannot be read before it lands, so it is a
+    // source that is not judged, and a watched file it lands in is
+    // confirmed by a person (re-probe 8, the cost ruling on downloads).
     const short = name === "curl" ? /^-[a-zA-Z]*?o(.*)$/ : /^-[a-zA-Z]*?O(.*)$/;
+    let named = false;
+    let toStdout = name === "curl";
+    let folder = ".";
     args.forEach((a, k) => {
       const long = longOption(a, name === "curl" ? "--output" : "--output-document");
       const file = long ? long.value || args[k + 1] : short.exec(a) && (short.exec(a)[1] || args[k + 1]);
-      if (file) add(dir, file);
+      if (file) {
+        add(dir, file, [DOWNLOADED]);
+        named = true;
+        if (file === "-") toStdout = true;
+      }
+      // wget -P DIR and curl --output-dir DIR say where a file named
+      // after its URL goes.
+      const into = name === "wget" ? longOption(a, "--directory-prefix") : longOption(a, "--output-dir");
+      const stuck = name === "wget" ? /^-P(.*)$/.exec(a) : null;
+      if (into) folder = into.value || args[k + 1] || folder;
+      else if (stuck) folder = stuck[1] || args[k + 1] || folder;
     });
+    // curl -O and --remote-name, and wget with no -O, name the file
+    // after the last segment of each URL. Which word is a URL is not
+    // known for every option, so every word that is no option counts.
+    const remote = name === "wget" ? !named : args.some((a) => /^-[a-zA-Z]*O/.test(a) || /^--remote-name/.test(a));
+    if (remote) {
+      for (const a of args) {
+        if (a.startsWith("-")) continue;
+        const last = a.replace(/[?#].*$/, "").replace(/\/+$/, "").split("/").pop()
+          .replace(/%([0-9A-Fa-f]{2})/g, (m, hex) => String.fromCharCode(parseInt(hex, 16)));
+        if (last) add(dir, `${folder}/${last}`, [DOWNLOADED]);
+      }
+    }
+    return { dir, out: toStdout ? [...out, DOWNLOADED] : out };
   } else if (!READ_ONLY_COMMANDS.has(name) && !TEXT_SAYERS.has(name)) {
     // No reader knows the program, so it may be one that starts another
     // (re-probe 7, cost (c)).
@@ -4881,7 +4920,7 @@ function powershellWrites(name, args, dir, ctx, stdin) {
   const { add, abs } = ctx;
   const { named, positional } = psParse(args, name);
   if (PS_DOWNLOADERS.has(name)) {
-    for (const p of named.get("outfile") ?? []) add(dir, p);
+    for (const p of named.get("outfile") ?? []) add(dir, p, [DOWNLOADED]);
     // In PowerShell 7 curl and wget are the real programs, not aliases,
     // so their -o and -O forms are read by the shared reader as well.
     return name !== "curl" && name !== "wget";
@@ -5749,7 +5788,10 @@ process.stdin.on("end", () => {
     for (const target of written) {
       const { sources, append } = bashTargets.get(target);
       if (sources.size === 0) continue;
-      if ([...sources].some((s) => s.startsWith(UNJUDGED))) unjudgedTarget ??= target;
+      // Also behind a line filter: curl URL | grep -v x > CLAUDE.md.
+      const unjudged = (s) => s.startsWith(UNJUDGED) ||
+        (s.startsWith("filter:") && shellRead.filters[Number(s.slice(7))].inputs.some(unjudged));
+      if ([...sources].some(unjudged)) unjudgedTarget ??= target;
       const sourceText = (s) => {
         if (s.startsWith("patch:")) return addedLines(readSource(s.slice(6)));
         if (s.startsWith(UNJUDGED)) return "";
@@ -5781,9 +5823,9 @@ process.stdin.on("end", () => {
     if (unjudgedTarget) {
       const target = unjudgedTarget;
       record(confirmOrDeny,
-        `${TAG} This command copies or links a folder or file into ${safeEchoPath(target, 120)}, which agents load as ` +
+        `${TAG} This command copies, links or downloads a folder or file into ${safeEchoPath(target, 120)}, which agents load as ` +
         `instructions, and Guardian could not read all of it (more than ${MAX_TREE_FILES} files, a folder it cannot list, ` +
-        `or a link to a file that is not there yet), so that content is not judged. ` +
+        `a link to a file that is not there yet, or a download), so that content is not judged. ` +
         `Approve only if you know what it holds.${bypassNote}`);
     }
 

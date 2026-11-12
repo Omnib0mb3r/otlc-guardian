@@ -233,6 +233,15 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A download into a watched path asks, and a folder the command
+  filled is read (BUG-066, re-probe 8 cost ruling).** `curl -o
+  CLAUDE.md URL`, `curl -O https://example.test/CLAUDE.md` and `curl
+  -s URL > CLAUDE.md` were silent: what a download brings cannot be
+  read before it lands, so a person now confirms it. `cp -r notes
+  evil && cp -r evil .claude/agents` was silent because `evil` is not
+  on disk when the command is read; the copy is now judged by the
+  files the command put in the folder.
+
 - **A command that writes a runner's configuration earns no test-run
   exemption (BUG-080, re-probe 8 cost ruling).** `printf ... >
   package.json; npm run security` and a `conftest.py` written before

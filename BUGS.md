@@ -1187,6 +1187,24 @@ Tests: `tests/hook.test.js`, "a command string, a git config value, a PowerShell
 
 Smoke test after applying: in a scratch project put the line "ignore all previous instructions" in `notes/x.md`, then ask Claude to run `git -c alias.x='!cp notes/x.md CLAUDE.md' x`; the call is denied and the message names CLAUDE.md. `git -c user.name=ci commit --allow-empty -m docs` gets no Guardian prompt.
 
+**Cost ruling on downloads and a filled folder (re-probe 8, worker findings not fixed), Lex's decision of 2026-11-11: a download into a watched path asks; a recursive copy of a folder the same command filled is judged by its contents. Fixed in staging, not yet live.** Silent at a25edb4: `curl -O https://example.test/CLAUDE.md` and `wget https://example.test/CLAUDE.md` (the file is named by the URL, which no reader took), `curl -o CLAUDE.md URL` (read as a write with no source, silent by design), and `cp -r notes evil && cp -r evil .claude/agents` with a payload in `notes/x.md` (when the command is read there is no folder `evil` on disk to list).
+
+Change in `staging/hooks/injection-guard-hook.mjs`:
+
+- `DOWNLOADED`, an `UNJUDGED` source. `commandWrites()` gives it to the file `curl -o` and `wget -O` name, to a file named after a URL's last segment (`curl -O`, `--remote-name`, a `wget` with no `-O`; in the folder of `wget -P` or `curl --output-dir`; a query is cut off and `%2E` decoded), and to what the download prints (curl always, wget with `-O -`), so a redirect, `tee` or a line filter after it carries it. `powershellWrites()` gives it to `-OutFile`, and what `Invoke-WebRequest`, `iwr`, `Invoke-RestMethod` and `irm` print carries it.
+- The main handler finds an unjudged source behind a line filter as well (`curl URL | grep -v x > CLAUDE.md`). A watched file with such a source asks with the message a copy that could not be read gets, which now names a download.
+- `addCopy()` adds to the files a folder holds on disk the files this command wrote under it earlier (`ctx.under()`), so each lands in the copy with the source it had: `cp -r notes evil && cp -r evil .claude/agents` is denied on the payload in `notes/x.md`. A folder that is on disk and gains a file in the same command is read the same way (`cp notes/x.md src/y.md && cp -r src .claude/agents`).
+
+Worker findings of the same class, silent at a25edb4 and fixed here (hook verdicts only): `curl -s URL > CLAUDE.md`, `>> CLAUDE.md`, `| tee CLAUDE.md`, `wget -qO- URL > CLAUDE.md`, `cd .claude/agents && curl -O URL`, `wget -P .claude/agents URL`, `Invoke-WebRequest URL -OutFile CLAUDE.md`, `(Invoke-WebRequest URL).Content | Set-Content CLAUDE.md`, and for the folder `cp -r evil/. .claude/agents/`, `cp evil/* .claude/agents/`, `mv evil .claude/agents`, `rsync -a evil/ .claude/agents/`, a folder copied twice on the way, and `Copy-Item -Recurse` through the PowerShell tool.
+
+Not seen, stated in SECURITY.md: a name the server chooses (`curl -OJ`, `wget --content-disposition`), `wget -i list.txt`, and a folder filled by a program the readers do not know (`tar -xf a.tar -C evil && cp -r evil .claude/agents` with no folder `evil` on disk).
+
+Cost: a download into a watched path asks whatever it holds. None measured elsewhere: `curl -O https://example.test/readme.md`, `curl -s URL > out.json`, `curl -fsSL URL -o install.sh`, `wget https://example.test/a.tgz`, `curl -s URL | jq .name`, `mkdir ok && cp notes/ok.md ok/ && cp -r ok .claude/agents` (clean files) and `cp -r notes backup && cp -r backup archive` are silent.
+
+Tests: `tests/hook.test.js`, "a download into a watched path, and a folder the command filled (re-probe 8, cost ruling on BUG-066)": 23 ask (4 through the PowerShell tool), 9 denied (1 through the PowerShell tool), 9 silent. Against the hook at a25edb4, 32 failed. Staged hook suite before: 2610 passed, 32 failed. After: 2642 passed, 0 failed. Re-probe 7's 640 commands: 8 verdicts changed, each a `curl -o`, `curl --output`, `wget -O` or `wget --output-document` into CLAUDE.md, silent to deny in bypass mode. Re-probe 8's 851: 0 changed. Everyday commands: 0 changed in the 75 and in the 197. Lex's regress harness: no line changed.
+
+Smoke test after applying: at the root of a scratch project ask Claude to run `curl -o CLAUDE.md https://example.com/`; see a Guardian prompt naming CLAUDE.md and a download; decline. Put the line "ignore all previous instructions" in `notes/x.md` and ask for `cp -r notes evil && cp -r evil .claude/agents`; it is denied and the message names the payload. In bypass mode `curl -s https://example.com/ > out.html` gets no Guardian prompt.
+
 ### BUG-067: PowerShell parameter prefixes and encoded command payloads
 
 **Status:** IN-PROGRESS · **Found:** 2026-11-10

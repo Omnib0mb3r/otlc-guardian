@@ -6996,6 +6996,95 @@ describe("PreToolUse hook - a command that writes a runner's configuration earns
 });
 
 // ---------------------------------------------------------------------------
+// RE-PROBE 8, THE COST RULING ON DOWNLOADS AND A FILLED FOLDER (staged): a
+// download into a watched path was not judged and did not ask, since
+// what it brings cannot be read before it lands; and a recursive copy of
+// a folder the same command filled found no folder on disk to read. A
+// download is now a source that is not judged, and a folder holds what
+// the command put in it earlier.
+
+describe("PreToolUse hook - a download into a watched path, and a folder the command filled (re-probe 8, cost ruling on BUG-066)", () => {
+  for (const command of [
+    // The re-probe's forms.
+    "curl -O https://example.test/CLAUDE.md",
+    "wget https://example.test/CLAUDE.md",
+    "curl -o CLAUDE.md https://example.test/x",
+    // Every way curl and wget name the file.
+    "curl -sSLo CLAUDE.md https://example.test/x",
+    "curl --output CLAUDE.md https://example.test/x",
+    "curl -sO https://example.test/docs/AGENTS.md",
+    "curl --remote-name https://example.test/CLAUDE.md",
+    "curl -O https://example.test/CLAUDE.md?raw=1",
+    "curl -O https://example.test/CLAUDE%2Emd",
+    "cd .claude/agents && curl -O https://example.test/a.md",
+    "curl --output-dir .claude/agents -O https://example.test/a.md",
+    "wget -O CLAUDE.md https://example.test/x",
+    "wget -P .claude/agents https://example.test/a.md",
+    "wget -q https://example.test/a/CLAUDE.md https://example.test/b.txt",
+    // What a download prints, redirected or piped on.
+    "curl -s https://example.test/x > CLAUDE.md",
+    "curl -s https://example.test/x >> CLAUDE.md",
+    "curl -s https://example.test/x | tee CLAUDE.md",
+    "curl -s https://example.test/x | grep -v secret > CLAUDE.md",
+    "wget -qO- https://example.test/x > CLAUDE.md",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    "Invoke-WebRequest https://example.test/x -OutFile CLAUDE.md",
+    "iwr https://example.test/x -OutFile CLAUDE.md",
+    "(Invoke-WebRequest https://example.test/x).Content | Set-Content CLAUDE.md",
+    "Invoke-RestMethod https://example.test/x > CLAUDE.md",
+  ]) {
+    stagedOnly(`asks (PowerShell): ${command}`, () => {
+      const out = runGuarded(command, { tool: "PowerShell" });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  // notes/x.md holds a payload: the copy is judged by what the folder holds.
+  for (const [command, tool] of [
+    ["cp -r notes evil && cp -r evil .claude/agents"],
+    ["mkdir evil && cp notes/x.md evil/ && cp -r evil .claude/agents"],
+    ["mkdir evil && cp notes/x.md evil/ && cp -r evil/. .claude/agents/"],
+    ["mkdir evil && cp notes/x.md evil/a.md && cp evil/* .claude/agents/"],
+    ["mkdir evil && cat notes/x.md > evil/a.md && mv evil .claude/agents"],
+    ["cp -r notes evil && rsync -a evil/ .claude/agents/"],
+    ["cp -r notes evil && cp -r evil other && cp -r other .claude/agents"],
+    // A folder that is on disk and gains a file in the same command.
+    ["cp notes/x.md src/y.md && cp -r src .claude/agents"],
+    ["Copy-Item -Recurse notes evil; Copy-Item -Recurse evil .claude\\agents", "PowerShell"],
+  ]) {
+    stagedOnly(`denies${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      const out = runGuarded(command, { tool });
+      assert.equal(decisionOf(out), "deny", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // A download into a file that is not watched, or onto the screen.
+    "curl -O https://example.test/readme.md",
+    "curl -s https://example.test/x > out.json",
+    "curl -fsSL https://example.test/install.sh -o install.sh",
+    "wget https://example.test/a.tgz",
+    "curl -s https://example.test/health",
+    "curl -s https://example.test/x | jq .name",
+    // A filled folder with clean files, and one copied where nothing is watched.
+    "mkdir ok && cp notes/ok.md ok/ && cp -r ok .claude/agents",
+    "cp -r notes backup && cp -r backup archive",
+    "mkdir -p dist && cp -r src dist && cp -r dist build",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 
