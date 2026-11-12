@@ -29,6 +29,7 @@ import { INJECTION_PATTERNS } from "../01-injection-guard.js";
 import { Budget, LimitError } from "./limits.js";
 import { FormatError, UsageError } from "./errors.js";
 import { detectType, checkType, extOf } from "./checks/type.js";
+import { checkExecutable } from "./checks/executable.js";
 
 export { UsageError };
 
@@ -75,6 +76,11 @@ const SEVERITY_RANK = { info: 0, hold: 1, block: 2 };
  *  before the type check compares names with it. */
 const PIPELINE = [
   (ctx, buf, node) => ctx.run("type", node, () => checkType(ctx, node)),
+  (ctx, buf, node) => {
+    // A mail body is never executed (contract v1): reported skipped.
+    if (ctx.isMailBody && node.top) return ctx.skip("executable");
+    ctx.run("executable", node, () => checkExecutable(ctx, node));
+  },
 ];
 
 export class Inspection {

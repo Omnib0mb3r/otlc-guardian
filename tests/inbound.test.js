@@ -286,6 +286,53 @@ describe("Check 1 - real type from the bytes", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// CHECK 2 - EXECUTABLES AND SCRIPTS
+// ---------------------------------------------------------------------------
+
+describe("Check 2 - executables and scripts", () => {
+  const programs = [
+    [fx.pe(), "setup.exe", "pe"], [fx.elf(), "tool", "elf"], [fx.lnk(), "shortcut.lnk", "lnk"],
+    [fx.javaClass(), "Main.class", "java-class"], [Buffer.from("#!/bin/sh\nrm -rf /tmp/x\n"), "run.sh", "shebang-script"],
+  ];
+  for (const [buf, name, type] of programs) {
+    test(`fail: ${type} bytes block (executable)`, () => {
+      const r = judge(buf, name);
+      assert.match(hasReason(r, "executable", "block").detail, new RegExp(type));
+      assert.equal(r.checks.executable, "block");
+      assert.equal(r.verdict, "block");
+    });
+  }
+
+  for (const ext of ["bat", "cmd", "ps1", "vbs", "js", "jse", "wsf", "hta", "scr", "com", "jar", "reg", "url"]) {
+    test(`fail: a .${ext} name blocks even when the bytes are text (executable-name)`, () => {
+      const r = judge(Buffer.from("echo hello\n"), `tool.${ext}`);
+      hasReason(r, "executable-name", "block");
+      assert.equal(r.checks.executable, "block");
+    });
+  }
+
+  test("fail: an original name ending in .exe blocks though the saved name does not", () => {
+    const r = judge(Buffer.from("plain text\n"), "a01-report.bin", { original_name: "report.pdf.exe" });
+    assert.match(hasReason(r, "executable-name", "block").detail, /original name/);
+  });
+
+  test("pass: a text file and a PNG are not executables", () => {
+    for (const [buf, name] of [[Buffer.from("notes\n"), "notes.txt"], [fx.png(), "a.png"]]) {
+      const r = judge(buf, name);
+      assert.equal(r.checks.executable, "pass");
+      lacks(r, "executable");
+      lacks(r, "executable-name");
+    }
+  });
+
+  test("pass: a mail body reports the executable check skipped, not held", () => {
+    const r = judge(Buffer.from("Hello Michael,\nsee you Tuesday.\n"), "body.txt", { source: "mail-body" });
+    assert.equal(r.checks.executable, "skipped");
+    assert.ok(!r.reasons.some((x) => x.code === "check-not-run" && /executable/.test(x.detail)));
+  });
+});
+
 describe("Limits - input size", () => {
   test("fail: over the input limit holds, unread, with the real sha256", () => {
     const buf = Buffer.from("0123456789abcdef");
