@@ -17,8 +17,16 @@
 // Text longer than scan()'s one-million-character cap is read in
 // overlapping windows, so nothing is left unscanned.
 //
-// Every rule hit holds, with the rule id and the matched text, except
-// GUARD-INJ-UNICODE, which is mapped by character (Lex, 2026-11-12):
+// A rule hit holds, with the rule id and the matched text. Two things
+// are mapped here, on the one rule list (Lex, 2026-11-12):
+//
+// Weak rules. A few rules match ordinary engineering prose as often
+// as an attack (WEAK_RULES below, each with its reason). One of them
+// as the only hit in a text is reported as info and does not hold.
+// With a second, different hit in the same text it holds like any
+// other, and every other rule holds on its own.
+//
+// GUARD-INJ-UNICODE, mapped by character:
 //
 //   hold: characters used to smuggle text: Unicode tag characters
 //         (U+E0000 to U+E007F), bidi overrides and isolates (U+202A to
@@ -41,11 +49,24 @@ import { decodeText, printableRuns } from "../readers/text.js";
 import { xmlText, readMarkup } from "../readers/markup.js";
 import { imageTexts } from "../readers/image.js";
 import { pdfTexts } from "../readers/pdf-text.js";
+import { stlHeader } from "../readers/cad.js";
+import { PLAIN_TEXT_TYPES } from "./type.js";
 
 export const WINDOW = 1_000_000;
 export const OVERLAP = 2_048;
 const MATCH_MAX = 80;
 const META_FIELDS = ["subject", "from", "original_name"];
+
+/**
+ * Rules that are info when they are the only hit in a text, and why.
+ * Evidence: the real-sample run of 2026-11-12 over engineering
+ * documents, where each of these held a document no one attacked.
+ */
+export const WEAK_RULES = Object.freeze({
+  "GUARD-INJ-011": '"simulate a ..." is how engineers write about test runs (simulate a jam, simulate the load)',
+  "GUARD-INJ-015": "<user> and <system> are placeholders in manuals, command syntax and configuration notes",
+  "GUARD-INJ-028": "a file glob such as src/*.py followed later by */ reads as a comment holding a control word",
+});
 
 // Office XML: words are split across runs, so only these elements
 // separate them.
@@ -76,10 +97,11 @@ export function checkInjection(ctx, buf, node) {
 function textsOf(ctx, buf, node) {
   const tick = () => ctx.budget.tick();
   const type = node.type;
-  if (type === "text") {
+  if (PLAIN_TEXT_TYPES.has(type)) {
     const decoded = decodeText(buf);
     return decoded ? [{ label: "text", text: decoded.text }] : [];
   }
+  if (type === "stl-binary") return [{ label: "STL header", text: printableRuns(stlHeader(buf)).join("\n") }];
   if (type === "xml") return xmlTexts(decodeText(buf)?.text ?? "", "", { tick });
   if (type === "html" || type === "svg") return markupTexts(ctx, node, decodeText(buf)?.text ?? "");
   if (OFFICE_DOCUMENTS.has(type) && node.parts) return officeTexts(ctx, node);
@@ -176,6 +198,8 @@ function scanText(ctx, node, label, text) {
   if (!text || !text.trim()) return;
   const where = node.part ? `${node.part} > ${label}` : label;
   let unicodeRule = false;
+  // Rule id to what it matched, once per rule and match however many windows repeat it.
+  const hits = new Map();
   for (const window of windows(text)) {
     ctx.budget.tick();
     for (const v of scan(window, "injection").violations) {
@@ -183,10 +207,24 @@ function scanText(ctx, node, label, text) {
         unicodeRule = true;
         continue;
       }
-      ctx.report("injection", "hold", "prompt-injection", `${v.id} in ${where}: "${clipMatch(v.matched)}"`, node);
+      const matched = clipMatch(v.matched);
+      if (!hits.has(v.id)) hits.set(v.id, new Set());
+      hits.get(v.id).add(matched);
     }
   }
   const invisible = classifyInvisible(text);
+  const distinct = hits.size + (invisible.smuggling.length ? 1 : 0);
+  for (const [id, matches] of hits) {
+    const alone = distinct === 1 && Object.hasOwn(WEAK_RULES, id);
+    for (const matched of matches) {
+      if (alone) {
+        ctx.report("injection", "info", "prompt-injection-weak",
+          `${id} in ${where}: "${matched}"; the only hit in this text, and a weak rule on its own is not held`, node);
+      } else {
+        ctx.report("injection", "hold", "prompt-injection", `${id} in ${where}: "${matched}"`, node);
+      }
+    }
+  }
   for (const what of invisible.smuggling) {
     ctx.report("injection", "hold", "prompt-injection", `GUARD-INJ-UNICODE in ${where}: ${what}`, node);
   }

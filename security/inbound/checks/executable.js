@@ -14,6 +14,13 @@
 //     a shell runs as a program or script, whatever the bytes are:
 //     a .ps1 or .js is text, and it still runs on a double-click.
 //
+// One extension has two meanings, and the bytes decide (Lex,
+// 2026-11-12): .scr is a Windows screensaver, which is a program,
+// and it is also an AutoCAD script, which is plain text. A .scr that
+// is a program blocks like any other. A .scr whose bytes are plain
+// text holds as autocad-script: Windows cannot run it, but AutoCAD
+// runs its commands when someone loads it, so it is never clean.
+//
 // Not run on a mail body (contract v1): a body is never executed.
 // ============================================================
 
@@ -31,6 +38,8 @@ export const EXECUTABLE_EXTENSIONS = new Set([
   // Java, Android and Unix shells
   "jar", "class", "apk", "dex", "sh", "bash", "zsh", "csh", "ksh", "command",
 ]);
+
+const AUTOCAD_SCRIPT_EXTENSION = "scr";
 
 const DESCRIPTION = {
   pe: "a Windows program (PE)",
@@ -63,7 +72,10 @@ export function checkExecutable(ctx, node) {
   if (node.top && ctx.meta.original_name) names.push({ name: ctx.meta.original_name, label: "original name" });
   for (const { name, label } of names) {
     const ext = extOf(name);
-    if (EXECUTABLE_EXTENSIONS.has(ext)) {
+    if (ext === AUTOCAD_SCRIPT_EXTENSION && node.type === "text") {
+      ctx.report("executable", "hold", "autocad-script",
+        `${label} ends in .${ext} and the bytes are plain text: an AutoCAD script, which runs its commands when loaded`, node);
+    } else if (EXECUTABLE_EXTENSIONS.has(ext)) {
       ctx.report("executable", "block", "executable-name", `${label} ends in .${ext}, which runs as a program or script`, node);
     }
   }

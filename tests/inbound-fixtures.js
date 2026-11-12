@@ -446,6 +446,57 @@ export function pdfObjectStream(pairs) {
 // ANTIVIRUS RUNNERS (mocked; the real one is opt-in)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// CAD exchange files
+// ---------------------------------------------------------------------------
+
+const FACETS = [
+  [[0, 0, -1], [0, 0, 0], [0, 10, 0], [10, 0, 0]],
+  [[0, -1, 0], [0, 0, 0], [10, 0, 0], [0, 0, 10]],
+  [[-1, 0, 0], [0, 0, 0], [0, 0, 10], [0, 10, 0]],
+  [[0.577, 0.577, 0.577], [10, 0, 0], [0, 10, 0], [0, 0, 10]],
+];
+
+/** An ASCII STL of one tetrahedron. `name` is free text after "solid". */
+export function stlAscii(name = "guardian-fixture") {
+  const facets = FACETS.map(([n, ...vertices]) =>
+    `  facet normal ${n.join(" ")}\n    outer loop\n${vertices.map((v) => `      vertex ${v.join(" ")}\n`).join("")}    endloop\n  endfacet\n`).join("");
+  return Buffer.from(`solid ${name}\n${facets}endsolid ${name}\n`);
+}
+
+/** A binary STL of one tetrahedron. `header` is the free text of its 80-byte header. */
+export function stlBinary(header = "Guardian-made binary STL") {
+  const buf = Buffer.alloc(84 + 50 * FACETS.length);
+  buf.write(header.slice(0, 80), 0, "latin1");
+  buf.writeUInt32LE(FACETS.length, 80);
+  FACETS.forEach((facet, i) => facet.flat().forEach((value, j) => buf.writeFloatLE(value, 84 + 50 * i + 4 * j)));
+  return buf;
+}
+
+/** A STEP (ISO 10303-21) file holding one point. `description` is free text in its header. */
+export function step(description = "Guardian-made STEP file") {
+  return Buffer.from([
+    "ISO-10303-21;", "HEADER;", `FILE_DESCRIPTION(('${description}'),'2;1');`,
+    "FILE_NAME('fixture.step','2026-11-12T00:00:00',('OTLC Guardian'),(''),'','','');",
+    "FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));", "ENDSEC;", "DATA;",
+    "#1=CARTESIAN_POINT('',(0.,0.,0.));", "ENDSEC;", "END-ISO-10303-21;", "",
+  ].join("\n"));
+}
+
+/** An IGES file in the fixed 80-column format. `start` is the free text of its start section. */
+export function iges(start = "Guardian-made IGES file") {
+  const line = (text, section, n) => `${text.padEnd(72).slice(0, 72)}${section}${String(n).padStart(7)}`;
+  return Buffer.from([
+    line(start, "S", 1),
+    line("1H,,1H;,7Hfixture,11Hfixture.igs,8HGuardian,3H1.5,32,38,6,308,15,,1.,2,2HMM,1,", "G", 1),
+    line("0.01,15H20261112.000000,0.001,100.,,,11,0,15H20261112.000000;", "G", 2),
+    line("     116       1       0       0       0       0       0       000000000", "D", 1),
+    line("     116       0       0       1       0                               0", "D", 2),
+    line("116,0.,0.,0.,0;", "P", 1),
+    line("S      1G      2D      2P      1", "T", 1), "",
+  ].join("\n"));
+}
+
 export const avClean = () => ({ engine: "mock engine", status: "clean", detail: "no threats (mock)" });
 export const avThreat = () => ({ engine: "mock engine", status: "threat", detail: "Virus:DOS/EICAR_Test_File (mock)" });
 export const avUnavailable = () => ({ engine: null, status: "unavailable", detail: "no engine (mock)" });

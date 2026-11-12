@@ -14,9 +14,14 @@
 //   - bytes of no known format hold: what is not read is not
 //     judged, so it is never clean. Archives Guardian cannot open
 //     are held by the archive check.
+//
+// CAD model files (STEP, IGES, STL) have no magic number; they are
+// known by their structure (readers/cad.js). DWG is known by its
+// version tag, and an ASCII DXF is plain text.
 // ============================================================
 
 import { decodeText } from "../readers/text.js";
+import { cadTextType, isBinaryStl } from "../readers/cad.js";
 
 const at = (buf, offset, bytes) =>
   buf.length >= offset + bytes.length && bytes.every((b, i) => buf[offset + i] === b);
@@ -41,8 +46,10 @@ export const FAMILY = Object.freeze({
   png: "image", jpeg: "image", gif: "image", webp: "image", bmp: "image",
   tiff: "image", ico: "image", heic: "image",
   mp4: "media", mp3: "media", wav: "media", avi: "media", ogg: "media", flac: "media",
-  dwg: "cad", "dxf-binary": "cad",
+  dwg: "cad", "dxf-binary": "cad", "stl-binary": "cad",
   text: "text", html: "text", svg: "text", xml: "text",
+  // Text built as a CAD exchange file. Read as text like any other.
+  step: "text", iges: "text", "stl-ascii": "text",
   empty: "empty", unknown: "unknown",
 });
 
@@ -114,8 +121,13 @@ export function detectType(buf) {
   if (/^AC1\d{3}/.test(buf.subarray(0, 6).toString("latin1"))) return "dwg";
   if (ascii(buf, 0, "AutoCAD Binary DXF")) return "dxf-binary";
 
-  return decodeText(buf) ? textType(buf) : "unknown";
+  const decoded = decodeText(buf);
+  if (decoded) return cadTextType(decoded.text) ?? textType(buf);
+  return isBinaryStl(buf) ? "stl-binary" : "unknown";
 }
+
+/** Types whose bytes are plain text, read whole by the prompt-injection check. */
+export const PLAIN_TEXT_TYPES = new Set(["text", "step", "iges", "stl-ascii"]);
 
 /** Splits text into plain text, HTML, SVG and other XML by its opening. */
 function textType(buf) {
@@ -152,13 +164,15 @@ const EXPECTED = {
   ppt: ["cfb-powerpoint"], pps: ["cfb-powerpoint"], rtf: ["rtf"],
   txt: TEXT_LIKE, text: TEXT_LIKE, log: TEXT_LIKE, csv: TEXT_LIKE, tsv: TEXT_LIKE, md: TEXT_LIKE,
   json: TEXT_LIKE, yaml: TEXT_LIKE, yml: TEXT_LIKE, ini: TEXT_LIKE, cfg: TEXT_LIKE,
-  l5k: TEXT_LIKE, step: TEXT_LIKE, stp: TEXT_LIKE, igs: TEXT_LIKE, iges: TEXT_LIKE,
+  l5k: TEXT_LIKE, step: ["step"], stp: ["step"], igs: ["iges"], iges: ["iges"],
+  stl: ["stl-ascii", "stl-binary"],
   dxf: [...TEXT_LIKE, "dxf-binary"],
   xml: ["xml", "svg", "html"], l5x: ["xml"], svg: ["svg", "xml"],
   html: ["html", "xml", "text"], htm: ["html", "xml", "text"],
   dwg: ["dwg"], mp4: ["mp4"], m4a: ["mp4"], mov: ["mp4"], mp3: ["mp3"], wav: ["wav"],
   avi: ["avi"], ogg: ["ogg"], flac: ["flac"],
-  exe: ["pe", "dos-exe"], dll: ["pe"], sys: ["pe"], scr: ["pe"], cpl: ["pe"], ocx: ["pe"],
+  // .scr is a Windows screensaver (a program) and also an AutoCAD script (plain text).
+  exe: ["pe", "dos-exe"], dll: ["pe"], sys: ["pe"], scr: ["pe", "text"], cpl: ["pe"], ocx: ["pe"],
   com: ["dos-exe", "pe"], msi: ["msi"], msp: ["msi"], lnk: ["lnk"], jar: ["jar"],
   class: ["java-class"], apk: ["apk"], appx: ["appx"], msix: ["appx"], chm: ["chm"],
 };
