@@ -7459,6 +7459,42 @@ describe("PreToolUse hook - a name split by a command substitution, and a packag
   }
 });
 
+describe("PreToolUse hook - a package manager's config with an option before the verb (re-probe 10, R2 and Lex decision L2)", () => {
+  for (const command of [
+    // R2: the option stood where the verb was looked for.
+    "npm config --location=project set script-shell=./e.sh; npm run security",
+    "npm config --location project set script-shell ./e.sh && npm run security",
+    "npm config -L project set script-shell ./e.sh && npm run security",
+    "npm config -L=user set script-shell ./e.sh; npm test -- security",
+    "npm config --global set script-shell ./e.sh; npm run security",
+    "npm config -g delete script-shell; npm run security",
+    "npm c --location=project set script-shell ./e.sh; npm run security",
+    "npm config --json --location=project edit; npm run security",
+    "pnpm config --location=project set script-shell ./e.sh && pnpm run security",
+    "pnpm config -g set script-shell ./e.sh && pnpm run security",
+    "yarn config --home set scriptShell ./e.sh && yarn security",
+    "yarn config -H set scriptShell ./e.sh && yarn security",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    // An option before a verb that only reads.
+    "npm config --location=project get registry && npm test -- security",
+    "npm config -L project list; npm run security",
+    "npm config --json list && npm run security",
+    "pnpm config --location=project get store-dir && pnpm test -- security",
+    "yarn config --json get npmRegistryServer && yarn test security",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
 describe("PreToolUse hook - git tag and git stash list after a commit are harmless (re-probe 9, K7)", () => {
   for (const command of [
     'echo "- security fix" >> CHANGELOG.md && git add CHANGELOG.md && git commit -m "chore: changelog" && git tag v1.2.3 && git push --tags',

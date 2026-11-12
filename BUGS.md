@@ -2071,6 +2071,12 @@ Tests: `tests/hook.test.js`, "a hook written after a cd into a folder git runs f
 
 Smoke test after applying, in a scratch git repo with Guardian installed: ask Claude to run `cd .git/hooks && cp ../../g.sh commit-msg && cd ../.. && git commit -m security`; see a Guardian prompt naming security; decline. In bypass mode `cd src && echo '## Security' >> notes.md && cd .. && git add -A && git commit -m docs` gets no Guardian prompt.
 
+**Re-probe 10, R2 and Lex decision L2 (2026-11-12): a package manager's config with an option before the verb. Fixed in staging, not yet live.** `npm config --location=project set script-shell=./e.sh; npm run security` was silent at f9928a9: `configWritten()` took the word right after `config` or `c` as the verb, and here that word was the option. Lex's decision L2: `npm config` with `--location` (or `-L`), and the pnpm and yarn equivalents, count as runner configuration like `npm config set`. Change in `staging/hooks/injection-guard-hook.mjs`: `configVerb()` returns the first word after `config` that is neither an option nor the value of a valued option (`PACKAGE_CONFIG_VALUE_OPTIONS`: `--location`, `-L`, `--userconfig`, `--globalconfig`, `--workspace`, `-w`, `--prefix`), and `configWritten()` tests that against `PACKAGE_CONFIG_WRITES`.
+
+Tests: `tests/hook.test.js`, "a package manager's config with an option before the verb (re-probe 10, R2 and Lex decision L2)": 12 ask (npm with `--location=`, `--location`, `-L`, `-L=`, `--global`, `-g delete`, `c --location=`, `--json --location= edit`; pnpm `--location=` and `-g`; yarn `--home` and `-H`), 5 silent in bypass mode (the same options before `get` and `list`). Against the hook at b171173 all 12 asks were silent. Staged hook suite before: 2888 passed. After: 2905 passed, 0 failed. Verdict diff, b171173's staged hook against this one: of the 173 commands in every re-probe list that name a package manager, 1 changed (R2 itself, silent to ask); of the 418 in the everyday and w-lists, 0.
+
+Smoke test after applying: at the root of a scratch project ask Claude to run `npm config --location=project set script-shell=./e.sh; npm run security`; see a Guardian prompt naming security; decline.
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10
