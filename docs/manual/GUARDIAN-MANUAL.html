@@ -401,7 +401,7 @@ figcaption b { color: var(--fg-2); font-weight: 600; }
 <text class="t3" x="390" y="196" text-anchor="middle">chapter 04</text>
 <rect class="bx-hot" x="560" y="96" width="200" height="120" rx="8"/>
 <text class="t1" x="660" y="128" text-anchor="middle">Audit</text>
-<text class="t3" x="660" y="152" text-anchor="middle">45 static rules</text>
+<text class="t3" x="660" y="152" text-anchor="middle">48 static rules</text>
 <text class="t3" x="660" y="170" text-anchor="middle">--fail-on-error stops CI</text>
 <text class="t3" x="660" y="196" text-anchor="middle">chapter 02</text>
 <rect class="bx-ok" x="810" y="96" width="240" height="120" rx="8"/>
@@ -1245,7 +1245,7 @@ guardian audit [target] [--json] [--fail-on-error]</code></pre>
 
 <h3 id="rg-tests">What the tests verify</h3>
 
-<p><code>node tests/injection-guard.test.js</code> passed 106 checks and <code>node tests/sql-guard.test.js</code> passed 40 on this tree (run while writing this chapter).</p>
+<p><code>node tests/injection-guard.test.js</code> passed 176 checks and <code>node tests/sql-guard.test.js</code> passed 40 on this tree (run on 2026-11-12).</p>
 <ul>
 <li>Injection: one or more cases per rule family, the <code>GUARD-INJ-009</code> user exception, legitimate questions that must not fire, empty string.</li>
 <li>Bypasses: fullwidth, zero-width, percent-encoding, word joiner, tag characters (payload found and <code>GUARD-INJ-UNICODE</code> raised), Cyrillic lookalikes, ordinary Cyrillic text not flagged, stray <code>%</code>, embedded base64, entities, markdown emphasis, emoji with a variation selector not flagged, oversize input, a payload at 150 KB.</li>
