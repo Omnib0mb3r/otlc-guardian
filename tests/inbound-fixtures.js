@@ -92,6 +92,85 @@ export function jpeg({ comment, exifText, xmp } = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// ARCHIVES
+// ---------------------------------------------------------------------------
+
+/**
+ * A zip written to APPNOTE 6.3.10. Each entry: { name, data, method
+ * (8 deflate, default; 0 stored; any other number is written as is),
+ * symlink, encrypted (flag bit 0), aes (method 99 with its 0x9901
+ * field), localName (a different name in the local header), crc
+ * (overrides the real one) }.
+ */
+export function zip(entries) {
+  const locals = [];
+  const centrals = [];
+  let offset = 0;
+  for (const e of entries) {
+    const data = Buffer.isBuffer(e.data) ? e.data : Buffer.from(e.data ?? "", "utf8");
+    const method = e.aes ? 99 : (e.method ?? 8);
+    const stored = method === 8 ? zlib.deflateRawSync(data) : data;
+    const flags = (e.encrypted ? 0x0001 : 0) | 0x0800;
+    const crc = e.crc ?? zlib.crc32(data);
+    const name = Buffer.from(e.name, "utf8");
+    const localName = Buffer.from(e.localName ?? e.name, "utf8");
+    const extra = e.aes ? Buffer.concat([u16(0x9901), u16(7), u16(2), Buffer.from("AE"), Buffer.from([3]), u16(8)]) : Buffer.alloc(0);
+    const local = Buffer.concat([
+      u32(0x04034b50), u16(20), u16(flags), u16(method), u16(0), u16(0x21),
+      u32(crc), u32(stored.length), u32(data.length), u16(localName.length), u16(extra.length), localName, extra,
+    ]);
+    const madeBy = e.symlink ? (3 << 8) | 20 : 20;
+    const attr = e.symlink ? (0o120777 << 16) >>> 0 : 0;
+    centrals.push(Buffer.concat([
+      u32(0x02014b50), u16(madeBy), u16(20), u16(flags), u16(method), u16(0), u16(0x21),
+      u32(crc), u32(stored.length), u32(data.length), u16(name.length), u16(extra.length), u16(0),
+      u16(0), u16(0), u32(attr), u32(offset), name, extra,
+    ]));
+    locals.push(local, stored);
+    offset += local.length + stored.length;
+  }
+  const cd = Buffer.concat(centrals);
+  const eocd = Buffer.concat([
+    u32(0x06054b50), u16(0), u16(0), u16(entries.length), u16(entries.length), u32(cd.length), u32(offset), u16(0),
+  ]);
+  return Buffer.concat([...locals, cd, eocd]);
+}
+
+/** A tar (ustar) of { name, data, type ("0" file, "2" symlink, "1" hardlink, "3" device), linkname }. */
+export function tar(entries) {
+  const blocks = [];
+  for (const e of entries) {
+    const data = Buffer.isBuffer(e.data) ? e.data : Buffer.from(e.data ?? "", "utf8");
+    const h = Buffer.alloc(512);
+    h.write(e.name, 0, 100, "utf8");
+    h.write("0000644\0", 100, "latin1");
+    h.write("0000000\0", 108, "latin1");
+    h.write("0000000\0", 116, "latin1");
+    h.write(`${data.length.toString(8).padStart(11, "0")}\0`, 124, "latin1");
+    h.write("00000000000\0", 136, "latin1");
+    h.write("        ", 148, "latin1");
+    h.write(e.type ?? "0", 156, "latin1");
+    if (e.linkname) h.write(e.linkname, 157, 100, "utf8");
+    h.write("ustar\0" + "00", 257, "latin1");
+    let sum = 0;
+    for (const b of h) sum += b;
+    h.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148, "latin1");
+    blocks.push(h, data, Buffer.alloc((512 - (data.length % 512)) % 512));
+  }
+  blocks.push(Buffer.alloc(1024));
+  return Buffer.concat(blocks);
+}
+
+/** gzip with the member name stored in the header. */
+export function gzip(data, name) {
+  const body = zlib.gzipSync(Buffer.isBuffer(data) ? data : Buffer.from(data));
+  if (!name) return body;
+  // Rebuild the header with FNAME set: same deflate stream and trailer.
+  const header = Buffer.from([0x1F, 0x8B, 8, 0x08, 0, 0, 0, 0, 0, 0xFF]);
+  return Buffer.concat([header, Buffer.from(`${name}\0`, "latin1"), body.subarray(10)]);
+}
+
+// ---------------------------------------------------------------------------
 // DEFENDER RUNNERS (mocked; the real one is opt-in)
 // ---------------------------------------------------------------------------
 

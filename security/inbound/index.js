@@ -30,6 +30,8 @@ import { Budget, LimitError } from "./limits.js";
 import { FormatError, UsageError } from "./errors.js";
 import { detectType, checkType, extOf } from "./checks/type.js";
 import { checkExecutable } from "./checks/executable.js";
+import { checkArchive } from "./checks/archive.js";
+import { innerPath } from "./paths.js";
 
 export { UsageError };
 
@@ -75,6 +77,11 @@ const SEVERITY_RANK = { info: 0, hold: 1, block: 2 };
 /** Each step owns one check. Order matters: readers refine `node.type`
  *  before the type check compares names with it. */
 const PIPELINE = [
+  (ctx, buf, node) => {
+    // A mail body is not an archive (contract v1): reported skipped.
+    if (ctx.isMailBody && node.top) return ctx.skip("archive");
+    ctx.run("archive", node, () => checkArchive(ctx, buf, node));
+  },
   (ctx, buf, node) => ctx.run("type", node, () => checkType(ctx, node)),
   (ctx, buf, node) => {
     // A mail body is never executed (contract v1): reported skipped.
@@ -165,7 +172,7 @@ export class Inspection {
       depth: parent.depth + 1,
       top: false,
       type: "unknown",
-      path: entry ? (parent.path === undefined ? name : `${parent.path}!/${name}`) : parent.path,
+      path: entry ? innerPath(parent, name) : parent.path,
       part: entry ? undefined : [parent.part, part ?? name].filter(Boolean).join(" > "),
     };
     if (node.depth > this.budget.limits.depth) {
@@ -173,6 +180,7 @@ export class Inspection {
         `nested deeper than ${this.budget.limits.depth} levels; ${node.part || name} was not read`, parent);
       return node;
     }
+    if (entry) this.addInner(node, buf);
     this.inspect(buf, node);
     return node;
   }

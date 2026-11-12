@@ -333,6 +333,173 @@ describe("Check 2 - executables and scripts", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// CHECK 5 - ARCHIVES
+// ---------------------------------------------------------------------------
+
+const L5K_TEXT = "IE_VER := 2.25;\n\nCONTROLLER GuardianTest (ProcessorType := \"1756-L83E\")\n" +
+  "\tTAG\n\t\tConveyorRun : BOOL (RADIX := Decimal) := 0;\n\tEND_TAG\nEND_CONTROLLER\n";
+
+describe("Check 5 - archives", () => {
+  test("pass: a zip of text, L5K and PNG lists every entry with path, sha256 and size", () => {
+    const entries = [
+      { name: "readme.txt", data: "Line 3 transfer notes\n" },
+      { name: "plc/main.L5K", data: L5K_TEXT },
+      { name: "plc/", data: "" },
+      { name: "pics/belt.png", data: fx.png(), method: 0 },
+    ];
+    const r = judge(fx.zip(entries), "job.zip");
+    assert.equal(r.checks.archive, "pass", JSON.stringify(r.reasons));
+    assert.equal(r.file.detected_type, "zip");
+    assert.deepEqual(r.file.inner.map((e) => e.path), ["readme.txt", "plc/main.L5K", "pics/belt.png"]);
+    assert.equal(r.file.inner[1].sha256, sha256hex(Buffer.from(L5K_TEXT)));
+    assert.equal(r.file.inner[1].size, Buffer.byteLength(L5K_TEXT));
+  });
+
+  test("pass: a zip inside a zip lists the inner entries with !/", () => {
+    const innerZip = fx.zip([{ name: "a.txt", data: "alpha\n" }]);
+    const r = judge(fx.zip([{ name: "docs/inner.zip", data: innerZip }]), "outer.zip");
+    assert.deepEqual(r.file.inner.map((e) => e.path), ["docs/inner.zip", "docs/inner.zip!/a.txt"]);
+  });
+
+  const slips = ["../../evil.txt", "/etc/x", "C:/x", "a\\..\\..\\evil.txt", "notes.txt:hidden"];
+  for (const name of slips) {
+    test(`fail: zip slip "${name}" blocks (archive-path)`, () => {
+      const r = judge(fx.zip([{ name, data: "x" }]), "slip.zip");
+      assert.equal(hasReason(r, "archive-path", "block").path, name);
+      assert.equal(r.verdict, "block");
+    });
+  }
+
+  test("fail: a symbolic link entry blocks (archive-link)", () => {
+    const r = judge(fx.zip([{ name: "link", data: "/etc/passwd", symlink: true }]), "link.zip");
+    hasReason(r, "archive-link", "block");
+  });
+
+  test("fail: a program inside a zip blocks, with the inner path", () => {
+    const r = judge(fx.zip([{ name: "tools/setup.exe", data: fx.pe() }]), "tools.zip");
+    assert.equal(hasReason(r, "executable", "block").path, "tools/setup.exe");
+    assert.equal(r.checks.executable, "block");
+  });
+
+  test("fail: a program two archives down blocks, with the nested path", () => {
+    const inner = fx.zip([{ name: "x.scr", data: fx.pe() }]);
+    const r = judge(fx.zip([{ name: "inner.zip", data: inner }]), "outer.zip");
+    assert.equal(hasReason(r, "executable", "block").path, "inner.zip!/x.scr");
+  });
+
+  test("fail: 50 MB of zeros in a zip blocks as a bomb (ratio)", () => {
+    const r = judge(fx.zip([{ name: "zeros.bin", data: Buffer.alloc(50 * 1024 * 1024) }]), "bomb.zip");
+    assert.match(hasReason(r, "archive-bomb-ratio", "block").detail, /expands \d+ times/);
+  });
+
+  test("pass: a small file that compresses well is not a bomb (ratio floor)", () => {
+    const r = judge(fx.zip([{ name: "spaces.txt", data: " ".repeat(200_000) }]), "spaces.zip");
+    lacks(r, "archive-bomb-ratio");
+  });
+
+  test("fail: a tree over the uncompressed total blocks (archive-bomb-total)", () => {
+    const entries = [1, 2, 3].map((n) => ({ name: `f${n}.txt`, data: `file ${n} `.repeat(400) }));
+    const r = judge(fx.zip(entries), "many.zip", {}, { limits: { totalUncompressed: 6000 } });
+    hasReason(r, "archive-bomb-total", "block");
+    assert.equal(r.verdict, "block");
+  });
+
+  test("fail: zips nested past depth 3 hold (limit-depth)", () => {
+    let buf = fx.zip([{ name: "deep.txt", data: "bottom\n" }]);
+    for (let i = 4; i >= 1; i--) buf = fx.zip([{ name: `level${i}.zip`, data: buf }]);
+    const r = judge(buf, "nest.zip");
+    hasReason(r, "limit-depth", "hold");
+    assert.ok(!r.file.inner.some((e) => e.path.endsWith("deep.txt")), "the deepest entry is not read");
+  });
+
+  test("pass: zips nested to depth 3 are read to the bottom", () => {
+    let buf = fx.zip([{ name: "deep.txt", data: "bottom\n" }]);
+    for (let i = 2; i >= 1; i--) buf = fx.zip([{ name: `level${i}.zip`, data: buf }]);
+    const r = judge(buf, "nest.zip");
+    lacks(r, "limit-depth");
+    assert.ok(r.file.inner.some((e) => e.path === "level1.zip!/level2.zip!/deep.txt"));
+  });
+
+  test("fail: more entries than the limit hold (limit-entries)", () => {
+    const entries = [1, 2, 3, 4, 5].map((n) => ({ name: `f${n}.txt`, data: "x" }));
+    const r = judge(fx.zip(entries), "many.zip", {}, { limits: { entries: 3 } });
+    hasReason(r, "limit-entries", "hold");
+  });
+
+  test("fail: an unsupported compression method holds (archive-unreadable)", () => {
+    const r = judge(fx.zip([{ name: "a.txt", data: "x", method: 12 }]), "bz.zip");
+    assert.match(hasReason(r, "archive-unreadable", "hold").detail, /method 12/);
+  });
+
+  test("fail: a local name that differs from the central name holds", () => {
+    const r = judge(fx.zip([{ name: "invoice.pdf", localName: "invoice.exe", data: "x" }]), "two-names.zip");
+    hasReason(r, "archive-name-mismatch", "hold");
+  });
+
+  test("fail: an entry that fails its checksum holds (archive-crc)", () => {
+    const r = judge(fx.zip([{ name: "a.txt", data: "alpha", crc: 1234 }]), "crc.zip");
+    hasReason(r, "archive-crc", "hold");
+  });
+
+  test("fail: a truncated zip holds (archive-unreadable)", () => {
+    const whole = fx.zip([{ name: "a.txt", data: "alpha" }]);
+    const r = judge(whole.subarray(0, whole.length - 30), "cut.zip");
+    hasReason(r, "archive-unreadable", "hold");
+  });
+
+  for (const [type, bytes] of [
+    ["7z", Buffer.from([0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0, 4, 1, 2, 3, 4])],
+    ["rar", Buffer.from("Rar!\x1A\x07\x01\x00\x01\x02\x03", "latin1")],
+  ]) {
+    test(`fail: ${type} has no reader and holds (archive-unreadable)`, () => {
+      const r = judge(bytes, `a.${type}`);
+      hasReason(r, "archive-unreadable", "hold");
+      assert.equal(r.checks.archive, "hold");
+    });
+  }
+
+  test("pass: a tar lists its files", () => {
+    const r = judge(fx.tar([{ name: "a.txt", data: "alpha\n" }, { name: "plc/main.L5K", data: L5K_TEXT }]), "a.tar");
+    assert.equal(r.checks.archive, "pass", JSON.stringify(r.reasons));
+    assert.deepEqual(r.file.inner.map((e) => e.path), ["a.txt", "plc/main.L5K"]);
+  });
+
+  test("fail: tar slip, symlink, hardlink and device entries block", () => {
+    const r = judge(fx.tar([
+      { name: "../evil.txt", data: "x" },
+      { name: "l1", type: "2", linkname: "/etc/passwd" },
+      { name: "l2", type: "1", linkname: "/etc/shadow" },
+      { name: "dev", type: "3" },
+    ]), "bad.tar");
+    hasReason(r, "archive-path", "block");
+    assert.equal(r.reasons.filter((x) => x.code === "archive-link").length, 2);
+    hasReason(r, "archive-special", "block");
+  });
+
+  test("pass: a .tar.gz lists the tar's entries directly (gzip is transparent)", () => {
+    const r = judge(fx.gzip(fx.tar([{ name: "a.txt", data: "alpha\n" }]), "a.tar"), "a.tar.gz");
+    assert.equal(r.file.detected_type, "gzip");
+    assert.deepEqual(r.file.inner.map((e) => e.path), ["a.txt"]);
+  });
+
+  test("pass: a plain .gz lists its one member under its stored name", () => {
+    const r = judge(fx.gzip("hello\n", "notes.txt"), "a01-notes.txt.gz");
+    assert.deepEqual(r.file.inner.map((e) => e.path), ["notes.txt"]);
+  });
+
+  test("fail: a gzip bomb blocks (ratio)", () => {
+    const r = judge(fx.gzip(Buffer.alloc(20 * 1024 * 1024)), "zeros.gz");
+    hasReason(r, "archive-bomb-ratio", "block");
+  });
+
+  test("pass: a mail body reports the archive check skipped, not held", () => {
+    const r = judge(Buffer.from("see attached\n"), "body.txt", { source: "mail-body" });
+    assert.equal(r.checks.archive, "skipped");
+    assert.ok(!r.reasons.some((x) => x.code === "check-not-run" && /archive/.test(x.detail)));
+  });
+});
+
 describe("Limits - input size", () => {
   test("fail: over the input limit holds, unread, with the real sha256", () => {
     const buf = Buffer.from("0123456789abcdef");
