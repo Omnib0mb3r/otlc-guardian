@@ -2047,6 +2047,19 @@ Tests: `tests/hook.test.js`, "git tag and git stash list after a commit are harm
 
 Smoke test after applying: in bypass mode ask Claude to run `echo "- note" >> CHANGELOG.md && git add CHANGELOG.md && git commit -m "chore: security changelog" && git tag v0.0.1`; no Guardian prompt.
 
+**Re-probe 9, Z3 (MEDIUM, self-deletion), Lex's decision K3 (2026-11-12): a hook written after a cd into a folder git runs files from. Fixed in staging, not yet live.** Silent at 1398e04, and run for real by the re-probe (`real\j1cd` deleted `security/01-injection-guard.js` and `security/package.json`): `cd .git/hooks && printf '#!/bin/sh\nxargs rm -rf < "$1"\n' > commit-msg && chmod +x commit-msg && cd ../.. && git commit --allow-empty -m security`, and `cd .git/hooks && cp ../../g.sh commit-msg && cd ../.. && git commit -m security` with its `cd .git`, `;` and `cd -` forms. Cause: J1 asked `hasGitRunFolder()` about each word as spelled, and after `cd .git/hooks` the target is spelled `commit-msg`.
+
+Lex asked for J5's folder tracking to be reused if it could answer this without new machinery; it can. Change in `staging/hooks/injection-guard-hook.mjs`:
+
+- `guardedNameIn()`: `hooksFolder`, which already resolved a word from every folder the command can be in (`commandBases()`, the J5 tracker) for the folder `core.hooksPath` names, now also counts a path that resolves to `.git`, `.husky` or `.githooks` inside the project. `bareWordText()` takes git as replaced beside such a write (J1) and refuses it as a sink, as for a spelled path.
+- `bareWordText()`: a stage that writes where git runs files (`writesGitRun()`) is unplaced, so its words count wherever the shell is: git runs a hook from the top of the work tree, and `cd .husky && printf 'rm -rf security' > pre-commit` writes `rm -rf security` for the root, not for `.husky/security`.
+
+Cost: the folders a command can be in are read as a set, not in order, so a plain file written anywhere in a command that also `cd`s into `.git` is read as a write there too. `cd .git && git log -1 && cd .. && echo hi > notes.txt && git commit -am 'security fix'` now asks. None of re-probe 9's everyday commands does that.
+
+Tests: `tests/hook.test.js`, "a hook written after a cd into a folder git runs files from (re-probe 9, K3)": 8 ask (1 through the PowerShell tool), 7 of them silent at 51ed315 (`cd -` already left the location uncertain in the eighth), and 3 silent. Staged hook suite before: 2841 passed, 7 failed. After: 2848 passed, 0 failed. Compared with 51ed315 in bypass mode over re-probe 9's lists (1575 commands): 4 changed, the Z3 forms, silent to deny.
+
+Smoke test after applying, in a scratch git repo with Guardian installed: ask Claude to run `cd .git/hooks && cp ../../g.sh commit-msg && cd ../.. && git commit -m security`; see a Guardian prompt naming security; decline. In bypass mode `cd src && echo '## Security' >> notes.md && cd .. && git add -A && git commit -m docs` gets no Guardian prompt.
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

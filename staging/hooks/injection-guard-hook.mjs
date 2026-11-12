@@ -3135,13 +3135,17 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
   // file put under the program's name before `cd src`, can go up a folder
   // (rm -rf "../$3"). A script a shell or an interpreter is given is a
   // program the command can have written too.
+  // A stage that writes where git runs files writes a program git runs
+  // from the top of the work tree, whatever folder the stage is in: `cd
+  // .husky && printf 'rm -rf security' > pre-commit` (re-probe 9, K3).
+  const writesGitRun = (s) => !kind(s).quiet && writePlaces(s).whole.some((tok) => spellings(tok).some((one) => gitRuns(one)));
   const unplaced = [];
   for (const s of all) {
     const words = s.map((tok) => tok.word);
     const runner = commandName(words[0]);
     const script = SHELLS.has(runner) || INTERPRETERS.has(runner) ? words.slice(1).find((word) => !word.startsWith("-")) : undefined;
     const names = [...programNames(words), ...(script ? [commandName(script)] : [])];
-    if (s[0].start >= plain.replacedFrom || replaced(s, names)) unplaced.push(place(s));
+    if (s[0].start >= plain.replacedFrom || replaced(s, names) || writesGitRun(s)) unplaced.push(place(s));
   }
   return { text: blanked(), unplaced };
 }
@@ -3237,11 +3241,17 @@ function guardedNameIn(texts, dialect, cwd, root, watches = () => false) {
     // command can be in, and is neither in Guardian's folders nor watched,
     // nor under .git, .husky or .githooks, nor in the folder
     // core.hooksPath names, whose files git runs (hooks, config).
-    // A path in a folder git is configured to take its hooks from, read
-    // from every folder the command can be in. A segment that is a glob
-    // counts when it can match the folder's.
-    const hooksFolder = (word) => hooksFolders.length > 0 && !/[$\x60]/.test(word) && bases.some((base) => {
-      const segments = watchKey(path.resolve(base, drivePath(word.replace(/^~(?=$|\/)/, os.homedir())))).split("/");
+    // A path in a folder git runs files from, read from every folder the
+    // command can be in: the one git is configured to take its hooks
+    // from, and .git, .husky and .githooks inside the project, so that
+    // `cd .git/hooks && printf ... > commit-msg` writes a hook (re-probe
+    // 9, K3). A segment that is a glob counts when it can match the
+    // folder's.
+    const projectKey = watchKey(root);
+    const hooksFolder = (word) => !/[$\x60]/.test(word) && bases.some((base) => {
+      const key = watchKey(path.resolve(base, drivePath(word.replace(/^~(?=$|\/)/, os.homedir()))));
+      if (key.startsWith(`${projectKey}/`) && hasGitRunFolder(key.slice(projectKey.length + 1))) return true;
+      const segments = key.split("/");
       return hooksFolders.some((folder) => {
         const among = folder.split("/");
         return segments.length >= among.length && among.every((part, k) => segments[k] === part || Boolean(globRegex(segments[k])?.test(part)));

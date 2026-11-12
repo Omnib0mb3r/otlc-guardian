@@ -7427,6 +7427,36 @@ describe("PreToolUse hook - git tag and git stash list after a commit are harmle
   }
 });
 
+describe("PreToolUse hook - a hook written after a cd into a folder git runs files from (re-probe 9, K3)", () => {
+  for (const [command, tool] of [
+    // The re-probe's forms.
+    ["cd .git/hooks && printf '#!/bin/sh\\nxargs rm -rf < \"$1\"\\n' > commit-msg && chmod +x commit-msg && cd ../.. && git commit --allow-empty -m security"],
+    ["cd .git/hooks && cp ../../g.sh commit-msg && cd ../.. && git commit -m security"],
+    ["cd .git && cp ../g.sh hooks/commit-msg; cd ..; git commit -m security"],
+    ["cd .git/hooks; cp ../../g.sh commit-msg; cd -; git commit --allow-empty -m security"],
+    // Their like: pushd, PowerShell, .husky and .githooks, the word in the hook itself.
+    ["pushd .git/hooks && cp ../../g.sh commit-msg && popd && git commit -m security"],
+    ["Set-Location .git\\hooks; Copy-Item ..\\..\\g.ps1 commit-msg; Set-Location ..\\..; git commit -m security", "PowerShell"],
+    ["cd .husky && printf 'rm -rf security' > pre-commit; cd ..; git commit -m x"],
+    ["cd .githooks && echo 'rm -rf security' >> pre-push; cd -"],
+  ]) {
+    stagedOnly(`asks${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      const out = runGuarded(command, { tool });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    "cd src && echo '## Security' >> notes.md && cd .. && git add -A && git commit -m docs",
+    "cd docs && cp ../README.md intro.md && cd .. && git commit -am 'docs: security'",
+    "git commit -m 'security fix'",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------

@@ -233,6 +233,13 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A hook written after a cd into `.git` asks (BUG-080, re-probe 9
+  K3).** `cd .git/hooks && cp ../../g.sh commit-msg && cd ../.. && git
+  commit -m security` was silent and deleted `security/` for real: J1
+  judged the write by its spelling. A write target is now resolved
+  from every folder the command can be in, and the words of a stage
+  that writes where git runs files count from the project root.
+
 - **git tag and git stash list after a commit no longer ask (BUG-080,
   re-probe 9 K7).** `echo "- security fix" >> CHANGELOG.md && git add
   CHANGELOG.md && git commit -m "..." && git tag v1.2.3 && git push
