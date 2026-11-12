@@ -681,6 +681,13 @@ function cloneWrites(words, dir, ctx) {
  * /MOV and /MOVE remove SRC. xcopy copies a folder's contents (every level
  * with /S or /E), or one file onto DEST, or into it when DEST is a folder,
  * ends in a separator or /I is given.
+ *
+ * xcopy's source is a folder when it is one on disk, and also when the
+ * command cannot have it on disk yet or says so itself (re-probe 12, O1):
+ * it ends in a separator, this command unpacked, cloned or downloaded
+ * into it, or it is not there and /S or /E is given. Read as one file,
+ * `Expand-Archive kit.zip tmp; xcopy tmp . /E /I /Y` landed at <root>/tmp,
+ * which nothing watches, while the archive's CLAUDE.md landed in the root.
  */
 function winCopyWrites(name, args, dir, ctx) {
   const switches = args.filter((a) => WIN_COPY_SWITCH.test(a)).map((a) => a.replace(/^\/\/?/, "").toUpperCase());
@@ -689,7 +696,9 @@ function winCopyWrites(name, args, dir, ctx) {
   const has = (...s) => switches.some((w) => s.includes(w.split(":")[0]));
   const recursive = has("E", "S", "MIR");
   const isDir = (p) => Boolean(statSync(ctx.abs(dir, p), { throwIfNoEntry: false })?.isDirectory());
-  if (name === "robocopy" || isDir(src)) {
+  const folder = ctx.abs(dir, src);
+  const missing = !ctx.present(folder) && ctx.under(folder).length === 0;
+  if (name === "robocopy" || isDir(src) || /[\\/]$/.test(src) || ctx.marked(folder) || (recursive && missing)) {
     addCopy(dir, ctx, `${src.replace(/[\\/]+$/, "")}/*`, dest, { intoDir: false, recursive });
   } else {
     addCopy(dir, ctx, src, dest, { intoDir: has("I") || /[\\/]$/.test(dest) || isDir(dest), recursive: false });
@@ -956,18 +965,21 @@ function wrapperOption(word, valued) {
 /**
  * A stage's words without the wrappers in front of them (sudo -u root
  * nice -n 5 CMD ...), their options and those options' values.
- * @returns {{ words: string[], assignments: string[], moves: string[], commands: string[] }}
+ * @returns {{ words: string[], assignments: string[], moves: string[], commands: string[], xargs: boolean }}
  *   the words from the program on; the NAME=value words of env; the
- *   folders the wrappers say the program runs in, in order; and the
- *   command strings of env -S
+ *   folders the wrappers say the program runs in, in order; the command
+ *   strings of env -S; and whether xargs is among the wrappers, which
+ *   hands the program operands the command does not spell out
  */
 function unwrapped(words) {
   let rest = words;
   const assignments = [];
   const moves = [];
   const commands = [];
+  let xargs = false;
   while (rest.length > 0 && COMMAND_WRAPPERS.has(commandName(rest[0]))) {
     const wrapper = commandName(rest[0]);
+    xargs ||= wrapper === "xargs";
     const valued = WRAPPER_VALUE_OPTIONS[wrapper] ?? [];
     rest = rest.slice(1);
     while (rest.length > 0 && (rest[0].startsWith("-") || (wrapper === "env" && rest[0].includes("=")))) {
@@ -986,7 +998,7 @@ function unwrapped(words) {
     }
     if (wrapper === "timeout" && rest.length > 1) rest = rest.slice(1); // the duration
   }
-  return { words: rest, assignments, moves, commands };
+  return { words: rest, assignments, moves, commands, xargs };
 }
 const SHELLS            = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 const INTERPRETERS      = new Set(["node", "deno", "bun", "python", "python3", "py", "ruby", "perl", "php"]);
@@ -4397,7 +4409,11 @@ function pathLikeWords(text) {
  *   the command-text scan (BUG-044). `root`, the project root, is read by
  *   findWrites() (re-probe 3, D6). `uncertain` is set when lexShell()
  *   left text out of the command, or of a shell nested in it, without
- *   being sure the shell does too (BUG-085)
+ *   being sure the shell does too (BUG-085). `inbound`, the paths the
+ *   command unpacked, cloned or downloaded into so far, and `carried`,
+ *   the later steps that carry that content on, each { command, to }
+ *   with `to` the paths the step names or null when one is not spelled
+ *   out (Lex decision P1); both are made here when absent
  * @returns {Map<string, { sources: Set<string>, append: boolean }>}
  *   absolute target -> absolute source files. A source prefixed "patch:"
  *   is a patch file, of which only the added lines land; "filter:N" is
@@ -4409,9 +4425,14 @@ function pathLikeWords(text) {
 function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { decoded: [], filters: [], quiet: [] }, stdin = []) {
   const targets = new Map();
   if (depth > MAX_SHELL_DEPTH) return targets;
+  found.inbound ??= new Set();
+  found.carried ??= [];
   // Git Bash spells a drive as a folder (/c/Users); PowerShell and cmd do not.
   const spelledPath = (p) => (dialect === "bash" ? drivePath(p) : p);
   const abs = (dir, p) => path.resolve(dir, spelledPath(p.replace(/^~(?=$|[\\/])/, os.homedir()))).replace(/\\/g, "/");
+  // A marked path is kept the way the file system tells names apart, so
+  // `unzip a.zip -d Tmp && cp -r tmp/sub .` is the same folder on Windows.
+  const fold = (file) => (CASE_INSENSITIVE_FS ? file.toLowerCase() : file);
   const add = (dir, p, sources = [], append = false) => {
     if (!p || p === "-" || /^&?\d+$/.test(p)) return;
     const key = abs(dir, p);
@@ -4423,6 +4444,7 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
     }
     entry.append ||= append;
     targets.set(key, entry);
+    if (entry.sources.has(DOWNLOADED)) found.inbound.add(fold(key));
   };
   const merge = (inner) => {
     for (const [key, entry] of inner) {
@@ -4460,12 +4482,31 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
    */
   const unread = (folder) => [...targets].some(([key, entry]) => (folder === key || folder.startsWith(`${key}/`)) &&
       [...entry.sources].some((s) => s.startsWith(UNJUDGED))) ||
-    (!present(folder) && under(folder).length === 0);
-  const ctx = { add, abs, recurse, present, under, within, unread, dialect, decoded: found.decoded, quiet: [], filter, root: found.root };
+    marked(folder) || (!present(folder) && under(folder).length === 0);
+  /**
+   * Whether a path is, or is under, one this command unpacked, cloned or
+   * downloaded into, in this shell or in one it is nested in (Lex decision
+   * P1): the set is shared, so `cmd /c "xcopy tmp ."` knows what the
+   * command around it unpacked.
+   */
+  const marked = (file) => [...found.inbound].some((key) => fold(file) === key || fold(file).startsWith(`${key.replace(/\/$/, "")}/`));
+  /** Whether a folder holds such a path below it. */
+  const holds = (folder) => [...found.inbound].some((key) => key.startsWith(`${fold(folder).replace(/\/$/, "")}/`));
+  /** Whether this command has unpacked, cloned or downloaded anything so far. */
+  const holding = () => found.inbound.size > 0;
+  /** Whether a source is a file of that content, also behind a line filter. */
+  const inbound = (source) => (source.startsWith("filter:")
+    ? found.filters[Number(source.slice(7))].inputs.some(inbound)
+    : !source.startsWith(UNJUDGED) && !source.startsWith("patch:") && marked(source));
+  /** Records a later step that carries that content on: `to` holds the paths it names, or is null when one is not spelled out. */
+  const carry = (words, to) => found.carried.push({ command: words.join(" "), to });
+  const ctx = { add, abs, recurse, present, under, within, unread, marked, holds, holding, inbound, carry, dialect, decoded: found.decoded, quiet: [],
+    filter, root: found.root };
 
   const { tokens, subs, heredocs, uncertain } = lexShell(command, dialect);
   if (uncertain) found.uncertain = true;
   for (const sub of subs) recurse(sub, cwd);
+  const inboundBefore = found.inbound.size;
   if (dialect === "powershell") {
     // [IO.File]::WriteAllText('CLAUDE.md', ...): the path is an argument
     // of a .NET call, so every path-like word in the call counts.
@@ -4507,6 +4548,7 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
   let writes = [];   // [{ word, append }] from > and >> redirections
   let reads = [];    // files read through <
   let pipeIn = stdin; // sources whose content arrives on stdin through a pipe
+  let piped = null;   // { words } of the stage whose output is piped into this one
   // Open ( ) and { } groups (re-probe 6, G4). What every command inside
   // prints is the group's output, which a redirect or pipe after the
   // closing bracket carries on; what is piped into the group is on the
@@ -4534,7 +4576,16 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
         pipeIn: [...pipeIn, ...groups.flatMap((g) => g.stdin)],
         reads: [...reads.map((r) => abs(dir, r)), ...substituted],
         scripts: [...said, ...scripts],
+        // What a PowerShell cmdlet with no source of its own is handed
+        // (re-probe 12, O2): the stage before a pipe, and whether one of
+        // its arguments is an expression, at which the lexer ends the stage.
+        piped,
+        expression: dialect === "powershell" && op === "(" && own.length > 1,
       });
+    // A redirect to a file that is not spelled out, fed from what this
+    // command unpacked, cloned or downloaded earlier (Lex decision P1).
+    if (writes.some((w) => UNSPELLED[dialect].test(w.word)) && stage.out.some(ctx.inbound)) ctx.carry([...own, ">", "..."], null);
+    piped = op === "|" || op === "|&" ? { words: own } : null;
     // A filter pattern is left out of the scan only where it is written:
     // the token of this command that spells it, in the top-level text.
     for (const q of ctx.quiet.splice(0)) {
@@ -4594,14 +4645,109 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
     }
   }
   finish(null);
+  // A substitution is read before the stages around it, so what they
+  // unpack is not marked yet when it is: it is read once more when they
+  // marked something, for what it carries on (Lex decision P1).
+  if (found.inbound.size > inboundBefore) {
+    const decoded = found.decoded.length;
+    for (const sub of subs) recurse(sub, cwd);
+    found.decoded.length = decoded; // already collected by the first reading
+  }
   return targets;
+}
+
+// What marks a word as one the command does not spell out: a variable or
+// a substitution, of which the lexer leaves "$", in bash a tilde that
+// stands for a folder the text does not name (~+, ~-, ~user), and in cmd
+// %VAR%, !VAR! and a for variable (%f, %%f).
+const UNSPELLED = {
+  bash: /[$`]|^~[^/]/,
+  powershell: /\$/,
+  cmd: /%[^%\s]+%|![^!\s]+!|%%?[A-Za-z](?![\w%])/,
+};
+// Commands that put no content anywhere, beside the ones that only read,
+// delete, change who may read a file or change folder.
+const CARRIES_NOTHING = new Set(["mkdir", "md", "touch", "rmdir", "sleep", "wait", "exit", "export", "set", "unset", "which", "where", "eval"]);
+
+/** Whether a command copies, moves, links or unpacks: its operands are a source and a destination. */
+function isCarrier(name, dialect) {
+  return COPY_COMMANDS.has(name) || name === "robocopy" || name === "xcopy" || TAR_COMMANDS.has(name) || SEVEN_ZIP_COMMANDS.has(name) ||
+    name === "unzip" || (dialect === "powershell" && (PS_COPIERS.has(name) || PS_RENAMERS.has(name) || name === "expand-archive")) ||
+    (dialect === "cmd" && CMD_COPIERS.has(name));
+}
+
+/**
+ * Whether a command is known to take no content anywhere. A shell that
+ * runs a script is one: the script's own commands are read each for
+ * itself.
+ */
+function carriesNothing(name, args, dialect) {
+  return READ_ONLY_COMMANDS.has(name) || DELETE_COMMANDS.has(name) || METADATA_COMMANDS.has(name) || DIRECTORY_MOVERS.has(name) ||
+    CARRIES_NOTHING.has(name) || SHELLS.has(name) || CMD_SHELLS.has(name) || POWERSHELLS.has(name) ||
+    (dialect === "powershell" && PS_REMOVERS.has(name)) || (dialect === "cmd" && CMD_DELETERS.has(name)) ||
+    (name === "git" && gitOnlyReads(args));
+}
+
+/**
+ * A step that carries on what the command unpacked, cloned or downloaded
+ * before it (re-probe 12, O1 to O3; Lex decision P1). Three rounds found
+ * one more spelling each of a copy out of such a folder, so the copy is
+ * no longer recognized by its spelling:
+ *   - a command that copies, moves, links or unpacks, with an argument
+ *     that is not spelled out (a variable, a substitution, operands from
+ *     xargs, a PowerShell expression), is recorded with no destination:
+ *     where the content lands is not known, and a person confirms it;
+ *   - any other command that is not known to carry nothing, and that
+ *     names a path of that content (or runs inside it) beside another
+ *     path, is recorded with those other paths. The main handler asks
+ *     when one of them is the project root, a folder above it or a
+ *     watched path.
+ * A path counts as that content when it is, is under or holds a marked
+ * path; a glob counts by its last folder without a wildcard. Inline code
+ * (node -e, python -c, a program on stdin) is read by its words, and
+ * where it writes is never known: code that names that content and
+ * holds a call that writes is recorded with no destination. Only called
+ * when the command holds such content, so a command without it is
+ * untouched.
+ */
+function carriedOn(name, args, dir, ctx, { xargs, expression, scripts = [] }) {
+  const { dialect } = ctx;
+  if (carriesNothing(name, args, dialect)) return;
+  const words = [name, ...args];
+  if (isCarrier(name, dialect) && (xargs || expression || args.some((a) => UNSPELLED[dialect].test(a)))) {
+    ctx.carry(words, null);
+    return;
+  }
+  const operands = args.filter((a) => !a.startsWith("-"));
+  const fromStdin = operands.length === 0 || operands[0] === "-";
+  const code = !INTERPRETERS.has(name) ? [] : [inlineCode(name, args) ?? "", fromStdin ? scripts.join("\n") : ""].filter((part) => part !== "");
+  const inline = code.length > 0 ? code.join("\n") : null;
+  const places = (inline === null ? args : inline.split(/[\s"'`;|&<>()=,]+/))
+    .flatMap((a) => (dialect === "powershell" ? a.split(",") : [a])) // 'tmp','.' is one word
+    .filter((a) => a && !a.startsWith("-") && !(dialect === "cmd" && CMD_SWITCH.test(a)) &&
+      !((name === "xcopy" || name === "robocopy") && WIN_COPY_SWITCH.test(a)))
+    .map((a) => ctx.abs(dir, a));
+  const reaches = places.map((p) => {
+    const folder = SOURCE_GLOB.test(p) ? p.slice(0, p.search(SOURCE_GLOB)).replace(/\/[^/]*$/, "") || "/" : p;
+    return ctx.marked(folder) || ctx.holds(folder);
+  });
+  const sources = reaches.filter(Boolean).length + (ctx.marked(ctx.abs(dir, ".")) ? 1 : 0);
+  if (inline !== null && sources > 0 && INLINE_WRITE_CALLS.some((re) => re.test(inline))) {
+    ctx.carry(words, null);
+    return;
+  }
+  // A path is a destination when another one is the source.
+  const to = places.filter((p, k) => !ctx.marked(p) && sources > (reaches[k] ? 1 : 0));
+  if (to.length > 0) ctx.carry(words, to);
 }
 
 /**
  * Records what one simple command writes.
- * @param {{ pipeIn: string[], reads: string[], scripts?: string[] }} input -
+ * @param {{ pipeIn: string[], reads: string[], scripts?: string[], piped?: { words: string[] }|null, expression?: boolean, xargs?: boolean }} input -
  *   sources of its stdin, and the text on its stdin that the command
- *   spells out (a heredoc body, a here-string, an echo piped in)
+ *   spells out (a heredoc body, a here-string, an echo piped in); the
+ *   stage whose output is piped into it; whether one of its arguments is
+ *   a PowerShell expression; whether xargs hands it its operands
  * @returns {{ dir: string, out: string[] }} the working directory for the
  *   commands after it, and the sources whose content its stdout carries
  */
@@ -4642,10 +4788,11 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   const wrapped = unwrapped(words);
   words = wrapped.words;
   for (const assignment of wrapped.assignments) readValue(assignment);
+  const xargs = wrapped.xargs || Boolean(input.xargs);
   if (wrapped.moves.length > 0 || wrapped.commands.length > 0) {
     const where = wrapped.moves.reduce((from, to) => abs(from, to), dir);
     for (const command of wrapped.commands) recurse([command, ...words].join(" "), where, "bash");
-    return { dir, out: commandWrites(words, where, ctx, input).out };
+    return { dir, out: commandWrites(words, where, ctx, { ...input, xargs }).out };
   }
   if (words.length === 0) return { dir, out: stdin };
   // uv run, uvx, poetry run and pipx run start another program in an
@@ -4658,6 +4805,9 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   const name = commandName(words[0]);
   const args = words.slice(1);
   const operands = args.filter((a) => !a.startsWith("-") && !(ctx.dialect === "cmd" && CMD_SWITCH.test(a)));
+  // What this command unpacked, cloned or downloaded earlier, carried on
+  // by this step (Lex decision P1). Read before the step's own writes.
+  if (ctx.holding()) carriedOn(name, args, dir, ctx, { xargs, expression: Boolean(input.expression), scripts });
 
   // sed deletes and grep: what they write is computed (BUG-044). An empty
   // grep pattern is an argument too, and passes every line (re-probe 3, D1).
@@ -4693,7 +4843,7 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   // A cmdlet or a cmd built-in is read by its dialect's reader. Anything
   // else is an external program (git, bash, node, curl) and is read the
   // same way whichever shell runs it (BUG-048).
-  if (ctx.dialect === "powershell" && (powershellWrites(name, args, dir, ctx, stdin) || PS_CONTENT_PASSERS.has(name))) {
+  if (ctx.dialect === "powershell" && (powershellWrites(name, args, dir, ctx, stdin, input.piped ?? null) || PS_CONTENT_PASSERS.has(name))) {
     if (PS_DOWNLOADERS.has(name)) return { dir, out: [...out, DOWNLOADED] };
     return { dir, out: PS_CONTENT_PASSERS.has(name) ? [...out, ...psPaths(args, name, ["path", "literalpath"], 0).map((p) => abs(dir, p))] : out };
   }
@@ -4755,6 +4905,8 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   } else if (name === "tee") {
     const append = args.some((a) => /^-[a-z]*a/.test(a) || longOption(a, "--append"));
     for (const p of operands) add(dir, p, stdin, append);
+    // A file that is not spelled out, fed from what this command unpacked (P1).
+    if (operands.some((p) => UNSPELLED[ctx.dialect].test(p)) && stdin.some(ctx.inbound)) ctx.carry(words, null);
   } else if (DELETE_COMMANDS.has(name)) {
     for (const p of operands) add(dir, p);
   } else if (name === "sed" && editsInPlace(args)) {
@@ -4817,6 +4969,13 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     if (dest) {
       const linkFolder = abs(dir, intoDir ? dest : path.posix.dirname(dest.replace(/\\/g, "/")));
       for (const src of sources) {
+        // The shell expands a glob before ln sees it, so a link to one is
+        // read as a copy of one is (re-probe 12, O3): recorded as a link
+        // to nothing at <dest>/<glob>, `ln -sf tmp/*.md .` was silent.
+        if (symbolic && SOURCE_GLOB.test(src)) {
+          addCopy(dir, ctx, src, dest, { intoDir, recursive: true, slashMeansContents: false });
+          continue;
+        }
         // A link to nothing yet: what it will reach cannot be judged.
         if (symbolic && !ctx.present(abs(dir, src)) && !ctx.present(abs(linkFolder, src))) {
           add(dir, intoDir ? `${dest}/${path.posix.basename(src.replace(/\\/g, "/"))}` : dest, [`${UNJUDGED}${abs(linkFolder, src)}`]);
@@ -4859,7 +5018,9 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     const patches = named ? [abs(dir, named)] : input.reads;
     for (const p of patches) patchWrites(p, dir, ctx);
   } else if (name === "dd") {
-    for (const a of args) if (a.startsWith("of=")) add(dir, a.slice(3), [...stdin, ...args.filter((x) => x.startsWith("if=")).map((x) => abs(dir, x.slice(3)))]);
+    const read = [...stdin, ...args.filter((x) => x.startsWith("if=")).map((x) => abs(dir, x.slice(3)))];
+    for (const a of args) if (a.startsWith("of=")) add(dir, a.slice(3), read);
+    if (args.some((a) => a.startsWith("of=") && UNSPELLED[ctx.dialect].test(a)) && read.some(ctx.inbound)) ctx.carry(words, null);
   } else if (name === "curl" || name === "wget") {
     // curl -o FILE and wget -O FILE, alone or in a cluster (-sSLo FILE),
     // with the file stuck to the letter (-oFILE; G7) or after "=". The
@@ -5269,13 +5430,55 @@ function psPaths(args, cmdlet, names, position) {
   return position !== null && positional[position] !== undefined ? [positional[position]] : [];
 }
 
+// Get-ChildItem under its names, and its parameters. The switches that
+// leave what it lists a folder's own items, hidden ones included.
+const PS_LISTERS = new Set(["get-childitem", "gci", "ls", "dir"]);
+const PS_LISTER_PARAMS = ["path", "literalpath", "filter", "include", "exclude", "recurse", "depth", "force", "name", "attributes",
+  "followsymlink", "directory", "file", "hidden", "readonly", "system"];
+const PS_LISTER_PLAIN_SWITCHES = new Set(["force", "directory", "file", "hidden", "readonly", "system"]);
+
+/**
+ * The folders a stage lists when it is a plain Get-ChildItem: each path
+ * it names, the working folder when it names none. null for any other
+ * stage, and for a listing that goes below the folder (-Recurse, -Depth),
+ * narrows it by a pattern (-Filter, -Include, -Exclude), gives names
+ * instead of items (-Name) or names a path that is not spelled out: what
+ * such a stage hands on is not known from the command.
+ * @param {string[]} words
+ * @returns {string[]|null}
+ */
+function listedFolders(words) {
+  if (!PS_LISTERS.has(commandName(words[0] ?? ""))) return null;
+  const paths = [];
+  for (let k = 1; k < words.length; k++) {
+    const m = /^-([A-Za-z]+)(?::(.*))?$/.exec(words[k]);
+    if (!m) {
+      if (paths.length > 0) return null; // a second positional argument is -Filter
+      paths.push(...words[k].split(",").filter(Boolean));
+      continue;
+    }
+    const typed = m[1].toLowerCase();
+    const hits = PS_LISTER_PARAMS.filter((param) => param.startsWith(typed));
+    const param = PS_LISTER_PARAMS.includes(typed) ? typed : hits.length === 1 ? hits[0] : null;
+    if (param === "path" || param === "literalpath") {
+      const value = m[2] ?? words[++k];
+      if (value === undefined || paths.length > 0) return null;
+      paths.push(...value.split(",").filter(Boolean));
+    } else if (!PS_LISTER_PLAIN_SWITCHES.has(param)) return null;
+  }
+  if (paths.some((p) => UNSPELLED.powershell.test(p))) return null;
+  return paths.length > 0 ? paths : ["."];
+}
+
 /**
  * Records what one cmdlet writes.
+ * @param {{ words: string[] }|null} piped - the stage whose output is
+ *   piped into this one, when there is one
  * @returns {boolean} true when `name` is a cmdlet this reader owns; false
  *   for anything else, which the shared readers then read as an external
  *   program (git, bash -c, node -e, curl -o) the way Bash would (BUG-048)
  */
-function powershellWrites(name, args, dir, ctx, stdin) {
+function powershellWrites(name, args, dir, ctx, stdin, piped = null) {
   const { add, abs } = ctx;
   const { named, positional } = psParse(args, name);
   if (PS_DOWNLOADERS.has(name)) {
@@ -5315,6 +5518,32 @@ function powershellWrites(name, args, dir, ctx, stdin) {
     if (link) {
       for (const dest of items) for (const src of named.get("value") ?? []) addLink(dir, ctx, src, dest, link[1].toLowerCase() !== "hardlink");
     } else for (const p of items) add(dir, p, stdin, append);
+    // A file that is not spelled out, fed from what this command unpacked (P1).
+    if (!link && items.some((p) => UNSPELLED.powershell.test(p)) && stdin.some(ctx.inbound)) ctx.carry([name, ...args], null);
+  } else if (PS_COPIERS.has(name) && piped && !named.has("path") && !named.has("literalpath") && named.get("destination")?.length) {
+    // Copy-Item and Move-Item with no source take it from the pipeline
+    // (re-probe 12, O2): read as nothing, a listing of notes piped into
+    // Copy-Item -Destination .claude/agents was silent. A plain
+    // Get-ChildItem hands on the items of the folders it lists, so the
+    // copy is read as Copy-Item FOLDER/* DEST. What any other stage
+    // hands on is not known: after an unpack, a clone or a download a
+    // person confirms the copy (P1); otherwise a file Guardian could not
+    // read lands in DEST, so a watched folder asks and an ordinary one
+    // stays silent.
+    const dest = named.get("destination")[0];
+    const recursive = PS_MOVERS.has(name) || named.has("recurse");
+    const listed = listedFolders(piped.words);
+    if (listed) {
+      for (const p of listed) {
+        addCopy(dir, ctx, SOURCE_GLOB.test(p) ? p : `${p.replace(/[\\/]+$/, "")}/*`, dest, { intoDir: true, recursive, slashMeansContents: false });
+      }
+    } else if (ctx.holding()) {
+      ctx.carry([...piped.words, "|", name, ...args], null);
+    } else {
+      const unreadInput = `${UNJUDGED}${abs(dir, dest)}`;
+      add(dir, `${dest}/x`, [unreadInput]);
+      if (!/[\\/]$/.test(dest) && !statSync(abs(dir, dest), { throwIfNoEntry: false })?.isDirectory()) add(dir, dest, [unreadInput]);
+    }
   } else if (PS_COPIERS.has(name)) {
     const sources = psPaths(args, name, ["path", "literalpath"], 0);
     const dest = psPaths(args, name, ["destination"], 1)[0];
@@ -5442,8 +5671,20 @@ function cmdWrites(name, operands, dir, ctx, args) {
     const from = (src) => (name === "move" ? missingMoveSource(ctx, dir, src) : null) ?? abs(dir, src);
     // A wildcard source is read as cp's is (re-probe 11, M1): the files it matches, top level only.
     const globs = sources.filter((src) => SOURCE_GLOB.test(src));
-    const plain = sources.filter((src) => !SOURCE_GLOB.test(src));
+    // A folder source (re-probe 12, O1): one on disk, one that ends in a
+    // separator, or one this command unpacked, cloned or downloaded into.
+    // copy takes the files in it, top level only; move takes the folder
+    // itself, which lands under the destination by its name.
+    const isFolder = (src) => /[\\/]$/.test(src) || ctx.marked(abs(dir, src)) ||
+      Boolean(statSync(abs(dir, src), { throwIfNoEntry: false })?.isDirectory());
+    const folders = sources.filter((src) => !SOURCE_GLOB.test(src) && isFolder(src));
+    const plain = sources.filter((src) => !SOURCE_GLOB.test(src) && !isFolder(src));
     for (const src of globs) addCopy(dir, ctx, src, dest, { intoDir, recursive: false, slashMeansContents: false });
+    for (const src of folders) {
+      const folder = src.replace(/[\\/]+$/, "");
+      if (name === "copy") addCopy(dir, ctx, `${folder}/*`, dest, { intoDir, recursive: false, slashMeansContents: false });
+      else addCopy(dir, ctx, folder, dest, { intoDir, recursive: true, slashMeansContents: false });
+    }
     if (intoDir) for (const src of plain) add(dir, `${dest}/${path.posix.basename(slashed(src))}`, [from(src)]);
     else if (plain.length > 0) add(dir, dest, plain.map(from));
     if (name === "move") for (const src of sources) add(dir, src);
@@ -6149,6 +6390,30 @@ process.stdin.on("end", () => {
     const filled = (t) => (bashTargets.get(t)?.sources.size ?? 0) > 0;
     const written = bashWrites.filter((t) => isWatched(t) || (filled(t) && isWatched(`${t}/x`)));
     const watched = [...written, ...write.targets.filter(isWatched)];
+
+    // ── Unread content carried on by a later step (Lex decision P1) ───
+    // What a command unpacks, clones or downloads cannot be read before
+    // it lands. A later step of the same command that takes it to the
+    // project root, a folder above it or a watched path puts it where
+    // agents load instructions from, and so may a copy whose source or
+    // destination the command does not spell out. Re-probes 10 to 12
+    // each found one more spelling of that copy, so it is judged by what
+    // the step names, whatever the program. An environment file is
+    // watched for what it holds, not loaded as instructions.
+    const landsOn = (p) => settingsFiles.some((f) => covers(p, f)) || (isWatched(p) && !ENV_FILE.test(watchKey(p))) || isWatched(`${p}/x`);
+    for (const { command, to } of shellRead.carried ?? []) {
+      const place = to === null ? null : to.find(landsOn);
+      if (to !== null && !place) continue;
+      record(confirmOrDeny,
+        `${TAG} This command unpacks, clones or downloads content, which Guardian cannot read before it lands, and a later step ` +
+        `(${safeEcho(command, 80)}) ` +
+        (place
+          ? `carries it to ${safeEchoPath(place, 120)}, which is the project root, a folder above it or a path agents load as instructions. `
+          : `copies or writes with a source or destination the command does not spell out (a variable, a substitution, ` +
+            `pipeline or xargs input, inline code), so Guardian cannot tell where that content lands. `) +
+        `Approve only if you know what it holds.${bypassNote}`);
+      break;
+    }
     if (watched.length === 0) emitVerdict(findings);
 
     // ── A command the reader could not place for certain (BUG-085) ────

@@ -7377,6 +7377,172 @@ describe("PreToolUse hook - a glob copy out of a folder (re-probe 11, M1 and Lex
   }
 });
 
+describe("PreToolUse hook - unread content carried on by a later step (re-probe 12, O1 to O3 and Lex decision P1)", () => {
+  // Once a command has unpacked, cloned or downloaded something, a later
+  // step that carries it to the project root, a folder above it or a
+  // watched path asks, and so does a copy whose source or destination is
+  // not spelled out. Both ends spelled out and an ordinary folder as the
+  // destination stay silent.
+  for (const [command, tool] of [
+    // O1: xcopy and cmd's copy take a folder that is not on disk yet.
+    ["unzip kit.zip -d tmp && cmd /c \"xcopy tmp . /E /I /Y\""],
+    ["tar -xf kit.tar -C tmp && cmd //c \"xcopy tmp . /E /I /Y\""],
+    ["unzip a.zip -d tmp && cmd /c \"xcopy tmp\\ . /E /I /Y\""],
+    ["unzip a.zip -d tmp && cmd /c \"xcopy tmp .\\ /E /Y\""],
+    ["unzip a.zip -d tmp && cmd /c \"copy tmp .\""],
+    ["unzip a.zip -d tmp && xcopy tmp . //E //I //Y"],
+    ["cmd /c \"xcopy missingdir . /E /I /Y\""],
+    ["Expand-Archive kit.zip tmp; xcopy tmp . /E /I /Y", "PowerShell"],
+    ["Expand-Archive kit.zip tmp; xcopy tmp .\\ /E /Y", "PowerShell"],
+    ["Expand-Archive kit.zip tmp; xcopy tmp\\ . /E /Y", "PowerShell"],
+    ["Expand-Archive kit.zip tmp; cmd /c \"xcopy tmp . /E /I /Y\"", "PowerShell"],
+    ["Expand-Archive kit.zip tmp; cmd /c \"copy tmp .\"", "PowerShell"],
+    ["Expand-Archive kit.zip tmp; cmd /c \"copy tmp\\ .\"", "PowerShell"],
+    // O2: pipeline input to Copy-Item and Move-Item.
+    ["Expand-Archive kit.zip tmp; Get-ChildItem tmp | Copy-Item -Destination . -Recurse", "PowerShell"],
+    ["Expand-Archive kit.zip tmp; Get-ChildItem tmp -Force | Move-Item -Destination .", "PowerShell"],
+    ["Expand-Archive kit.zip tmp; gci tmp | cp -Destination .", "PowerShell"],
+    ["Expand-Archive kit.zip tmp; Get-ChildItem -Path tmp -Recurse | Copy-Item -Destination .", "PowerShell"],
+    ["Expand-Archive kit.zip tmp; Get-Item tmp\\CLAUDE.md | Copy-Item -Destination .", "PowerShell"],
+    ["Expand-Archive kit.zip tmp; foreach ($f in Get-ChildItem tmp) { Copy-Item $f.FullName . -Recurse }", "PowerShell"],
+    ["Expand-Archive kit.zip tmp; gci tmp | % { Copy-Item $_.FullName . }", "PowerShell"],
+    ["Expand-Archive agents.zip tmp; Get-ChildItem tmp | Copy-Item -Destination .claude\\agents -Recurse", "PowerShell"],
+    // O2 with nothing unpacked: a watched folder still asks.
+    ["Get-ChildItem notes -Recurse | Copy-Item -Destination .claude\\agents", "PowerShell"],
+    ["Get-Item notes\\x.md | Copy-Item -Destination .claude\\agents", "PowerShell"],
+    // O3: a loop, find -exec, xargs, a destination in a variable or a substitution, ln with a glob.
+    ["unzip a.zip -d tmp && for f in tmp/*; do cp -r \"$f\" .; done"],
+    ["unzip a.zip -d tmp && find tmp -maxdepth 1 -mindepth 1 -exec cp -r {} . \\;"],
+    ["unzip a.zip -d tmp && find tmp -mindepth 1 -maxdepth 1 -exec cp -r {} . +"],
+    ["unzip a.zip -d tmp && ls tmp | xargs -I{} cp -r tmp/{} ."],
+    ["unzip a.zip -d tmp && ls tmp/* | xargs cp -t ."],
+    ["unzip a.zip -d tmp && cp -r tmp/* \"$PWD\""],
+    ["unzip a.zip -d tmp && cp tmp/CLAUDE.md \"$PWD\""],
+    ["unzip a.zip -d tmp && cp -r tmp/. \"$PWD\""],
+    ["unzip a.zip -d tmp && cp -r tmp/* \"$(pwd)\""],
+    ["unzip a.zip -d tmp && cp -r tmp/* `pwd`"],
+    ["unzip a.zip -d tmp && cp -r tmp/* \"$CLAUDE_PROJECT_DIR\""],
+    ["unzip a.zip -d tmp && ln -sf tmp/*.md ."],
+    ["unzip a.zip -d tmp && ln -s tmp/* ."],
+    ["unzip a.zip -d tmp && cmd /c \"copy tmp %CD%\""],
+    ["unzip a.zip -d tmp && cmd /c \"for %f in (tmp\\*) do copy %f .\""],
+    ["Expand-Archive agents.zip tmp; Copy-Item tmp\\CLAUDE.md $PWD", "PowerShell"],
+    ["Expand-Archive agents.zip tmp; Copy-Item tmp\\CLAUDE.md (Get-Location)", "PowerShell"],
+    ["Expand-Archive kit.zip tmp; Copy-Item tmp\\* (Get-Location) -Recurse", "PowerShell"],
+    ["Expand-Archive agents.zip tmp; Copy-Item tmp\\* $env:CLAUDE_PROJECT_DIR -Recurse", "PowerShell"],
+    // Any later command that names the unread content and the root, a folder above it or a watched path.
+    ["unzip a.zip -d tmp && cp tmp/README.md ."],
+    ["unzip a.zip -d tmp && cp -r tmp/sub ."],
+    ["unzip a.zip -d tmp && cp -r tmp/sub .."],
+    ["unzip a.zip -d tmp/kit && cp -r tmp/* ."],
+    ["unzip a.zip -d tmp && python tool.py tmp ."],
+    ["unzip a.zip -d tmp && node -e \"require('fs').cpSync('tmp', '.', { recursive: true })\""],
+    ["git clone https://example.test/r app && cd app && cp -r . .."],
+    ["git clone https://example.test/r /tmp/r && cp /tmp/r/LICENSE ."],
+    ["unzip a.zip -d tmp && echo \"$(cp tmp/README.md .)\""],
+    ["unzip a.zip -d tmp && cp -rT tmp ."],
+    // A folder is the same folder in another case where the file system says so.
+    ...(process.platform === "win32" || process.platform === "darwin" ? [["unzip a.zip -d Tmp && cp -r tmp/sub ."]] : []),
+    ["unzip a.zip -d tmp && cp -r tmp/* ~+"],
+    ["unzip a.zip -d tmp && bash -c 'cp -r tmp/* \"$0\"' ."],
+    ["unzip a.zip -d tmp && sudo cp -r tmp/sub ."],
+    ["unzip a.zip -d tmp && npx shx cp -r tmp/sub ."],
+    ["unzip a.zip -d tmp && find . -name CLAUDE.md -exec cp {} . \\;"],
+    ["unzip a.zip -d tmp && cmd /c \"move tmp\\sub .\""],
+    ["unzip a.zip -d tmp && powershell -c \"Get-ChildItem tmp | Copy-Item -Destination .\""],
+    // Inline code that names the unread content and writes: where it writes is not known.
+    ["unzip a.zip -d tmp; python3 -c \"import shutil,os; shutil.copytree('tmp', os.getcwd(), dirs_exist_ok=True)\""],
+    ["unzip a.zip -d tmp && python3 - <<'EOF'\nimport shutil, os\nshutil.copytree('tmp', os.getcwd(), dirs_exist_ok=True)\nEOF"],
+    ["Expand-Archive kit.zip tmp; Copy-Item tmp\\README.md .", "PowerShell"],
+    ["Expand-Archive kit.zip tmp; Start-Process xcopy -ArgumentList 'tmp','.','/E'", "PowerShell"],
+    ["Expand-Archive kit.zip tmp; 'tmp\\CLAUDE.md' | Copy-Item -Destination .", "PowerShell"],
+    // A writer whose target is not spelled out, fed from the unread content.
+    ["unzip a.zip -d tmp && cat tmp/x.md > \"$OUT\""],
+    ["unzip a.zip -d tmp && cat tmp/x.md | tee \"$OUT\""],
+    ["unzip a.zip -d tmp && dd if=tmp/CLAUDE.md of=\"$F\""],
+    ["Expand-Archive kit.zip tmp; Get-Content tmp\\x.md | Set-Content $out", "PowerShell"],
+  ]) {
+    stagedOnly(`asks or denies${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      const out = runGuarded(command, { tool });
+      assert.ok(["ask", "deny"].includes(decisionOf(out)), `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  // notes/x.md holds a payload: a listing piped into Copy-Item or
+  // Move-Item is read as the copy of the folder's files, and cmd's copy
+  // and move of a folder are judged by the files in it.
+  for (const [command, tool] of [
+    ["Get-ChildItem notes | Copy-Item -Destination .claude\\agents", "PowerShell"],
+    ["gci -Path notes -Force | Move-Item -Destination .claude\\agents", "PowerShell"],
+    ["cmd /c \"copy notes .claude\\agents\""],
+    ["cmd /c \"move notes .claude\\agents\""],
+  ]) {
+    stagedOnly(`denies${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      const out = runGuarded(command, { tool });
+      assert.equal(decisionOf(out), "deny", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  // The cost rule: a command with no clone, download or extraction in it
+  // is untouched, and unread content carried to an ordinary folder with
+  // both ends spelled out stays silent.
+  for (const [command, tool] of [
+    ["cp \"$SRC\" dist/"],
+    ["for f in src/*.js; do cp \"$f\" dist/; done"],
+    ["find src -name '*.js' -exec cp {} dist/ \\;"],
+    ["ls src | xargs -I{} cp src/{} dist/"],
+    ["cp -r src/* \"$PWD/dist\""],
+    ["npm run build && cmd /c \"copy dist\\bundle.js .\""],
+    ["cmd /c \"copy src\\a.js dist\""],
+    ["cmd /c \"copy src dist\""],
+    ["cmd /c \"move src\\a.js dist\""],
+    ["xcopy src dist /E /I /Y"],
+    ["ln -s src/*.js dist/"],
+    ["cat src/a.js > \"$OUT\""],
+    ["mv build/out.js dist/ && cp \"$F\" dist/"],
+    ["Get-ChildItem src\\*.js | Copy-Item -Destination dist\\", "PowerShell"],
+    ["Get-ChildItem src | Copy-Item -Destination dist\\", "PowerShell"],
+    ["Get-ChildItem src -Recurse | Copy-Item -Destination dist\\", "PowerShell"],
+    ["Get-ChildItem src/*.js | Copy-Item -Destination .", "PowerShell"],
+    ["Get-ChildItem src -Filter *.js | Move-Item -Destination dist", "PowerShell"],
+    ["Copy-Item src\\a.js $dest", "PowerShell"],
+    ["Copy-Item src\\a.js (Join-Path dist a.js)", "PowerShell"],
+    ["foreach ($f in Get-ChildItem src) { Copy-Item $f.FullName dist }", "PowerShell"],
+    ["Get-Content src\\a.js | Set-Content $out", "PowerShell"],
+    ["unzip a.zip -d tmp && cp tmp/README.md docs/"],
+    ["unzip a.zip -d tmp && cp tmp/README.md ./NOTES.md"],
+    ["unzip a.zip -d tmp && find src -name '*.js' -exec cp {} dist/ \\;"],
+    ["git clone https://example.test/r app && cd app && npm install"],
+    ["git clone https://example.test/r app && cd app && cp .env.example .env"],
+    ["git clone https://example.test/r app && cd app && npm install && npm run build"],
+    ["git clone https://example.test/r app && cd app && git checkout -b feature && git status"],
+    ["git clone https://example.test/r app && cd app && mkdir -p build && cp -r src build/"],
+    ["git clone https://example.test/r && cd r && pip install -e ."],
+    ["curl -sLo /tmp/x.tgz https://example.test/x.tgz && tar -xzf /tmp/x.tgz -C vendor"],
+    ["curl -sLo kit.zip https://example.test/kit.zip && unzip kit.zip -d vendor/kit && rm kit.zip"],
+    ["wget https://example.test/data.csv -O data/data.csv && python process.py data/data.csv"],
+    ["curl -sL https://example.test/install.sh -o install.sh && chmod +x install.sh && bash install.sh"],
+    ["curl -o d.json https://example.test/d.json && python -c \"import json; print(len(json.load(open('d.json'))))\""],
+    ["unzip a.zip -d tmp && mv tmp vendor/kit"],
+    ["unzip a.zip -d tmp && tar -czf backup.tgz tmp"],
+    ["unzip a.zip -d tmp && git add . && git commit -m 'add kit'"],
+    ["unzip a.zip -d tmp && ls tmp && rm -rf tmp"],
+    ["unzip a.zip -d tmp && diff -r tmp src"],
+    ["unzip a.zip -d tmp && git status ."],
+    ["unzip a.zip -d tmp && xcopy tmp vendor /E /I /Y"],
+    ["unzip a.zip -d tmp && xcopy tmp vendor /C /E /I"],
+    ["unzip a.zip -d tmp && cmd /c \"copy tmp vendor\""],
+    ["Expand-Archive a.zip tmp; Get-ChildItem tmp | Copy-Item -Destination src\\ -Recurse", "PowerShell"],
+    ["Expand-Archive a.zip tmp; xcopy tmp vendor /E /I /Y", "PowerShell"],
+    ["Invoke-WebRequest https://example.test/x.zip -OutFile x.zip; Expand-Archive x.zip vendor\\x; Remove-Item x.zip", "PowerShell"],
+    ["git clone https://example.test/r app; Set-Location app; npm install", "PowerShell"],
+  ]) {
+    stagedOnly(`silent${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions", tool }));
+    });
+  }
+});
+
 describe("PreToolUse hook - PowerShell downloads, mklink and fsutil hardlink (re-probe 9, K2)", () => {
   for (const command of [
     // The re-probe's download forms, and their like.

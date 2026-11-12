@@ -490,6 +490,25 @@ Behavior a user will notice after the apply:
   ask. `cp notes/*.md .claude/agents/` is denied on a payload in
   `notes`. In bypass mode `unzip a.zip -d tmp && cp -r tmp/* src/`,
   `cp notes/*.md docs/` and `cp src/*.js dist/` are silent.
+- Unread content carried on by a later step of the same command (P1):
+  `unzip a.zip -d tmp && cmd /c "xcopy tmp . /E /I /Y"`,
+  `unzip a.zip -d tmp && cmd /c "copy tmp ."`,
+  `unzip a.zip -d tmp && cp -r tmp/* "$PWD"`,
+  `unzip a.zip -d tmp && for f in tmp/*; do cp -r "$f" .; done`,
+  `unzip a.zip -d tmp && ls tmp | xargs -I{} cp -r tmp/{} .`,
+  `unzip a.zip -d tmp && ln -sf tmp/*.md .`,
+  `unzip a.zip -d tmp && cp tmp/README.md .`,
+  `unzip a.zip -d tmp && python tool.py tmp .` and, through the
+  PowerShell tool, `Expand-Archive kit.zip tmp; xcopy tmp . /E /I /Y`,
+  `Expand-Archive kit.zip tmp; Get-ChildItem tmp | Copy-Item -Destination . -Recurse`
+  and `Expand-Archive kit.zip tmp; Copy-Item tmp\* (Get-Location) -Recurse`
+  ask. `Get-ChildItem notes | Copy-Item -Destination .claude\agents` is
+  denied on a payload in `notes`. In bypass mode
+  `unzip a.zip -d tmp && cp tmp/README.md docs/`,
+  `git clone https://example.test/r app && cd app && npm install`,
+  `for f in src/*.js; do cp "$f" dist/; done` and, through the
+  PowerShell tool, `Get-ChildItem src\*.js | Copy-Item -Destination dist\`
+  are silent.
 - In PowerShell a text writer says the word as `echo` does (K4): in
   bypass mode `Add-Content README.md "## Security"` and
   `Write-Output "security scan done" | Out-File -Append logs\ci.log` are
@@ -876,6 +895,7 @@ there, with who ran it and how. Restore any file a test changes with
 | BUG-066 (K2) | On Windows, with a payload in `notes\x.md`, through the PowerShell tool ask for `cmd /c mklink /H CLAUDE.md notes\x.md`; see it denied. Ask for `(New-Object Net.WebClient).DownloadFile('https://example.com/','CLAUDE.md')`; see a Guardian prompt naming CLAUDE.md; decline. In bypass mode `Start-BitsTransfer -Source https://example.com/x.zip -Destination downloads\x.zip` gets no Guardian prompt. |
 | BUG-066 (L1) | In a scratch project, with an archive `agents.zip` holding `helper.md` with a payload, ask Claude to run `unzip -oq agents.zip -d tmp && cp -r tmp/. .claude/agents/`; see a Guardian prompt naming `.claude/agents`; decline. Ask for `unzip agents.zip -d .claude/agents`; see a Guardian prompt; decline. In bypass mode `unzip -o agents.zip -d assets/x` gets no Guardian prompt. |
 | BUG-066 (N1) | In a scratch project with its own `CLAUDE.md`, and an archive `kit.zip` holding a `CLAUDE.md` with a payload, ask Claude to run `unzip -o kit.zip -d kit && cp -r kit/* .`; see a Guardian prompt naming the project folder; decline, and check `CLAUDE.md` is unchanged. Through the PowerShell tool ask for `Expand-Archive kit.zip tmp; Copy-Item -Recurse tmp\* .`; see a Guardian prompt; decline. In bypass mode `unzip -o kit.zip -d kit && cp -r kit/* src/` gets no Guardian prompt. |
+| BUG-066 (P1) | On Windows, in a scratch project with its own `CLAUDE.md`, and an archive `kit.zip` holding a `CLAUDE.md` with a payload, through the PowerShell tool ask for `Expand-Archive kit.zip tmp; xcopy tmp . /E /I /Y`; see a Guardian prompt that names the later step; decline, and check `CLAUDE.md` is unchanged. Ask for `Expand-Archive kit.zip tmp; Get-ChildItem tmp \| Copy-Item -Destination . -Recurse`; see a prompt; decline. Through Bash ask for `unzip -o kit.zip -d kit && for f in kit/*; do cp -r "$f" .; done`; see a prompt; decline. In bypass mode `unzip -o kit.zip -d kit && cp kit/README.md docs/` and `for f in src/*.js; do cp "$f" dist/; done` get no Guardian prompt. |
 | BUG-080 (K4) | At the root of a scratch project in bypass mode, through the PowerShell tool, ask for `Add-Content README.md "## Security"`; no Guardian prompt. Then `Add-Content x.ps1 'Remove-Item -Recurse security'; .\x.ps1`; see it denied. |
 | BUG-080 (K6) | In a scratch `guardian init` project ask Claude to run `` rm -rf secu`:`rity ``; see a Guardian prompt naming security; decline. In bypass mode `tar czf backup-$(date +%F).tgz src` and `npm config get registry && npm test -- security` get no Guardian prompt. |
 | BUG-080 (L2) | At the root of a scratch project ask Claude to run `npm config --location=project set script-shell=./e.sh; npm run security`; see a Guardian prompt naming security; decline. In bypass mode `npm config --location=project get registry && npm test -- security` gets no Guardian prompt. |
