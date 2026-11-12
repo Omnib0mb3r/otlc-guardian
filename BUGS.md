@@ -2266,4 +2266,6 @@ Lex's rulings (2026-11-12 14:45Z): Node built-ins only; committed fixtures are G
 
 Smoke test, pending, Lex runs it with DevNeural: the mail daemon runs `inbound-check` on real mail in its own minimal environment (a clean attachment is released, a held one is reported with Guardian's reasons). RESOLVED when that has passed.
 
+Blocked (Lex, 2026-11-12): the smoke test cannot run until DevNeural builds the mail daemon. No caller of `inbound-check` exists yet; the daemon waits on DevNeural's INPUT-TAINT work, its BUG-662 and BUG-663, and the first-line gate. DevNeural's mailbox spec (`docs/spec/LEX-MAILBOX.md`, revision 7.2) cites Guardian `d46be67`. The status stays SMOKE-TESTING until then.
+
 <!-- DETAILS END -->
