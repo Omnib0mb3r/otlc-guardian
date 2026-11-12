@@ -561,6 +561,33 @@ function missingMoveSource(ctx, dir, src) {
   return !SOURCE_GLOB.test(src) && !ctx.present(file) && ctx.under(file).length === 0 ? `${UNJUDGED}${file}` : null;
 }
 
+/**
+ * Records a link at `dest` to `src`, both as the command spells them,
+ * judged by what it reaches as a copy is: New-Item -ItemType, cmd's
+ * mklink, fsutil hardlink create (re-probe 8, J8; re-probe 9, K2). A
+ * symbolic link's relative source is read from the shell's folder and
+ * from the link's, and one to a folder reaches every file under it; a
+ * symbolic link to nothing yet cannot be judged (H9). A hard link to a
+ * file that is not there is a source that is not on disk (K1).
+ */
+function addLink(dir, ctx, src, dest, symbolic) {
+  const linkFolder = ctx.abs(dir, path.posix.dirname(dest.replace(/\\/g, "/")));
+  if (symbolic && !ctx.present(ctx.abs(dir, src)) && !ctx.present(ctx.abs(linkFolder, src))) {
+    ctx.add(dir, dest, [`${UNJUDGED}${ctx.abs(linkFolder, src)}`]);
+    return;
+  }
+  for (const from of symbolic ? [src, ctx.abs(linkFolder, src)].filter((p) => ctx.present(ctx.abs(dir, p))) : [src]) {
+    const folder = Boolean(statSync(ctx.abs(dir, from), { throwIfNoEntry: false })?.isDirectory());
+    addCopy(dir, ctx, from, dest, { intoDir: false, recursive: folder, slashMeansContents: false });
+  }
+}
+
+/** The name a download saves a URL as when none is given: its last path segment, decoded. */
+function urlFileName(url) {
+  return url.replace(/[?#].*$/, "").replace(/\/+$/, "").split("/").pop()
+    .replace(/%([0-9A-Fa-f]{2})/g, (m, hex) => String.fromCharCode(parseInt(hex, 16)));
+}
+
 // Options of git clone and git submodule add that take the next word.
 const GIT_CLONE_VALUE_OPTIONS = new Set(["-b", "--branch", "-o", "--origin", "-u", "--upload-pack", "--reference", "--reference-if-able",
   "--separate-git-dir", "--depth", "--shallow-since", "--shallow-exclude", "-c", "--config", "--template", "-j", "--jobs", "--filter",
@@ -4289,6 +4316,14 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
         if (/^move$/i.test(m[1])) add(cwd, paths[0]);
       } else for (const p of paths) add(cwd, p);
     }
+    // (New-Object Net.WebClient).DownloadFile(URL, 'CLAUDE.md') is a
+    // download into that file; a path that is not spelled out leaves the
+    // command uncertain (re-probe 9, K2).
+    for (const m of command.matchAll(DOTNET_DOWNLOAD_FILE)) {
+      const literal = /^(['"])(.*)\1$/.exec(callArguments(command, m.index + m[0].length)?.[1] ?? "");
+      if (literal?.[2]) add(cwd, literal[2], [DOWNLOADED]);
+      else found.uncertain = true;
+    }
     // [IO.Compression.ZipFile]::ExtractToDirectory('a.zip', 'dir') unpacks into dir (re-probe 4, E7).
     for (const m of command.matchAll(DOTNET_ZIP_EXTRACT)) {
       const literal = /^(['"])(.*)\1$/.exec(callArguments(command, m.index + m[0].length)?.[1] ?? "");
@@ -4352,8 +4387,12 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
     for (const g of groups) g.out.push(...stage.out);
     // A group's output flows on: (Get-Content x) | Set-Content y, (cat a) > b
     // (re-probe 3, D1), and so does what is piped into one: cat a | ( cat > b ).
+    // A PowerShell method call ($x.Replace(...), (...).DownloadString(...))
+    // returns what the call gives, so its stage's output is the group's
+    // (re-probe 9, K2).
+    const method = dialect === "powershell" && own.length === 1 && /\.[A-Za-z_]\w*$/.test(own[0]);
     if (op === "(") {
-      groups.push({ out: [], stdin: own.length === 0 ? pipeIn : [] });
+      groups.push({ out: method ? [...stage.out] : [], stdin: own.length === 0 ? pipeIn : [] });
       pipeIn = [];
     } else if (op === ")") pipeIn = groups.pop()?.out ?? stage.out;
     else pipeIn = op === "|" || op === "|&" ? stage.out : [];
@@ -4487,6 +4526,9 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
   if (["cd", "pushd", "chdir", "set-location", "sl", "push-location"].includes(name)) {
     return { dir: operands[0] && operands[0] !== "-" ? abs(dir, operands[0]) : dir, out };
   }
+  // $wc.DownloadString(URL) and (New-Object Net.WebClient).DownloadData(URL)
+  // return what they fetch (re-probe 9, K2).
+  if (ctx.dialect === "powershell" && DOTNET_DOWNLOAD_RESULT.test(words[0])) return { dir, out: [...out, DOWNLOADED] };
   // A cmdlet or a cmd built-in is read by its dialect's reader. Anything
   // else is an external program (git, bash, node, curl) and is read the
   // same way whichever shell runs it (BUG-048).
@@ -4494,7 +4536,7 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     if (PS_DOWNLOADERS.has(name)) return { dir, out: [...out, DOWNLOADED] };
     return { dir, out: PS_CONTENT_PASSERS.has(name) ? [...out, ...psPaths(args, name, ["path", "literalpath"], 0).map((p) => abs(dir, p))] : out };
   }
-  if (ctx.dialect === "cmd" && cmdWrites(name, operands, dir, ctx)) return { dir, out };
+  if (ctx.dialect === "cmd" && cmdWrites(name, operands, dir, ctx, args)) return { dir, out };
   if (CMD_SHELLS.has(name)) {
     const script = cmdScript(args);
     if (script !== null) recurse(script, dir, "cmd");
@@ -4688,12 +4730,15 @@ function commandWrites(allWords, dir, ctx, input = { pipeIn: [], reads: [] }) {
     if (remote) {
       for (const a of args) {
         if (a.startsWith("-")) continue;
-        const last = a.replace(/[?#].*$/, "").replace(/\/+$/, "").split("/").pop()
-          .replace(/%([0-9A-Fa-f]{2})/g, (m, hex) => String.fromCharCode(parseInt(hex, 16)));
+        const last = urlFileName(a);
         if (last) add(dir, `${folder}/${last}`, [DOWNLOADED]);
       }
     }
     return { dir, out: toStdout ? [...out, DOWNLOADED] : out };
+  } else if (name === "fsutil" && operands[0]?.toLowerCase() === "hardlink" && operands[1]?.toLowerCase() === "create") {
+    // fsutil hardlink create LINK TARGET, as mklink /H (re-probe 9, K2).
+    if (operands[2] && operands[3]) addLink(dir, ctx, operands[3], operands[2], false);
+    else if (operands[2]) add(dir, operands[2]);
   } else if (TEMPLATE_CLONERS.has(name)) {
     // degit REPO [DIR] fills DIR, or the working folder, as a clone does (K1).
     if (operands.length > 0) add(dir, operands[1] ?? ".", [DOWNLOADED]);
@@ -4933,7 +4978,8 @@ const PS_RENAMERS = new Set(["rename-item", "ren", "rni"]);
 const PS_CONTENT_PASSERS = new Set(["get-content", "gc", "cat", "type", "select-string", "sls"]);
 const PS_SWITCHES = new Set(["force", "recurse", "append", "nonewline", "noclobber", "passthru", "confirm", "whatif", "verbose", "debug", "raw", "asbytestream", "container",
   "wait", "simplematch", "casesensitive", "quiet", "list", "noemphasis", "notmatch", "allmatches", "usetransaction",
-  "usebasicparsing", "usedefaultcredentials", "disablekeepalive", "proxyusedefaultcredentials", "skipcertificatecheck", "resume", "skipheadervalidation", "followrellink"]);
+  "usebasicparsing", "usedefaultcredentials", "disablekeepalive", "proxyusedefaultcredentials", "skipcertificatecheck", "resume", "skipheadervalidation", "followrellink",
+  "asynchronous", "suspended", "dynamic", "customheaderswriteonly"]);
 
 // Each cmdlet's parameters and parameter aliases, for prefix binding.
 // Every cmdlet also has the common parameters.
@@ -4962,6 +5008,10 @@ const PS_PARAMS = {
   "invoke-restmethod": { params: [...WEB_PARAMS, "statuscodevariable", "responseheadersvariable", "followrellink", "maximumfollowrellink"], aliases: {} },
   "invoke-expression": { params: ["command"], aliases: {} },
   "expand-archive":    { params: ["path", "literalpath", "destinationpath", "force", "passthru"], aliases: LITERAL_ALIASES },
+  "start-bitstransfer": { params: ["source", "destination", "transfertype", "asynchronous", "suspended", "dynamic", "authentication", "credential",
+    "description", "displayname", "priority", "proxyauthentication", "proxybypass", "proxycredential", "proxylist", "proxyusage", "retryinterval",
+    "retrytimeout", "transferpolicy", "usestoredcredential", "customheaders", "customheaderswriteonly", "httpmethod", "certstorelocation",
+    "certstorename", "certhash", "maxdownloadtime", "securityflags", "notifyflags", "notifycmdline", "aclflags"], aliases: {} },
 };
 PS_PARAMS["add-content"] = PS_PARAMS["set-content"];
 const PS_CMDLET_ALIASES = {
@@ -4994,6 +5044,10 @@ const PS_EVALUATORS  = new Set(["invoke-expression", "iex"]);
 const DOTNET_ZIP_EXTRACT = /\[(?:system\.)?io\.compression\.zipfile(?:extensions)?\]::extracttodirectory\s*\(/gi;
 const PS_SCRIPT_FROM_STRING = /\[(?:system\.management\.automation\.)?scriptblock\]::create\s*\(|\.(?:invokescript|newscriptblock)\s*\(/gi;
 const DOTNET_FILE_WRITE = /\[(?:system\.)?io\.file\]::((?:write|append|create|delete|copy|move|replace)\w*)\s*\(([^)]*)\)/gi;
+// WebClient's downloads (re-probe 9, K2): DownloadFile(URL, PATH) saves to
+// PATH, and DownloadString and DownloadData return what they fetch.
+const DOTNET_DOWNLOAD_FILE = /\.downloadfile(?:async|taskasync)?\s*\(/gi;
+const DOTNET_DOWNLOAD_RESULT = /\.download(?:string|data)(?:async|taskasync)?$/i;
 
 /**
  * Named parameters of `cmdlet` (bound with psParam(), comma lists split)
@@ -5039,6 +5093,21 @@ function powershellWrites(name, args, dir, ctx, stdin) {
     // so their -o and -O forms are read by the shared reader as well.
     return name !== "curl" && name !== "wget";
   }
+  if (name === "start-bitstransfer") {
+    // Start-BitsTransfer [-Source] URL... [[-Destination] PATH...]: each
+    // download lands on its destination, under it by the URL's name when
+    // it is a folder, or in the working folder (re-probe 9, K2). An
+    // upload sends a local file and writes nothing here.
+    if (/^upload/i.test(named.get("transfertype")?.[0] ?? "")) return true;
+    const destinations = psPaths(args, name, ["destination"], 1);
+    psPaths(args, name, ["source"], 0).forEach((url, k) => {
+      const dest = destinations[k] ?? destinations[0] ?? ".";
+      const folder = dest === "." || /[\\/]$/.test(dest) || Boolean(statSync(abs(dir, dest), { throwIfNoEntry: false })?.isDirectory());
+      const file = urlFileName(url);
+      add(dir, folder && file ? `${dest.replace(/[\\/]+$/, "")}/${file}` : dest, [DOWNLOADED]);
+    });
+    return true;
+  }
   if (PS_EVALUATORS.has(name)) {
     ctx.recurse([...(named.get("command") ?? []), ...positional].join(" "), dir, "powershell");
     return true;
@@ -5050,26 +5119,10 @@ function powershellWrites(name, args, dir, ctx, stdin) {
     const paths = psPaths(args, name, ["path", "literalpath", "filepath"], 0);
     const items = itemName ? (paths.length > 0 ? paths : ["."]).map((p) => `${p}/${itemName}`) : paths;
     // New-Item -ItemType HardLink, SymbolicLink or Junction makes a link
-    // to what -Value (alias -Target) names, as ln does (re-probe 8, J8;
-    // H9). A symbolic link's relative source is read from the shell's
-    // folder and from the link's; a link to a folder reaches every file
-    // under it; one to nothing yet cannot be judged.
+    // to what -Value (alias -Target) names, as ln does (re-probe 8, J8).
     const link = (name === "new-item" || name === "ni") ? /^(hardlink|symboliclink|junction)$/i.exec(named.get("itemtype")?.[0] ?? "") : null;
     if (link) {
-      const symbolic = link[1].toLowerCase() !== "hardlink";
-      for (const dest of items) {
-        const linkFolder = abs(dir, path.posix.dirname(dest.replace(/\\/g, "/")));
-        for (const src of named.get("value") ?? []) {
-          if (symbolic && !ctx.present(abs(dir, src)) && !ctx.present(abs(linkFolder, src))) {
-            add(dir, dest, [`${UNJUDGED}${abs(linkFolder, src)}`]);
-            continue;
-          }
-          for (const from of symbolic ? [src, abs(linkFolder, src)].filter((p) => ctx.present(abs(dir, p))) : [src]) {
-            const folder = Boolean(statSync(abs(dir, from), { throwIfNoEntry: false })?.isDirectory());
-            addCopy(dir, ctx, from, dest, { intoDir: false, recursive: folder, slashMeansContents: false });
-          }
-        }
-      }
+      for (const dest of items) for (const src of named.get("value") ?? []) addLink(dir, ctx, src, dest, link[1].toLowerCase() !== "hardlink");
     } else for (const p of items) add(dir, p, stdin, append);
   } else if (PS_COPIERS.has(name)) {
     const sources = psPaths(args, name, ["path", "literalpath"], 0);
@@ -5160,8 +5213,9 @@ const CMD_RENAMERS = new Set(["ren", "rename"]);
 // adds its own cmdlets or built-ins.
 const STARTED_PROGRAMS = new Set([...COPY_COMMANDS, ...DELETE_COMMANDS, ...METADATA_COMMANDS, ...TAR_COMMANDS, ...CONTENT_PASSERS,
   ...SHELLS, ...CMD_SHELLS, ...POWERSHELLS, ...INTERPRETERS, ...COMMAND_WRAPPERS,
-  "tee", "dd", "patch", "unzip", "find", "curl", "wget", "robocopy", "xcopy", "git", "eval", ...TEMPLATE_CLONERS]);
-const PS_STARTED_PROGRAMS = new Set([...PS_WRITERS, ...PS_COPIERS, ...PS_REMOVERS, ...PS_RENAMERS, ...PS_CONTENT_PASSERS, ...PS_DOWNLOADERS, ...PS_EVALUATORS]);
+  "tee", "dd", "patch", "unzip", "find", "curl", "wget", "robocopy", "xcopy", "git", "eval", "fsutil", ...TEMPLATE_CLONERS]);
+const PS_STARTED_PROGRAMS = new Set([...PS_WRITERS, ...PS_COPIERS, ...PS_REMOVERS, ...PS_RENAMERS, ...PS_CONTENT_PASSERS, ...PS_DOWNLOADERS, ...PS_EVALUATORS,
+  "start-bitstransfer"]);
 const CMD_STARTED_PROGRAMS = new Set([...CMD_DELETERS, ...CMD_COPIERS, ...CMD_RENAMERS, "mklink"]);
 
 /**
@@ -5180,9 +5234,10 @@ function cmdScript(args) {
 /**
  * Records what one cmd built-in writes.
  * @param {string[]} operands - the arguments that are not switches
+ * @param {string[]} args - all of them
  * @returns {boolean} true when `name` is a built-in this reader owns
  */
-function cmdWrites(name, operands, dir, ctx) {
+function cmdWrites(name, operands, dir, ctx, args) {
   const { add, abs } = ctx;
   const slashed = (p) => p.replace(/\\/g, "/");
   if (CMD_DELETERS.has(name)) {
@@ -5208,7 +5263,11 @@ function cmdWrites(name, operands, dir, ctx) {
     }
     if (target) add(dir, target);
   } else if (name === "mklink") {
-    if (operands[0]) add(dir, operands[0]);
+    // mklink [/D | /H | /J] LINK TARGET: /H a hard link, any other a
+    // symbolic link or a junction, read as ln reads them (re-probe 9, K2).
+    const [link, target] = operands;
+    if (link && target) addLink(dir, ctx, target, link, !args.some((a) => /^\/h$/i.test(a)));
+    else if (link) add(dir, link);
   } else {
     return false;
   }

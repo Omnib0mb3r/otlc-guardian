@@ -7243,6 +7243,68 @@ describe("PreToolUse hook - a source that is not on disk, and a clone (re-probe 
   }
 });
 
+describe("PreToolUse hook - PowerShell downloads, mklink and fsutil hardlink (re-probe 9, K2)", () => {
+  for (const command of [
+    // The re-probe's download forms, and their like.
+    "(New-Object Net.WebClient).DownloadFile('https://example.test/','CLAUDE.md')",
+    '(New-Object System.Net.WebClient).DownloadFile("https://example.test/a.md", ".claude\\agents\\a.md")',
+    "$wc = New-Object Net.WebClient; $wc.DownloadFileAsync('https://example.test/x', 'AGENTS.md')",
+    "$wc = New-Object Net.WebClient; $wc.DownloadFile('https://example.test/x', $dest); Copy-Item $dest .claude\\agents\\",
+    "Start-BitsTransfer -Source https://example.test/ -Destination CLAUDE.md",
+    "Start-BitsTransfer https://example.test/a.md .claude\\agents\\",
+    "Start-BitsTransfer https://example.test/CLAUDE.md",
+    "Start-BitsTransfer -Source https://example.test/x -Dest CLAUDE.md -Asynchronous",
+    "(New-Object Net.WebClient).DownloadString('https://example.test/') > CLAUDE.md",
+    "(New-Object Net.WebClient).DownloadString('https://example.test/') | Set-Content CLAUDE.md",
+    "$wc.DownloadString('https://example.test/') | Out-File .claude\\agents\\x.md",
+    "[Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://example.test/')) > CLAUDE.md",
+    // A link to a file that is not there.
+    "cmd /c mklink CLAUDE.md notes\\missing.md",
+    "cmd /c mklink /H CLAUDE.md notes\\missing.md",
+  ]) {
+    stagedOnly(`asks (PowerShell): ${command}`, () => {
+      const out = runGuarded(command, { tool: "PowerShell" });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  // notes/x.md holds a payload: a link is judged by what it reaches, as ln is.
+  for (const [command, tool] of [
+    ["cmd /c mklink /H CLAUDE.md notes\\x.md", "PowerShell"],
+    ["cmd /c mklink CLAUDE.md notes\\x.md", "PowerShell"],
+    ["cmd /c mklink /D .claude\\agents\\n notes", "PowerShell"],
+    ["cmd /c mklink /J .claude\\agents\\n ..\\..\\notes", "PowerShell"],
+    ["cmd.exe /c \"mklink /h AGENTS.md notes\\x.md\"", "PowerShell"],
+    ["fsutil hardlink create CLAUDE.md notes\\x.md", "PowerShell"],
+    ["fsutil hardlink create CLAUDE.md notes/x.md"],
+    // A method call returns what its object holds.
+    ["(Get-Content notes\\x.md).Replace('a','b') > CLAUDE.md", "PowerShell"],
+    ["(Get-Content notes\\x.md).ToUpper() | Set-Content AGENTS.md", "PowerShell"],
+  ]) {
+    stagedOnly(`denies${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      const out = runGuarded(command, { tool });
+      assert.equal(decisionOf(out), "deny", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const command of [
+    "(New-Object Net.WebClient).DownloadFile('https://example.test/x.zip','downloads\\x.zip')",
+    "(New-Object Net.WebClient).DownloadString('https://example.test/') > out.html",
+    "Start-BitsTransfer -Source https://example.test/x.zip -Destination downloads\\x.zip",
+    "Start-BitsTransfer -Source CLAUDE.md -Destination https://example.test/up -TransferType Upload",
+    "cmd /c mklink /H CLAUDE.md notes\\ok.md",
+    "cmd /c mklink link.md notes\\x.md",
+    "fsutil hardlink create CLAUDE.md notes\\ok.md",
+    "fsutil hardlink list CLAUDE.md",
+    "(Get-Content notes\\ok.md).Replace('a','b') > CLAUDE.md",
+    "(Get-Content README.md).Replace('a','b') | Set-Content README.md",
+  ]) {
+    stagedOnly(`silent (PowerShell): ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions", tool: "PowerShell" }));
+    });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------

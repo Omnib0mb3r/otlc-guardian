@@ -233,6 +233,17 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **PowerShell downloads, `mklink` and `fsutil hardlink` are read
+  (BUG-066, re-probe 9 K2).** `cmd /c mklink /H CLAUDE.md notes\x.md`,
+  `fsutil hardlink create`, `Start-BitsTransfer` and
+  `(New-Object Net.WebClient).DownloadFile(URL, 'CLAUDE.md')` were
+  silent. A link made by `mklink` or `fsutil` is judged by what it
+  reaches, as `ln` is; a download by BITS or WebClient
+  (`DownloadFile`, and `DownloadString` or `DownloadData` into a
+  redirect or a pipe) into a watched path asks. A method call on file
+  content (`(Get-Content x).Replace(...) > CLAUDE.md`) is judged by
+  that content.
+
 - **A copy from a file that is not on disk asks, and a clone is a
   download (BUG-066, re-probe 9 K1).** `git clone URL tmp && cp
   tmp/CLAUDE.md CLAUDE.md`, `git clone URL .claude/agents/x`, `gh repo
