@@ -149,7 +149,8 @@ ${c.bold}COMMANDS${c.reset}
     Judge one file that arrived from outside (a mail attachment or
     body) before anything uses it: real type, executables, Office
     macros, PDF actions, archives, encryption, prompt injection and
-    Windows Defender. The file is only read; nothing is extracted.
+    a scan by this machine's antivirus. The file is only read; nothing
+    is extracted.
     Exit 0 clean, 10 hold, 20 block, 2 usage or internal error.
 
     Examples:

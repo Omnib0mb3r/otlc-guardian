@@ -17,7 +17,7 @@
  * Opt-in runs, off by default:
  *   GUARDIAN_INBOUND_REAL_SAMPLES=<path>[;<path>...]  real files or
  *     folders outside the repo; each file must come out clean.
- *   GUARDIAN_INBOUND_REAL_DEFENDER=1  runs Windows Defender for real
+ *   GUARDIAN_INBOUND_REAL_ANTIVIRUS=1  runs this machine's antivirus for real
  *     on a clean file and on the EICAR test string.
  *
  * Same zero-dep mini test runner as tests/init.test.js.
@@ -27,7 +27,7 @@
  */
 
 import { strict as assert } from "assert";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, statSync, readdirSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { spawnSync } from "child_process";
@@ -40,7 +40,7 @@ import {
 import { Budget } from "../security/inbound/limits.js";
 import { detectType } from "../security/inbound/checks/type.js";
 import { decodeStream } from "../security/inbound/readers/pdf.js";
-import { defenderRunner } from "../security/inbound/checks/defender.js";
+import { systemAntivirus, AMSI_CHUNK_BYTES, AMSI_OVERLAP_BYTES } from "../security/inbound/checks/antivirus.js";
 import zlib from "zlib";
 import * as fx from "./inbound-fixtures.js";
 
@@ -90,9 +90,9 @@ function place(buf, name) {
   return file;
 }
 
-/** Judges `buf` saved as `name`. Defender is mocked clean unless the options say otherwise. */
+/** Judges `buf` saved as `name`. The antivirus is mocked clean unless the options say otherwise. */
 function judge(buf, name, meta = {}, options = {}) {
-  return checkInbound(place(buf, name), meta, { defender: fx.defenderClean, platform: "win32", ...options });
+  return checkInbound(place(buf, name), meta, { antivirus: fx.avClean, platform: "win32", ...options });
 }
 
 const sha256hex = (buf) => createHash("sha256").update(buf).digest("hex");
@@ -119,7 +119,7 @@ describe("Contract v1 - the verdict object", () => {
 
   test("carries every contract field, in the contract's order", () => {
     assert.deepEqual(Object.keys(r), [
-      "contract_version", "verdict", "reasons", "file", "checks",
+      "contract_version", "verdict", "reasons", "file", "checks", "antivirus_engine",
       "guardian_version", "ruleset_version", "scanned_at",
     ]);
     assert.equal(r.contract_version, 1);
@@ -128,7 +128,7 @@ describe("Contract v1 - the verdict object", () => {
 
   test("checks names all eight checks", () => {
     assert.deepEqual(Object.keys(r.checks), [
-      "type", "executable", "office", "pdf", "archive", "encrypted", "injection", "defender",
+      "type", "executable", "office", "pdf", "archive", "encrypted", "injection", "antivirus",
     ]);
     assert.deepEqual(CHECK_NAMES, Object.keys(r.checks));
   });
@@ -1158,16 +1158,22 @@ describe("Check 7 - prompt injection: images and archives", () => {
 });
 
 // ---------------------------------------------------------------------------
-// CHECK 8 - WINDOWS DEFENDER
+// CHECK 8 - ANTIVIRUS
 // ---------------------------------------------------------------------------
 
-describe("Check 8 - Windows Defender", () => {
+describe("Check 8 - antivirus", () => {
   test("pass: a clean scan passes, and a plain file is clean at last", () => {
     const r = judge(Buffer.from("Line 3 transfer notes.\n"), "notes.txt");
-    assert.equal(r.checks.defender, "pass");
+    assert.equal(r.checks.antivirus, "pass");
     assert.equal(r.verdict, "clean", JSON.stringify(r.reasons));
     assert.deepEqual(r.reasons, []);
     assert.ok(Object.values(r.checks).every((state) => state === "pass"), JSON.stringify(r.checks));
+  });
+
+  test("the engine that scanned is named in antivirus_engine", () => {
+    assert.equal(judge(Buffer.from("notes\n"), "notes.txt").antivirus_engine, "mock engine");
+    assert.equal(judge(Buffer.from("notes\n"), "notes.txt", {}, { antivirus: fx.avUnavailable }).antivirus_engine, null);
+    assert.equal(judge(Buffer.from("notes\n"), "notes.txt", {}, { platform: "linux" }).antivirus_engine, null);
   });
 
   test("pass: what a customer sends is clean: L5K, DXF, PDF, DOCX, XLSX, PNG, JPEG and a zip of them", () => {
@@ -1193,146 +1199,200 @@ describe("Check 8 - Windows Defender", () => {
     assert.equal(r.checks.archive, "skipped");
   });
 
-  test("fail: a threat blocks, with what Defender named", () => {
-    const r = judge(Buffer.from("notes\n"), "notes.txt", {}, { defender: fx.defenderThreat });
-    assert.match(hasReason(r, "defender-threat", "block").detail, /EICAR_Test_File/);
-    assert.equal(r.checks.defender, "block");
+  test("fail: a threat blocks, with the engine and what it named", () => {
+    const r = judge(Buffer.from("notes\n"), "notes.txt", {}, { antivirus: fx.avThreat });
+    const found = hasReason(r, "antivirus-threat", "block");
+    assert.match(found.detail, /EICAR_Test_File/);
+    assert.match(found.detail, /mock engine/);
+    assert.equal(r.checks.antivirus, "block");
     assert.equal(r.verdict, "block");
+    assert.equal(r.antivirus_engine, "mock engine");
   });
 
-  test("fail: Defender unavailable holds, never clean", () => {
-    const r = judge(Buffer.from("notes\n"), "notes.txt", {}, { defender: fx.defenderUnavailable });
-    hasReason(r, "defender-unavailable", "hold");
-    assert.equal(r.checks.defender, "hold");
+  test("fail: no engine available holds, never clean", () => {
+    const r = judge(Buffer.from("notes\n"), "notes.txt", {}, { antivirus: fx.avUnavailable });
+    hasReason(r, "antivirus-unavailable", "hold");
+    assert.equal(r.checks.antivirus, "hold");
     assert.equal(r.verdict, "hold");
   });
 
-  test("fail: a Defender error holds", () => {
-    const r = judge(Buffer.from("notes\n"), "notes.txt", {}, { defender: fx.defenderError });
-    assert.match(hasReason(r, "defender-error", "hold").detail, /0x80508023/);
+  test("fail: a scan error holds, with the engine", () => {
+    const r = judge(Buffer.from("notes\n"), "notes.txt", {}, { antivirus: fx.avError });
+    const found = hasReason(r, "antivirus-error", "hold");
+    assert.match(found.detail, /0x80508023/);
+    assert.match(found.detail, /mock engine/);
     assert.equal(r.verdict, "hold");
   });
 
   test("fail: a runner that throws is error and holds", () => {
-    const r = judge(Buffer.from("notes\n"), "notes.txt", {}, { defender: () => { throw new Error("spawn failed"); } });
-    assert.equal(r.checks.defender, "error");
+    const r = judge(Buffer.from("notes\n"), "notes.txt", {}, { antivirus: () => { throw new Error("spawn failed"); } });
+    assert.equal(r.checks.antivirus, "error");
     assert.equal(r.verdict, "hold");
   });
 
   test("fail: a runner answer Guardian does not know holds", () => {
     for (const answer of [undefined, null, {}, { status: "fine" }, "clean"]) {
-      const r = judge(Buffer.from("notes\n"), "notes.txt", {}, { defender: () => answer });
-      hasReason(r, "defender-error", "hold");
+      const r = judge(Buffer.from("notes\n"), "notes.txt", {}, { antivirus: () => answer });
+      hasReason(r, "antivirus-error", "hold");
     }
   });
 
   test("fail: off Windows the check is skipped and the verdict holds", () => {
     let called = false;
-    const r = judge(Buffer.from("notes\n"), "notes.txt", {}, { platform: "linux", defender: () => { called = true; return fx.defenderClean(); } });
-    assert.equal(r.checks.defender, "skipped");
+    const r = judge(Buffer.from("notes\n"), "notes.txt", {}, { platform: "linux", antivirus: () => { called = true; return fx.avClean(); } });
+    assert.equal(r.checks.antivirus, "skipped");
     assert.equal(r.verdict, "hold");
-    assert.match(hasReason(r, "check-not-run", "hold").detail, /Windows/);
+    assert.match(hasReason(r, "check-not-run", "hold").detail, /antivirus/);
     assert.equal(called, false, "no scanner is run off Windows");
   });
 
-  test("the runner gets the file's absolute path and the time left, once, for an archive too", () => {
+  test("the runner gets the file's absolute path, the time left and the file name, once, for an archive too", () => {
     const calls = [];
-    const defender = (file, timeoutMs) => { calls.push([file, timeoutMs]); return fx.defenderClean(); };
+    const antivirus = (...args) => { calls.push(args); return fx.avClean(); };
     const file = place(fx.zip([{ name: "a.txt", data: "one" }, { name: "b.txt", data: "two" }]), "bundle.zip");
-    checkInbound(file, {}, { defender, platform: "win32" });
+    checkInbound(file, {}, { antivirus, platform: "win32" });
     assert.equal(calls.length, 1);
     assert.equal(calls[0][0], path.resolve(file));
     assert.ok(calls[0][1] > 0 && calls[0][1] <= 60_000, `timeout ${calls[0][1]}`);
+    assert.equal(calls[0][2], "bundle.zip");
   });
 
-  test("fail: with no time left Defender is not started and the check holds", () => {
+  test("fail: with no time left no engine is started and the check holds", () => {
     let called = false;
     const r = judge(Buffer.from("notes\n"), "notes.txt", {}, {
       now: () => 0,
-      defender: () => { called = true; return fx.defenderClean(); },
+      antivirus: () => { called = true; return fx.avClean(); },
       limits: { timeMs: 0 },
     });
     assert.equal(called, false);
-    hasReason(r, "defender-error", "hold");
+    hasReason(r, "antivirus-error", "hold");
   });
 
   test("fail: a file over the input limit is still scanned, and a threat blocks", () => {
-    const r = judge(Buffer.from("0123456789abcdef"), "big.bin", {}, { limits: { inputBytes: 8 }, defender: fx.defenderThreat });
+    const r = judge(Buffer.from("0123456789abcdef"), "big.bin", {}, { limits: { inputBytes: 8 }, antivirus: fx.avThreat });
     hasReason(r, "limit-input", "hold");
-    hasReason(r, "defender-threat", "block");
+    hasReason(r, "antivirus-threat", "block");
     assert.equal(r.verdict, "block");
   });
 
   test("a block from another check and a clean scan is still a block", () => {
     const r = judge(fx.pe(), "setup.exe");
-    assert.equal(r.checks.defender, "pass");
+    assert.equal(r.checks.antivirus, "pass");
     assert.equal(r.verdict, "block");
   });
 });
 
-describe("Check 8 - the MpCmdRun runner", () => {
+// The service query, MpCmdRun.exe and the AMSI child, each answered by the test.
+const SERVICE_RUNNING = "SERVICE_NAME: WinDefend\r\n        STATE              : 4  RUNNING\r\n";
+const SERVICE_STOPPED = "SERVICE_NAME: WinDefend\r\n        STATE              : 1  STOPPED\r\n";
+const AMSI_CLEAN = { providers: ["aswAMSI.dll"], init: 0, selftest: 32768, selftestHr: 0, result: 0, hr: 0, chunks: 1, error: null };
+const amsiOut = (fields) => ({ status: 0, stdout: `${JSON.stringify({ ...AMSI_CLEAN, ...fields })}\r\n`, stderr: "" });
+
+/**
+ * A system antivirus runner over fakes: `service` is what sc.exe prints
+ * (or a spawn answer), `defender` what MpCmdRun.exe answers, `amsi` what
+ * the PowerShell child answers. Every spawn is recorded in `spawned`.
+ */
+function fakeSystem({ service = SERVICE_STOPPED, defender, amsi = amsiOut({}), env = { ProgramFiles: "D:\\Programs", SystemRoot: "D:\\Windows" } } = {}) {
   const spawned = [];
-  const RUNNING = "SERVICE_NAME: WinDefend\r\n        STATE              : 4  RUNNING\r\n";
-  const STOPPED = "SERVICE_NAME: WinDefend\r\n        STATE              : 1  STOPPED\r\n";
-  /** A runner whose MpCmdRun.exe gives `answer` and whose service query prints `service`. */
-  const runner = (answer, service = RUNNING) => defenderRunner({
-    env: { ProgramFiles: "D:\\Programs", SystemRoot: "D:\\Windows" },
+  const run = systemAntivirus({
+    env,
     spawn: (exe, args, options) => {
       spawned.push({ exe, args, options });
-      return /sc\.exe$/i.test(exe) ? { status: 0, stdout: service, stderr: "" } : answer;
+      if (/sc\.exe$/i.test(exe)) return typeof service === "string" ? { status: 0, stdout: service, stderr: "" } : service;
+      if (/MpCmdRun\.exe$/i.test(exe)) return defender;
+      return amsi;
     },
   });
-  const SCAN = "Scan starting...\r\nScan finished.\r\n";
-  const FAILED = { status: 2, stdout: "CmdTool: Failed with hr = 0x80004005. Check C:\\Temp\\MpCmdRun.log for more information\r\n", stderr: "" };
+  return { run, spawned };
+}
 
-  test("runs MpCmdRun from %ProgramFiles% on the one file, without remediation, hidden, with the timeout", () => {
-    spawned.length = 0;
-    const out = runner({ status: 0, stdout: `${SCAN}Scanning C:\\q\\a.pdf found no threats.\r\n`, stderr: "" })("C:\\q\\a.pdf", 41_000);
+describe("Check 8 - which engine scans", () => {
+  test("Defender scans when its service is running, and AMSI is not started", () => {
+    const { run, spawned } = fakeSystem({ service: SERVICE_RUNNING, defender: { status: 0, stdout: "found no threats", stderr: "" } });
+    const out = run("C:\\q\\a.pdf", 41_000, "a.pdf");
     assert.equal(out.status, "clean");
-    assert.equal(spawned.length, 1, "a clean scan asks nothing else");
-    assert.equal(spawned[0].exe, "D:\\Programs\\Windows Defender\\MpCmdRun.exe");
-    assert.deepEqual(spawned[0].args, ["-Scan", "-ScanType", "3", "-File", "C:\\q\\a.pdf", "-DisableRemediation"]);
-    assert.equal(spawned[0].options.timeout, 41_000);
-    assert.equal(spawned[0].options.windowsHide, true);
-    assert.ok(!spawned[0].options.shell, "never through a shell");
+    assert.match(out.engine, /Windows Defender/);
+    assert.deepEqual(spawned.map((s) => path.win32.basename(s.exe)), ["sc.exe", "MpCmdRun.exe"]);
+    assert.equal(spawned[0].exe, "D:\\Windows\\System32\\sc.exe");
+    assert.deepEqual(spawned[0].args, ["query", "WinDefend"]);
   });
 
-  test("falls back to C:\\Program Files when the daemon's environment has no ProgramFiles", () => {
-    let exe;
-    defenderRunner({ env: {}, spawn: (e) => { exe = e; return { status: 0, stdout: "", stderr: "" }; } })("C:\\q\\a.pdf", 1000);
-    assert.equal(exe, "C:\\Program Files\\Windows Defender\\MpCmdRun.exe");
+  test("with Defender's service stopped the AMSI provider scans, and MpCmdRun is not started", () => {
+    const { run, spawned } = fakeSystem({});
+    const out = run("C:\\q\\a.pdf", 41_000, "a.pdf");
+    assert.equal(out.status, "clean");
+    assert.match(out.engine, /AMSI/);
+    assert.match(out.engine, /aswAMSI\.dll/);
+    assert.deepEqual(spawned.map((s) => path.win32.basename(s.exe)), ["sc.exe", "powershell.exe"]);
+  });
+
+  test("a service query that fails or says nothing is read as not running", () => {
+    for (const service of ["", "[SC] EnumQueryServicesStatus:OpenService FAILED 1060", { status: 1060, stdout: "", stderr: "" },
+      { status: null, error: Object.assign(new Error("spawnSync ENOENT"), { code: "ENOENT" }) }]) {
+      assert.match(fakeSystem({ service }).run("C:\\q\\a.pdf", 1000, "a.pdf").engine, /AMSI/);
+    }
+  });
+
+  test("neither engine: Defender stopped and no AMSI provider registered is unavailable, naming both", () => {
+    const out = fakeSystem({ amsi: amsiOut({ providers: [], selftest: null, result: null }) }).run("C:\\q\\a.pdf", 1000, "a.pdf");
+    assert.equal(out.status, "unavailable");
+    assert.equal(out.engine, null);
+    assert.match(out.detail, /WinDefend/);
+    assert.match(out.detail, /AMSI/);
+  });
+
+  test("the service query takes its time out of the scan's", () => {
+    const { run, spawned } = fakeSystem({});
+    run("C:\\q\\a.pdf", 3_000, "a.pdf");
+    assert.ok(spawned[0].options.timeout <= 3_000);
+    assert.ok(spawned[1].options.timeout <= 3_000);
+  });
+});
+
+describe("Check 8 - the MpCmdRun runner", () => {
+  const SCAN = "Scan starting...\r\nScan finished.\r\n";
+  const defender = (answer) => fakeSystem({ service: SERVICE_RUNNING, defender: answer });
+
+  test("runs MpCmdRun from %ProgramFiles% on the one file, without remediation, hidden, with the timeout", () => {
+    const { run, spawned } = defender({ status: 0, stdout: `${SCAN}Scanning C:\\q\\a.pdf found no threats.\r\n`, stderr: "" });
+    assert.equal(run("C:\\q\\a.pdf", 41_000, "a.pdf").status, "clean");
+    assert.equal(spawned[1].exe, "D:\\Programs\\Windows Defender\\MpCmdRun.exe");
+    assert.deepEqual(spawned[1].args, ["-Scan", "-ScanType", "3", "-File", "C:\\q\\a.pdf", "-DisableRemediation"]);
+    assert.ok(spawned[1].options.timeout > 0 && spawned[1].options.timeout <= 41_000);
+    assert.equal(spawned[1].options.windowsHide, true);
+    assert.ok(!spawned[1].options.shell, "never through a shell");
+  });
+
+  test("falls back to C:\\Program Files and C:\\Windows when the daemon's environment has neither variable", () => {
+    const { run, spawned } = fakeSystem({ service: SERVICE_RUNNING, defender: { status: 0, stdout: "", stderr: "" }, env: {} });
+    run("C:\\q\\a.pdf", 1000, "a.pdf");
+    assert.equal(spawned[0].exe, "C:\\Windows\\System32\\sc.exe");
+    assert.equal(spawned[1].exe, "C:\\Program Files\\Windows Defender\\MpCmdRun.exe");
   });
 
   test("exit 2 with a threat listed is a threat, named from the output", () => {
-    const out = runner({ status: 2, stdout: `${SCAN}Scanning C:\\q\\a.com found 1 threats.\r\n` +
+    const out = defender({ status: 2, stdout: `${SCAN}Scanning C:\\q\\a.com found 1 threats.\r\n` +
       "<===========================LIST OF DETECTED THREATS==========================>\r\n" +
       "----------------------------- Threat information ------------------------------\r\n" +
-      "Threat                  : Virus:DOS/EICAR_Test_File\r\nResources               : 1 total\r\n", stderr: "" })("C:\\q\\a.com", 1000);
+      "Threat                  : Virus:DOS/EICAR_Test_File\r\nResources               : 1 total\r\n", stderr: "" }).run("C:\\q\\a.com", 1000, "a.com");
     assert.equal(out.status, "threat");
     assert.match(out.detail, /Virus:DOS\/EICAR_Test_File/);
   });
 
   test("exit 2 with nothing that says the scan failed is still a threat", () => {
-    assert.equal(runner({ status: 2, stdout: "", stderr: "" })("C:\\q\\a.com", 1000).status, "threat");
+    assert.equal(defender({ status: 2, stdout: "", stderr: "" }).run("C:\\q\\a.com", 1000, "a.com").status, "threat");
   });
 
-  test("exit 2 is also how MpCmdRun fails: with Defender's service stopped that is unavailable, not a threat", () => {
-    spawned.length = 0;
-    const out = runner(FAILED, STOPPED)("C:\\q\\a.pdf", 1000);
-    assert.equal(out.status, "unavailable");
-    assert.match(out.detail, /service/);
-    assert.equal(spawned[1].exe, "D:\\Windows\\System32\\sc.exe");
-    assert.deepEqual(spawned[1].args, ["query", "WinDefend"]);
-  });
-
-  test("a failed scan with the service running is an error, with the code", () => {
-    const out = runner(FAILED, RUNNING)("C:\\q\\a.pdf", 1000);
+  test("exit 2 is also how MpCmdRun fails: a failed scan is an error with the code, not a threat", () => {
+    const out = defender({ status: 2, stdout: "CmdTool: Failed with hr = 0x80004005. Check C:\\Temp\\MpCmdRun.log for more information\r\n", stderr: "" })
+      .run("C:\\q\\a.pdf", 1000, "a.pdf");
     assert.equal(out.status, "error");
     assert.match(out.detail, /0x80004005/);
   });
 
   test("a missing MpCmdRun.exe is unavailable", () => {
-    const out = runner({ status: null, error: Object.assign(new Error("spawnSync ENOENT"), { code: "ENOENT" }) })("C:\\q\\a.pdf", 1000);
+    const out = defender({ status: null, error: Object.assign(new Error("spawnSync ENOENT"), { code: "ENOENT" }) }).run("C:\\q\\a.pdf", 1000, "a.pdf");
     assert.equal(out.status, "unavailable");
   });
 
@@ -1344,37 +1404,158 @@ describe("Check 8 - the MpCmdRun runner", () => {
       { status: -2147024891, stdout: "", stderr: "CmdTool: Failed with hr = 0x80508023." },
       { status: null, error: Object.assign(new Error("spawnSync EACCES"), { code: "EACCES" }) },
     ];
-    for (const answer of answers) assert.equal(runner(answer)("C:\\q\\a.pdf", 1000).status, "error", JSON.stringify(answer));
-    assert.match(runner(answers[3])("C:\\q\\a.pdf", 1000).detail, /0x80508023/);
-  });
-
-  test("a service query that fails leaves a failed scan an error", () => {
-    const run = defenderRunner({ env: {}, spawn: (exe) => (/sc\.exe$/i.test(exe)
-      ? { status: null, error: Object.assign(new Error("spawnSync ENOENT"), { code: "ENOENT" }) } : FAILED) });
-    assert.equal(run("C:\\q\\a.pdf", 1000).status, "error");
+    for (const answer of answers) assert.equal(defender(answer).run("C:\\q\\a.pdf", 1000, "a.pdf").status, "error", JSON.stringify(answer));
+    assert.match(defender(answers[3]).run("C:\\q\\a.pdf", 1000, "a.pdf").detail, /0x80508023/);
   });
 });
 
-// Opt-in: the real Defender on this machine, which must be the active
-// antivirus for the first test to pass. Real-time protection is never
-// turned off. When it removes or locks the EICAR file before the check
-// can read it, the antivirus has blocked the file, and that counts
-// (Lex, 2026-11-12).
-if (process.env.GUARDIAN_INBOUND_REAL_DEFENDER === "1") {
-  describe("Check 8 - real Windows Defender (GUARDIAN_INBOUND_REAL_DEFENDER=1)", () => {
-    test("a clean file is clean through the CLI, exit 0", () => {
+describe("Check 8 - the AMSI runner", () => {
+  // A spawn answer (it has stdout or a spawn error) is passed as it is; anything else is the script's JSON fields.
+  const amsi = (fields) => fakeSystem({ amsi: "stdout" in fields || fields.error instanceof Error ? fields : amsiOut(fields) });
+  const scan = (fields) => amsi(fields).run("C:\\q\\a b.pdf", 41_000, "a b.pdf");
+
+  test("starts Windows PowerShell hidden, with no profile and no shell, and hands the file over in the environment", () => {
+    const { run, spawned } = amsi({});
+    assert.equal(run("C:\\q\\a b';calc.pdf", 41_000, "a b';calc.pdf").status, "clean");
+    const child = spawned[1];
+    assert.equal(child.exe, "D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    assert.ok(child.args.includes("-NoProfile") && child.args.includes("-NonInteractive"));
+    assert.equal(child.options.windowsHide, true);
+    assert.ok(!child.options.shell, "never through a shell");
+    assert.ok(child.options.timeout > 0 && child.options.timeout <= 41_000);
+    // The untrusted name never becomes part of the command text.
+    assert.ok(!child.args.join(" ").includes("calc"), "the file name is not in the arguments");
+    assert.equal(child.options.env.GUARDIAN_AMSI_FILE, "C:\\q\\a b';calc.pdf");
+    assert.equal(child.options.env.GUARDIAN_AMSI_NAME, "a b';calc.pdf");
+    const script = Buffer.from(child.args[child.args.indexOf("-EncodedCommand") + 1], "base64").toString("utf16le");
+    for (const call of ["AmsiInitialize", "AmsiOpenSession", "AmsiScanBuffer", "AmsiCloseSession", "AmsiUninitialize"]) {
+      assert.ok(script.includes(call), `the script calls ${call}`);
+    }
+    assert.ok(!script.includes("calc"), "the file name is not in the script");
+  });
+
+  test("clean only on AMSI_RESULT_CLEAN (0) or NOT_DETECTED (1)", () => {
+    assert.equal(scan({ result: 0 }).status, "clean");
+    assert.equal(scan({ result: 1 }).status, "clean");
+  });
+
+  test("AMSI_RESULT_DETECTED (32768 or more) is a threat", () => {
+    for (const result of [32768, 32769, 65535]) {
+      const out = scan({ result });
+      assert.equal(out.status, "threat", String(result));
+      assert.match(out.engine, /aswAMSI\.dll/);
+    }
+  });
+
+  test("blocked by the administrator (16384 to 20479) holds as an error", () => {
+    for (const result of [16384, 18000, 20479]) {
+      const out = scan({ result });
+      assert.equal(out.status, "error", String(result));
+      assert.match(out.detail, /administrator/);
+    }
+  });
+
+  test("any other result holds as an error", () => {
+    for (const result of [2, 16383, 20480, 32767, -1, null, "0", 0.5]) assert.equal(scan({ result }).status, "error", String(result));
+  });
+
+  test("no provider registered is unavailable", () => {
+    assert.equal(scan({ providers: [], selftest: null, result: null }).status, "unavailable");
+  });
+
+  test("a provider that does not flag the test string is not scanning: unavailable, never clean", () => {
+    for (const selftest of [0, 1, null, 16384]) {
+      const out = scan({ selftest, result: 0 });
+      assert.equal(out.status, "unavailable", String(selftest));
+      assert.match(out.detail, /test string/);
+    }
+  });
+
+  test("a failed AmsiInitialize, self-test call or scan call is an error with the HRESULT", () => {
+    assert.match(scan({ init: -2147024891, selftest: null, result: null }).detail, /0x80070005/);
+    assert.equal(scan({ init: -2147024891, selftest: null, result: null }).status, "error");
+    assert.equal(scan({ selftestHr: -2147467259, selftest: 0 }).status, "error");
+    const failed = scan({ hr: -2147024882, result: 0 });
+    assert.equal(failed.status, "error");
+    assert.match(failed.detail, /0x8007000E/);
+  });
+
+  test("an error the script reports, output that is not its JSON, and a failing exit are errors", () => {
+    assert.match(scan({ error: "Access to the path is denied.", result: null }).detail, /denied/);
+    assert.equal(scan({ error: "Access to the path is denied.", result: null }).status, "error");
+    assert.equal(scan({ status: 0, stdout: "not json\r\n", stderr: "" }).status, "error");
+    assert.equal(scan({ status: 0, stdout: "", stderr: "" }).status, "error");
+    assert.equal(scan({ status: 1, stdout: "", stderr: "Add-Type : cannot compile" }).status, "error");
+  });
+
+  test("no Windows PowerShell is unavailable; a timeout and a signal are errors", () => {
+    assert.equal(scan({ status: null, error: Object.assign(new Error("spawnSync ENOENT"), { code: "ENOENT" }) }).status, "unavailable");
+    assert.equal(scan({ status: null, error: Object.assign(new Error("spawnSync ETIMEDOUT"), { code: "ETIMEDOUT" }) }).status, "error");
+    assert.equal(scan({ status: null, signal: "SIGTERM", stdout: "", stderr: "" }).status, "error");
+  });
+
+  test("the chunk size and overlap go to the child, and the daemon's bare environment still gets a temp folder", () => {
+    const { run, spawned } = fakeSystem({ env: { SystemRoot: "D:\\Windows", PATH: "D:\\Windows\\System32" } });
+    run("C:\\q\\a.pdf", 1000, "a.pdf");
+    const env = spawned[1].options.env;
+    assert.equal(Number(env.GUARDIAN_AMSI_CHUNK), AMSI_CHUNK_BYTES);
+    assert.equal(Number(env.GUARDIAN_AMSI_OVERLAP), AMSI_OVERLAP_BYTES);
+    assert.ok(AMSI_OVERLAP_BYTES > 0 && AMSI_OVERLAP_BYTES < AMSI_CHUNK_BYTES);
+    assert.ok(env.TEMP && env.TMP, "Add-Type needs a temp folder to compile in");
+    assert.equal(env.SystemRoot, "D:\\Windows");
+  });
+});
+
+// Opt-in: the real antivirus on this machine, through whichever engine
+// is live (Windows Defender when its service runs, else the registered
+// AMSI provider). Real-time protection is never turned off. When it
+// refuses the EICAR file being written or read, the antivirus has
+// blocked the file, and that counts (Lex, 2026-11-12).
+if (process.env.GUARDIAN_INBOUND_REAL_ANTIVIRUS === "1") {
+  describe("Check 8 - the real antivirus (GUARDIAN_INBOUND_REAL_ANTIVIRUS=1)", () => {
+    // The standard anti-malware test string, put together here so this
+    // source file does not hold it.
+    const eicar = ["X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR", "-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"].join("");
+
+    test("a clean file is clean through the CLI, exit 0, with the engine named", () => {
       const file = place(Buffer.from("Line 3 transfer notes.\n"), "notes.txt");
       const run = cli(file, "--json");
       const out = JSON.parse(run.stdout);
-      assert.equal(out.checks.defender, "pass", JSON.stringify(out.reasons));
+      assert.equal(out.checks.antivirus, "pass", JSON.stringify(out.reasons));
       assert.equal(out.verdict, "clean", JSON.stringify(out.reasons));
       assert.equal(run.status, EXIT_CODES.clean);
+      assert.ok(out.antivirus_engine, "the engine is named");
+      console.log(`     engine: ${out.antivirus_engine}`);
+    });
+
+    test("the daemon's bare environment (PATH and SystemRoot only) gives the same clean verdict", () => {
+      const file = place(Buffer.from("Line 3 transfer notes.\n"), "notes.txt");
+      const run = spawnSync(process.execPath, [CLI, "inbound-check", file, "--json"], {
+        encoding: "utf8", cwd: ROOT, timeout: 60_000, env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot },
+      });
+      const out = JSON.parse(run.stdout);
+      assert.equal(out.verdict, "clean", JSON.stringify(out.reasons));
+    });
+
+    test("the engine flags the EICAR test string in a buffer it is handed", () => {
+      // Named .bin and never written whole by a shell: the runner reads it.
+      let file;
+      try {
+        file = place(Buffer.from(eicar, "latin1"), "sample.bin");
+      } catch (error) {
+        console.log(`     real-time protection refused the write (${error.code}): counted as a block`);
+        return;
+      }
+      const out = systemAntivirus()(file, 30_000, "sample.bin");
+      if (out.status === "error" && /denied|cannot|UNKNOWN|virus/i.test(out.detail)) {
+        console.log(`     real-time protection kept the file from being read (${out.detail}): counted as a block`);
+        return;
+      }
+      assert.equal(out.status, "threat", JSON.stringify(out));
+      console.log(`     ${out.engine}: ${out.detail}`);
     });
 
     test("the EICAR test file is blocked, by the scan or by real-time protection", () => {
-      // The standard anti-malware test string, put together here so this
-      // source file does not hold it.
-      const eicar = ["X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR", "-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"].join("");
       let file;
       try {
         file = place(Buffer.from(eicar, "latin1"), "eicar.com.txt");
@@ -1390,9 +1571,49 @@ if (process.env.GUARDIAN_INBOUND_REAL_DEFENDER === "1") {
         console.log(`     real-time protection kept the file from being read (${error.message}): counted as a block`);
         return;
       }
-      hasReason(result, "defender-threat", "block");
+      hasReason(result, "antivirus-threat", "block");
       assert.equal(result.verdict, "block");
     });
+  });
+}
+
+// Opt-in: real files from outside the repo (customer drawings, PLC
+// exports). They are read where they sit and never copied or committed.
+// Each must come out with no hold or block from Guardian's own checks.
+// A machine with no antivirus engine Guardian can run holds every file
+// on that, which says nothing about the file, so it is listed apart.
+if (process.env.GUARDIAN_INBOUND_REAL_SAMPLES) {
+  describe("Real samples (GUARDIAN_INBOUND_REAL_SAMPLES)", () => {
+    const SKIP_FOLDERS = new Set(["node_modules", ".git", ".venv", "__pycache__"]);
+    const files = [];
+    const collect = (target) => {
+      const stat = statSync(target, { throwIfNoEntry: false });
+      if (stat?.isFile()) files.push(target);
+      else if (stat?.isDirectory()) {
+        for (const entry of readdirSync(target, { withFileTypes: true })) {
+          if (!SKIP_FOLDERS.has(entry.name)) collect(path.join(target, entry.name));
+        }
+      }
+    };
+    for (const target of process.env.GUARDIAN_INBOUND_REAL_SAMPLES.split(";").filter(Boolean)) collect(target);
+
+    test("the paths name at least one file", () => assert.ok(files.length > 0, "no file found"));
+
+    const tally = new Map();
+    const count = (key) => tally.set(key, (tally.get(key) ?? 0) + 1);
+    const isEngineState = (r) => r.code === "antivirus-unavailable" || r.code === "antivirus-error" ||
+      (r.code === "check-not-run" && /antivirus/.test(r.detail));
+    for (const file of files) {
+      test(`clean: ${path.basename(file)}`, () => {
+        const r = checkInbound(file);
+        count(`type ${r.file.detected_type}`);
+        for (const x of r.reasons) count(`${x.severity} ${x.code}${isEngineState(x) ? " (the engine's state, not the file)" : ""}`);
+        const own = r.reasons.filter((x) => x.severity !== "info" && !isEngineState(x));
+        assert.deepEqual(own, [], `${file}: ${JSON.stringify(own)}`);
+      });
+    }
+    console.log(`\n  ${files.length} real files. Types and reasons:`);
+    for (const [key, n] of [...tally].sort()) console.log(`    ${String(n).padStart(4)}  ${key}`);
   });
 }
 

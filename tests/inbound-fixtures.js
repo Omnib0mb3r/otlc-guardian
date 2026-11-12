@@ -443,10 +443,10 @@ export function pdfObjectStream(pairs) {
 }
 
 // ---------------------------------------------------------------------------
-// DEFENDER RUNNERS (mocked; the real one is opt-in)
+// ANTIVIRUS RUNNERS (mocked; the real one is opt-in)
 // ---------------------------------------------------------------------------
 
-export const defenderClean = () => ({ status: "clean", detail: "no threats (mock)" });
-export const defenderThreat = () => ({ status: "threat", detail: "Virus:DOS/EICAR_Test_File (mock)" });
-export const defenderUnavailable = () => ({ status: "unavailable", detail: "MpCmdRun.exe not found (mock)" });
-export const defenderError = () => ({ status: "error", detail: "exit code 0x80508023 (mock)" });
+export const avClean = () => ({ engine: "mock engine", status: "clean", detail: "no threats (mock)" });
+export const avThreat = () => ({ engine: "mock engine", status: "threat", detail: "Virus:DOS/EICAR_Test_File (mock)" });
+export const avUnavailable = () => ({ engine: null, status: "unavailable", detail: "no engine (mock)" });
+export const avError = () => ({ engine: "mock engine", status: "error", detail: "exit code 0x80508023 (mock)" });

@@ -35,7 +35,7 @@ import { checkEncrypted } from "./checks/encrypted.js";
 import { checkOffice } from "./checks/office.js";
 import { checkPdf } from "./checks/pdf.js";
 import { checkInjection } from "./checks/injection.js";
-import { checkDefender } from "./checks/defender.js";
+import { checkAntivirus } from "./checks/antivirus.js";
 import { innerPath } from "./paths.js";
 
 export { UsageError };
@@ -47,7 +47,7 @@ export const CONTRACT_VERSION = 1;
 export const GUARDIAN_VERSION = "1.5.0";
 
 export const CHECK_NAMES = Object.freeze([
-  "type", "executable", "office", "pdf", "archive", "encrypted", "injection", "defender",
+  "type", "executable", "office", "pdf", "archive", "encrypted", "injection", "antivirus",
 ]);
 
 export const EXIT_CODES = Object.freeze({ clean: 0, hold: 10, block: 20, error: 2 });
@@ -109,6 +109,8 @@ export class Inspection {
     this.isMailBody = meta.source === "mail-body";
     this.reasons = [];
     this.inner = [];
+    // What scanned the file in the antivirus check; null when nothing did.
+    this.antivirusEngine = null;
     this.stopped = false;
     this.state = Object.fromEntries(CHECK_NAMES.map((name) => [name, { ran: false, error: false, allowedSkip: false, why: null }]));
   }
@@ -228,6 +230,7 @@ export class Inspection {
       reasons: this.reasons.map(({ check: _check, ...reason }) => reason),
       file: outFile,
       checks,
+      antivirus_engine: this.antivirusEngine,
       guardian_version: GUARDIAN_VERSION,
       ruleset_version: RULESET_VERSION,
       scanned_at: new Date(this.options.now ? this.options.now() : Date.now()).toISOString(),
@@ -245,8 +248,9 @@ export class Inspection {
  * @param {string} filePath
  * @param {object} [meta] untrusted mail metadata: source, from, to, subject,
  *   message_id, received_at, original_name, content_type
- * @param {object} [options] for tests: `limits`, `now`, `platform`, and `defender`,
- *   a runner `(path, timeoutMs) => { status, detail }` in place of MpCmdRun.exe
+ * @param {object} [options] for tests: `limits`, `now`, `platform`, and `antivirus`,
+ *   a runner `(path, timeoutMs, name) => { engine, status, detail }` in place of the
+ *   machine's antivirus
  * @returns {object} the contract v1 verdict object
  * @throws {UsageError} when the path is not a readable file
  */
@@ -289,12 +293,12 @@ export function checkInbound(filePath, meta = {}, options = {}) {
     ctx.walk(buf, root);
   }
 
-  // Defender scans the file on disk, once, whatever the walk found: a
-  // file too big to read here is still scanned.
+  // The antivirus scans the file on disk, once, whatever the walk found:
+  // a file too big to read here is still scanned.
   if ((options.platform ?? process.platform) === "win32") {
-    ctx.run("defender", root, () => checkDefender(ctx, filePath, root));
+    ctx.run("antivirus", root, () => checkAntivirus(ctx, filePath, root));
   } else {
-    ctx.notRun("defender", "Windows Defender runs only on Windows; the file was not scanned for malware");
+    ctx.notRun("antivirus", "the antivirus check runs only on Windows (Windows Defender or an AMSI provider); the file was not scanned for malware");
   }
 
   return ctx.result({ sha256: digest, size: stat.size, ext: extOf(root.name), detected_type: root.type });
