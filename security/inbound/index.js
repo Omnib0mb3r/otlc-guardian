@@ -35,6 +35,7 @@ import { checkEncrypted } from "./checks/encrypted.js";
 import { checkOffice } from "./checks/office.js";
 import { checkPdf } from "./checks/pdf.js";
 import { checkInjection } from "./checks/injection.js";
+import { checkDefender } from "./checks/defender.js";
 import { innerPath } from "./paths.js";
 
 export { UsageError };
@@ -109,7 +110,7 @@ export class Inspection {
     this.reasons = [];
     this.inner = [];
     this.stopped = false;
-    this.state = Object.fromEntries(CHECK_NAMES.map((name) => [name, { ran: false, error: false, allowedSkip: false }]));
+    this.state = Object.fromEntries(CHECK_NAMES.map((name) => [name, { ran: false, error: false, allowedSkip: false, why: null }]));
   }
 
   /** Records a finding. `info` explains and changes nothing. */
@@ -125,6 +126,11 @@ export class Inspection {
   /** A check that does not apply here and must not count against clean. */
   skip(check) {
     this.state[check].allowedSkip = true;
+  }
+
+  /** A check that cannot run here. It is reported skipped, and that holds, with `why`. */
+  notRun(check, why) {
+    this.state[check].why = why;
   }
 
   /**
@@ -208,8 +214,8 @@ export class Inspection {
       checks[name] = worst === 2 ? "block" : st.error ? "error" : worst === 1 ? "hold" : st.ran ? "pass" : "skipped";
       // A check that should have run and did not is never clean. When a
       // limit stopped the walk, that limit is already the reason.
-      if (checks[name] === "skipped" && !st.allowedSkip && !this.stopped) {
-        this.report(name, "hold", "check-not-run", `the ${name} check did not run`);
+      if (checks[name] === "skipped" && !st.allowedSkip && (st.why || !this.stopped)) {
+        this.report(name, "hold", "check-not-run", st.why ?? `the ${name} check did not run`);
       }
     }
     const worst = this.reasons.reduce((max, r) => Math.max(max, SEVERITY_RANK[r.severity]), 0);
@@ -239,7 +245,8 @@ export class Inspection {
  * @param {string} filePath
  * @param {object} [meta] untrusted mail metadata: source, from, to, subject,
  *   message_id, received_at, original_name, content_type
- * @param {object} [options] for tests: `limits`, `now`, `platform`, `defender`
+ * @param {object} [options] for tests: `limits`, `now`, `platform`, and `defender`,
+ *   a runner `(path, timeoutMs) => { status, detail }` in place of MpCmdRun.exe
  * @returns {object} the contract v1 verdict object
  * @throws {UsageError} when the path is not a readable file
  */
@@ -258,16 +265,36 @@ export function checkInbound(filePath, meta = {}, options = {}) {
   const root = { name: path.basename(filePath), depth: 0, top: true, type: "unknown" };
 
   let digest;
-  if (stat.size > budget.limits.inputBytes) {
-    digest = hashFile(filePath);
-    root.type = detectType(readHead(filePath, 64 * 1024));
+  let buf = null;
+  try {
+    if (stat.size > budget.limits.inputBytes) {
+      digest = hashFile(filePath);
+      root.type = detectType(readHead(filePath, 64 * 1024));
+    } else {
+      buf = readFileSync(filePath);
+      digest = sha256(buf);
+    }
+  } catch (error) {
+    // The file is there and cannot be opened: locked, no permission, or
+    // held back by an antivirus (Windows refuses to open a file its
+    // real-time protection has flagged). Not a verdict: exit 2, which
+    // the daemon holds.
+    throw new UsageError(`cannot read ${filePath}: ${error.code ?? error.message}`);
+  }
+  if (buf === null) {
     ctx.report("type", "hold", "limit-input",
       `${stat.size} bytes is over the ${budget.limits.inputBytes} byte limit; the contents were not read`);
     ctx.stopped = true;
   } else {
-    const buf = readFileSync(filePath);
-    digest = sha256(buf);
     ctx.walk(buf, root);
+  }
+
+  // Defender scans the file on disk, once, whatever the walk found: a
+  // file too big to read here is still scanned.
+  if ((options.platform ?? process.platform) === "win32") {
+    ctx.run("defender", root, () => checkDefender(ctx, filePath, root));
+  } else {
+    ctx.notRun("defender", "Windows Defender runs only on Windows; the file was not scanned for malware");
   }
 
   return ctx.result({ sha256: digest, size: stat.size, ext: extOf(root.name), detected_type: root.type });

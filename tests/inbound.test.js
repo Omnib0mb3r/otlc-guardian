@@ -40,6 +40,7 @@ import {
 import { Budget } from "../security/inbound/limits.js";
 import { detectType } from "../security/inbound/checks/type.js";
 import { decodeStream } from "../security/inbound/readers/pdf.js";
+import { defenderRunner } from "../security/inbound/checks/defender.js";
 import zlib from "zlib";
 import * as fx from "./inbound-fixtures.js";
 
@@ -1155,6 +1156,245 @@ describe("Check 7 - prompt injection: images and archives", () => {
     assert.equal(injected(r).path, "docs/readme.txt");
   });
 });
+
+// ---------------------------------------------------------------------------
+// CHECK 8 - WINDOWS DEFENDER
+// ---------------------------------------------------------------------------
+
+describe("Check 8 - Windows Defender", () => {
+  test("pass: a clean scan passes, and a plain file is clean at last", () => {
+    const r = judge(Buffer.from("Line 3 transfer notes.\n"), "notes.txt");
+    assert.equal(r.checks.defender, "pass");
+    assert.equal(r.verdict, "clean", JSON.stringify(r.reasons));
+    assert.deepEqual(r.reasons, []);
+    assert.ok(Object.values(r.checks).every((state) => state === "pass"), JSON.stringify(r.checks));
+  });
+
+  test("pass: what a customer sends is clean: L5K, DXF, PDF, DOCX, XLSX, PNG, JPEG and a zip of them", () => {
+    const files = [
+      [Buffer.from(L5K_TEXT), "main.L5K"],
+      [Buffer.from("  0\nSECTION\n  2\nENTITIES\n  0\nLINE\n  8\n0\n 10\n0.0\n 20\n0.0\n 11\n120.0\n 21\n0.0\n  0\nENDSEC\n  0\nEOF\n"), "layout.dxf"],
+      [fx.pdf(fx.pdfPage()), "notes.pdf"], [fx.docx(), "notes.docx"], [fx.xlsx(), "rates.xlsx"],
+      [fx.png(), "photo.png"], [fx.jpeg(), "photo.jpg"],
+    ];
+    for (const [buf, name] of files) {
+      const r = judge(buf, name);
+      assert.equal(r.verdict, "clean", `${name}: ${JSON.stringify(r.reasons)}`);
+    }
+    const bundle = judge(fx.zip(files.map(([data, name]) => ({ name, data }))), "job.zip");
+    assert.equal(bundle.verdict, "clean", JSON.stringify(bundle.reasons));
+    assert.equal(bundle.file.inner.length, files.length);
+  });
+
+  test("pass: a clean mail body is clean with executable and archive skipped", () => {
+    const r = judge(Buffer.from("Hello Michael,\nsee you Tuesday.\n"), "body.txt", { source: "mail-body", subject: "Tuesday", from: "a@example.com" });
+    assert.equal(r.verdict, "clean", JSON.stringify(r.reasons));
+    assert.equal(r.checks.executable, "skipped");
+    assert.equal(r.checks.archive, "skipped");
+  });
+
+  test("fail: a threat blocks, with what Defender named", () => {
+    const r = judge(Buffer.from("notes\n"), "notes.txt", {}, { defender: fx.defenderThreat });
+    assert.match(hasReason(r, "defender-threat", "block").detail, /EICAR_Test_File/);
+    assert.equal(r.checks.defender, "block");
+    assert.equal(r.verdict, "block");
+  });
+
+  test("fail: Defender unavailable holds, never clean", () => {
+    const r = judge(Buffer.from("notes\n"), "notes.txt", {}, { defender: fx.defenderUnavailable });
+    hasReason(r, "defender-unavailable", "hold");
+    assert.equal(r.checks.defender, "hold");
+    assert.equal(r.verdict, "hold");
+  });
+
+  test("fail: a Defender error holds", () => {
+    const r = judge(Buffer.from("notes\n"), "notes.txt", {}, { defender: fx.defenderError });
+    assert.match(hasReason(r, "defender-error", "hold").detail, /0x80508023/);
+    assert.equal(r.verdict, "hold");
+  });
+
+  test("fail: a runner that throws is error and holds", () => {
+    const r = judge(Buffer.from("notes\n"), "notes.txt", {}, { defender: () => { throw new Error("spawn failed"); } });
+    assert.equal(r.checks.defender, "error");
+    assert.equal(r.verdict, "hold");
+  });
+
+  test("fail: a runner answer Guardian does not know holds", () => {
+    for (const answer of [undefined, null, {}, { status: "fine" }, "clean"]) {
+      const r = judge(Buffer.from("notes\n"), "notes.txt", {}, { defender: () => answer });
+      hasReason(r, "defender-error", "hold");
+    }
+  });
+
+  test("fail: off Windows the check is skipped and the verdict holds", () => {
+    let called = false;
+    const r = judge(Buffer.from("notes\n"), "notes.txt", {}, { platform: "linux", defender: () => { called = true; return fx.defenderClean(); } });
+    assert.equal(r.checks.defender, "skipped");
+    assert.equal(r.verdict, "hold");
+    assert.match(hasReason(r, "check-not-run", "hold").detail, /Windows/);
+    assert.equal(called, false, "no scanner is run off Windows");
+  });
+
+  test("the runner gets the file's absolute path and the time left, once, for an archive too", () => {
+    const calls = [];
+    const defender = (file, timeoutMs) => { calls.push([file, timeoutMs]); return fx.defenderClean(); };
+    const file = place(fx.zip([{ name: "a.txt", data: "one" }, { name: "b.txt", data: "two" }]), "bundle.zip");
+    checkInbound(file, {}, { defender, platform: "win32" });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][0], path.resolve(file));
+    assert.ok(calls[0][1] > 0 && calls[0][1] <= 60_000, `timeout ${calls[0][1]}`);
+  });
+
+  test("fail: with no time left Defender is not started and the check holds", () => {
+    let called = false;
+    const r = judge(Buffer.from("notes\n"), "notes.txt", {}, {
+      now: () => 0,
+      defender: () => { called = true; return fx.defenderClean(); },
+      limits: { timeMs: 0 },
+    });
+    assert.equal(called, false);
+    hasReason(r, "defender-error", "hold");
+  });
+
+  test("fail: a file over the input limit is still scanned, and a threat blocks", () => {
+    const r = judge(Buffer.from("0123456789abcdef"), "big.bin", {}, { limits: { inputBytes: 8 }, defender: fx.defenderThreat });
+    hasReason(r, "limit-input", "hold");
+    hasReason(r, "defender-threat", "block");
+    assert.equal(r.verdict, "block");
+  });
+
+  test("a block from another check and a clean scan is still a block", () => {
+    const r = judge(fx.pe(), "setup.exe");
+    assert.equal(r.checks.defender, "pass");
+    assert.equal(r.verdict, "block");
+  });
+});
+
+describe("Check 8 - the MpCmdRun runner", () => {
+  const spawned = [];
+  const RUNNING = "SERVICE_NAME: WinDefend\r\n        STATE              : 4  RUNNING\r\n";
+  const STOPPED = "SERVICE_NAME: WinDefend\r\n        STATE              : 1  STOPPED\r\n";
+  /** A runner whose MpCmdRun.exe gives `answer` and whose service query prints `service`. */
+  const runner = (answer, service = RUNNING) => defenderRunner({
+    env: { ProgramFiles: "D:\\Programs", SystemRoot: "D:\\Windows" },
+    spawn: (exe, args, options) => {
+      spawned.push({ exe, args, options });
+      return /sc\.exe$/i.test(exe) ? { status: 0, stdout: service, stderr: "" } : answer;
+    },
+  });
+  const SCAN = "Scan starting...\r\nScan finished.\r\n";
+  const FAILED = { status: 2, stdout: "CmdTool: Failed with hr = 0x80004005. Check C:\\Temp\\MpCmdRun.log for more information\r\n", stderr: "" };
+
+  test("runs MpCmdRun from %ProgramFiles% on the one file, without remediation, hidden, with the timeout", () => {
+    spawned.length = 0;
+    const out = runner({ status: 0, stdout: `${SCAN}Scanning C:\\q\\a.pdf found no threats.\r\n`, stderr: "" })("C:\\q\\a.pdf", 41_000);
+    assert.equal(out.status, "clean");
+    assert.equal(spawned.length, 1, "a clean scan asks nothing else");
+    assert.equal(spawned[0].exe, "D:\\Programs\\Windows Defender\\MpCmdRun.exe");
+    assert.deepEqual(spawned[0].args, ["-Scan", "-ScanType", "3", "-File", "C:\\q\\a.pdf", "-DisableRemediation"]);
+    assert.equal(spawned[0].options.timeout, 41_000);
+    assert.equal(spawned[0].options.windowsHide, true);
+    assert.ok(!spawned[0].options.shell, "never through a shell");
+  });
+
+  test("falls back to C:\\Program Files when the daemon's environment has no ProgramFiles", () => {
+    let exe;
+    defenderRunner({ env: {}, spawn: (e) => { exe = e; return { status: 0, stdout: "", stderr: "" }; } })("C:\\q\\a.pdf", 1000);
+    assert.equal(exe, "C:\\Program Files\\Windows Defender\\MpCmdRun.exe");
+  });
+
+  test("exit 2 with a threat listed is a threat, named from the output", () => {
+    const out = runner({ status: 2, stdout: `${SCAN}Scanning C:\\q\\a.com found 1 threats.\r\n` +
+      "<===========================LIST OF DETECTED THREATS==========================>\r\n" +
+      "----------------------------- Threat information ------------------------------\r\n" +
+      "Threat                  : Virus:DOS/EICAR_Test_File\r\nResources               : 1 total\r\n", stderr: "" })("C:\\q\\a.com", 1000);
+    assert.equal(out.status, "threat");
+    assert.match(out.detail, /Virus:DOS\/EICAR_Test_File/);
+  });
+
+  test("exit 2 with nothing that says the scan failed is still a threat", () => {
+    assert.equal(runner({ status: 2, stdout: "", stderr: "" })("C:\\q\\a.com", 1000).status, "threat");
+  });
+
+  test("exit 2 is also how MpCmdRun fails: with Defender's service stopped that is unavailable, not a threat", () => {
+    spawned.length = 0;
+    const out = runner(FAILED, STOPPED)("C:\\q\\a.pdf", 1000);
+    assert.equal(out.status, "unavailable");
+    assert.match(out.detail, /service/);
+    assert.equal(spawned[1].exe, "D:\\Windows\\System32\\sc.exe");
+    assert.deepEqual(spawned[1].args, ["query", "WinDefend"]);
+  });
+
+  test("a failed scan with the service running is an error, with the code", () => {
+    const out = runner(FAILED, RUNNING)("C:\\q\\a.pdf", 1000);
+    assert.equal(out.status, "error");
+    assert.match(out.detail, /0x80004005/);
+  });
+
+  test("a missing MpCmdRun.exe is unavailable", () => {
+    const out = runner({ status: null, error: Object.assign(new Error("spawnSync ENOENT"), { code: "ENOENT" }) })("C:\\q\\a.pdf", 1000);
+    assert.equal(out.status, "unavailable");
+  });
+
+  test("a timeout, a signal, any other exit code and any other spawn error are errors", () => {
+    const answers = [
+      { status: null, error: Object.assign(new Error("spawnSync ETIMEDOUT"), { code: "ETIMEDOUT" }) },
+      { status: null, signal: "SIGTERM" },
+      { status: 1, stdout: "", stderr: "" },
+      { status: -2147024891, stdout: "", stderr: "CmdTool: Failed with hr = 0x80508023." },
+      { status: null, error: Object.assign(new Error("spawnSync EACCES"), { code: "EACCES" }) },
+    ];
+    for (const answer of answers) assert.equal(runner(answer)("C:\\q\\a.pdf", 1000).status, "error", JSON.stringify(answer));
+    assert.match(runner(answers[3])("C:\\q\\a.pdf", 1000).detail, /0x80508023/);
+  });
+
+  test("a service query that fails leaves a failed scan an error", () => {
+    const run = defenderRunner({ env: {}, spawn: (exe) => (/sc\.exe$/i.test(exe)
+      ? { status: null, error: Object.assign(new Error("spawnSync ENOENT"), { code: "ENOENT" }) } : FAILED) });
+    assert.equal(run("C:\\q\\a.pdf", 1000).status, "error");
+  });
+});
+
+// Opt-in: the real Defender on this machine, which must be the active
+// antivirus for the first test to pass. Real-time protection is never
+// turned off. When it removes or locks the EICAR file before the check
+// can read it, the antivirus has blocked the file, and that counts
+// (Lex, 2026-11-12).
+if (process.env.GUARDIAN_INBOUND_REAL_DEFENDER === "1") {
+  describe("Check 8 - real Windows Defender (GUARDIAN_INBOUND_REAL_DEFENDER=1)", () => {
+    test("a clean file is clean through the CLI, exit 0", () => {
+      const file = place(Buffer.from("Line 3 transfer notes.\n"), "notes.txt");
+      const run = cli(file, "--json");
+      const out = JSON.parse(run.stdout);
+      assert.equal(out.checks.defender, "pass", JSON.stringify(out.reasons));
+      assert.equal(out.verdict, "clean", JSON.stringify(out.reasons));
+      assert.equal(run.status, EXIT_CODES.clean);
+    });
+
+    test("the EICAR test file is blocked, by the scan or by real-time protection", () => {
+      // The standard anti-malware test string, put together here so this
+      // source file does not hold it.
+      const eicar = ["X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR", "-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"].join("");
+      let file;
+      try {
+        file = place(Buffer.from(eicar, "latin1"), "eicar.com.txt");
+      } catch (error) {
+        console.log(`     real-time protection refused the write (${error.code}): counted as a block`);
+        return;
+      }
+      let result;
+      try {
+        result = checkInbound(file);
+      } catch (error) {
+        assert.ok(error instanceof UsageError, `unexpected failure: ${error?.message}`);
+        console.log(`     real-time protection kept the file from being read (${error.message}): counted as a block`);
+        return;
+      }
+      hasReason(result, "defender-threat", "block");
+      assert.equal(result.verdict, "block");
+    });
+  });
+}
 
 describe("Limits - input size", () => {
   test("fail: over the input limit holds, unread, with the real sha256", () => {
