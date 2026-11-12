@@ -14,6 +14,7 @@
 //   guardian audit ./src     Scan a specific folder
 //   guardian scan "text"     Scan a string for injection
 //   guardian check           Verify Guardian is set up correctly
+//   guardian inbound-check f Judge a file that arrived from outside
 //   guardian init            Copy Guardian files into current project
 //   guardian help            Show this help
 //
@@ -143,6 +144,17 @@ ${c.bold}COMMANDS${c.reset}
   ${c.cyan}guardian check${c.reset}
     Verify Guardian is correctly installed in the current project.
     Checks for required files and common setup issues.
+
+  ${c.cyan}guardian inbound-check${c.reset} <file> [--meta <json-file>] [--json]
+    Judge one file that arrived from outside (a mail attachment or
+    body) before anything uses it: real type, executables, Office
+    macros, PDF actions, archives, encryption, prompt injection and
+    Windows Defender. The file is only read; nothing is extracted.
+    Exit 0 clean, 10 hold, 20 block, 2 usage or internal error.
+
+    Examples:
+      guardian inbound-check invoice.pdf
+      guardian inbound-check a01-plc.zip --meta a01-plc.zip.meta.json --json
 
   ${c.cyan}guardian init${c.reset}
     Copy Guardian files into the current project directory.
@@ -291,6 +303,79 @@ async function runScan() {
   }
   log("");
   process.exitCode = violations.length === 0 ? SCAN_EXIT.CLEAN : SCAN_EXIT.FOUND;
+}
+
+// ---------------------------------------------------------------------------
+// INBOUND-CHECK - judge one file that arrived from outside
+// ---------------------------------------------------------------------------
+//
+// Contract v1 with DevNeural's mail daemon (its docs/spec/LEX-MAILBOX.md
+// section 6). With --json, stdout holds the verdict object and nothing
+// else; the exit code repeats the verdict. Any failure to judge exits 2,
+// which the daemon treats as hold.
+
+const INBOUND_USAGE = "Usage: guardian inbound-check <file> [--meta <json-file>] [--json]";
+
+async function runInboundCheck() {
+  const rest = args.slice(1);
+  let file;
+  let metaPath;
+  let json = false;
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (arg === "--json") json = true;
+    else if (arg === "--meta" && i + 1 < rest.length) metaPath = rest[++i];
+    else if (arg.startsWith("--") || file !== undefined) {
+      err(`inbound-check: unexpected argument "${arg}"`);
+      err(INBOUND_USAGE);
+      process.exit(2);
+    } else file = arg;
+  }
+  if (file === undefined) {
+    err(INBOUND_USAGE);
+    process.exit(2);
+  }
+
+  let meta = {};
+  if (metaPath !== undefined) {
+    try {
+      meta = JSON.parse(readFileSync(metaPath, "utf8").replace(/^﻿/, ""));
+    } catch (e) {
+      err(`inbound-check: cannot read meta ${metaPath}: ${e?.message ?? e}`);
+      process.exit(2);
+    }
+  }
+
+  const modulePath = path.join(ROOT, "security", "inbound", "index.js");
+  let result;
+  let EXIT_CODES;
+  try {
+    const inbound = await import(pathToFileURL(modulePath).href);
+    EXIT_CODES = inbound.EXIT_CODES;
+    result = inbound.checkInbound(file, meta);
+  } catch (e) {
+    err(`inbound-check: ${e?.message ?? e}`);
+    process.exit(2);
+  }
+
+  if (json) {
+    process.stdout.write(`${JSON.stringify(result)}
+`);
+  } else {
+    const colour = { clean: c.green, hold: c.yellow, block: c.red }[result.verdict];
+    log(`
+${c.bold}[OTLC GUARDIAN] INBOUND CHECK${c.reset}`);
+    log(`  File    : ${file}`);
+    log(`  Type    : ${result.file.detected_type}, ${result.file.size} bytes, sha256 ${result.file.sha256}`);
+    log(`  Verdict : ${colour}${c.bold}${result.verdict.toUpperCase()}${c.reset}`);
+    for (const r of result.reasons) {
+      log(`    [${r.severity.toUpperCase()}] ${r.code}${r.path ? ` (${r.path})` : ""}: ${r.detail}`);
+    }
+    log(`  Checks  : ${Object.entries(result.checks).map(([k, v]) => `${k} ${v}`).join(", ")}`);
+    if (result.file.inner) log(`  Entries : ${result.file.inner.length}`);
+    log("");
+  }
+  process.exitCode = EXIT_CODES[result.verdict];
 }
 
 // ---------------------------------------------------------------------------
@@ -1700,6 +1785,10 @@ if (isMainModule) {
 
     case "check":
       runCheck();
+      break;
+
+    case "inbound-check":
+      runInboundCheck();
       break;
 
     case "init":

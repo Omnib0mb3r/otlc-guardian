@@ -97,6 +97,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-083 | IN-PROGRESS | Audit `SEC-001b` (legacy OpenAI key) fires on any word ending in `sk-` plus 20 alphanumerics, e.g. `task-<32 hex>` |
 | BUG-084 | IN-PROGRESS | Hook without `CLAUDE_PROJECT_DIR` takes the session folder as the project root: from `src/` the project's `.mcp.json` and Guardian's files one level up are not judged |
 | BUG-085 | IN-PROGRESS | HIGH (staged hook): the shell reader drops text that bash runs (a `$(...)` in a heredoc, a `#` that is no comment, an escaped quote in `$'...'`), so a delete of Guardian's files behind it is silent |
+| BUG-086 | IN-PROGRESS | Nothing checks a file that arrives in Lex's mailbox before DevNeural ingests it: `guardian inbound-check` (contract v1, eight checks) does not exist yet |
 
 <!-- INDEX END -->
 
@@ -2182,5 +2183,15 @@ Cost, for Lex to confirm: through the PowerShell tool a command that holds one o
 Tests: `tests/hook.test.js`, "a typographic quote, dash or space in PowerShell (re-probe 7, H7)": 15 ask through the PowerShell tool and 1 through Bash, 6 stay silent in bypass mode. The characters are built from code points, so the file holds none. Against the hook at d9431ba, 14 of the 22 failed. Staged hook suite before: 1520 passed, 14 failed. After: 1534 passed, 0 failed. Lex's regress harness: no line changed. Re-probe 7's lists (640 commands) and the 75 everyday commands: 0 changed.
 
 Smoke test after applying: through the PowerShell tool ask Claude to run `Write-Output 'x(U+2019); Remove-Item -Recurse -Force .claude\hooks; (U+2018)y'` with the two typographic quotes typed as characters; see a Guardian prompt; decline. In bypass mode `Write-Output "it(U+2019)s done"` gets no prompt.
+
+### BUG-086: No inbound-file check for Lex's mailbox
+
+**Status:** IN-PROGRESS · **Found:** 2026-11-12
+
+Michael's rule of 2026-11-12 (08:59 EST, relayed by White Board, BUG-563 hand-off): Guardian checks every file that arrives in Lex's mailbox (lex@onthelevelconcepts.com, built by DevNeural), and DevNeural's daemon ingests nothing without a clean verdict. Guardian has no command for it. A gap in what Guardian covers, logged here as BUG-002 was.
+
+Plan: `C:/dev/data/skill-connections/brainstorms/16f2e0e3-349e-466f-af79-5ad72f28770d/plans/2026-11-12-guardian-inbound-file-check.md`. Contract agreed with DevNeural's Lex in DevNeural's `docs/spec/LEX-MAILBOX.md`: `node bin/guardian.js inbound-check <file> [--meta <json-file>] [--json]`, `contract_version: 1`, exit 0 clean, 10 hold, 20 block, 2 usage or internal error; `file.inner` lists every archive entry with path, sha256 and size; a meta hit carries `reasons[].path` "meta.subject", "meta.from" or "meta.original_name". Eight checks: real type, executables and scripts, Office, PDF, archives, encryption, prompt injection (the live `scan()` rules), Windows Defender. Limits 60 s, 200 MB input, 1 GB uncompressed, depth 3; a limit hit is hold. No network, no extraction to disk, no native app, no new dependency.
+
+Lex's rulings (2026-11-12 14:45Z): Node built-ins only; committed fixtures are Guardian-made, never customer or employer files (the repo is public); real files run opt-in through `GUARDIAN_INBOUND_REAL_SAMPLES`; Defender quarantining the EICAR temp file counts as a Defender block; 7z and rar are held as unreadable. The code is new live code under `security/inbound/`, not staging.
 
 <!-- DETAILS END -->
