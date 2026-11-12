@@ -31,6 +31,7 @@ import { FormatError, UsageError } from "./errors.js";
 import { detectType, checkType, extOf } from "./checks/type.js";
 import { checkExecutable } from "./checks/executable.js";
 import { checkArchive } from "./checks/archive.js";
+import { checkEncrypted } from "./checks/encrypted.js";
 import { innerPath } from "./paths.js";
 
 export { UsageError };
@@ -82,6 +83,8 @@ const PIPELINE = [
     if (ctx.isMailBody && node.top) return ctx.skip("archive");
     ctx.run("archive", node, () => checkArchive(ctx, buf, node));
   },
+  // After every reader: what they found locked holds.
+  (ctx, buf, node) => ctx.run("encrypted", node, () => checkEncrypted(ctx, node)),
   (ctx, buf, node) => ctx.run("type", node, () => checkType(ctx, node)),
   (ctx, buf, node) => {
     // A mail body is never executed (contract v1): reported skipped.

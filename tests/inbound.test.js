@@ -500,6 +500,38 @@ describe("Check 5 - archives", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// CHECK 6 - ENCRYPTION
+// ---------------------------------------------------------------------------
+
+describe("Check 6 - encrypted content holds, never guessed", () => {
+  test("fail: a zip entry with the encryption flag (bit 0) holds", () => {
+    const r = judge(fx.zip([{ name: "secret.txt", data: "ciphertext", encrypted: true, method: 0 }]), "locked.zip");
+    assert.match(hasReason(r, "encrypted", "hold").detail, /secret\.txt/);
+    assert.equal(r.checks.encrypted, "hold");
+    assert.equal(r.verdict, "hold");
+  });
+
+  test("fail: a WinZip AES entry (method 99) holds and says AES", () => {
+    const r = judge(fx.zip([{ name: "secret.txt", data: "ciphertext", aes: true }]), "aes.zip");
+    assert.match(hasReason(r, "encrypted", "hold").detail, /AES/);
+  });
+
+  test("fail: an encrypted entry two archives down holds with the archive's inner path", () => {
+    const inner = fx.zip([{ name: "s.txt", data: "x", encrypted: true, method: 0 }]);
+    const r = judge(fx.zip([{ name: "in.zip", data: inner }]), "outer.zip");
+    assert.equal(hasReason(r, "encrypted", "hold").path, "in.zip");
+  });
+
+  test("pass: a plain zip and a text file pass the encryption check", () => {
+    for (const [buf, name] of [[fx.zip([{ name: "a.txt", data: "alpha" }]), "a.zip"], [Buffer.from("hi\n"), "a.txt"]]) {
+      const r = judge(buf, name);
+      assert.equal(r.checks.encrypted, "pass");
+      lacks(r, "encrypted");
+    }
+  });
+});
+
 describe("Limits - input size", () => {
   test("fail: over the input limit holds, unread, with the real sha256", () => {
     const buf = Buffer.from("0123456789abcdef");
