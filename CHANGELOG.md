@@ -233,6 +233,15 @@ These fixes are in the staged copies of the protected files
 `npm run test:staging`. They reach the live hooks and scanner when the
 maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
+- **A name split by a command substitution asks, and so does a
+  package manager's config set before a run (BUG-080, re-probe 9
+  K6).** `rm -rf secu$(true)rity`, `` rm -rf secu`:`rity `` and
+  PowerShell `Remove-Item -Recurse "secu$()rity"` were silent; a
+  substitution stuck to a name is now read as empty, as an unset
+  variable is. `npm config set script-shell ./e.sh; npm run security`
+  and the `pnpm` and `yarn` forms now end the script-name exemption, as
+  `npm pkg` does.
+
 - **PowerShell text writers say the word as echo does (BUG-080,
   re-probe 9 K4).** `Add-Content README.md "## Security"`,
   `Set-Content -Path docs\notes.md -Value "# Security notes"` and

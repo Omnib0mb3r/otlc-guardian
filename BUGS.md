@@ -2028,6 +2028,17 @@ Tests: `tests/hook.test.js`, "PowerShell text writers say the word, as echo does
 
 Smoke test after applying: at the root of a scratch project in bypass mode, through the PowerShell tool, ask Claude to run `Add-Content README.md "## Security"`; no Guardian prompt. Then `Add-Content x.ps1 'Remove-Item -Recurse security'; .\x.ps1`; it is denied.
 
+**Re-probe 9, known limits K1 and K2, Lex's decision K6 (2026-11-12): a name split by a command substitution, and a package manager's config set. Fixed in staging, not yet live.** Silent at 1398e04: `rm -rf secu$(true)rity`, `` rm -rf secu`:`rity ``, `npx rimraf secu$(true)rity`, PowerShell `Remove-Item -Recurse "secu$()rity"` and `"secu$($null)rity"` (the re-probe's `real\subsplit` deleted `security/`); and `printf 'rm -rf "$npm_lifecycle_event"' > e.sh; npm config set script-shell ./e.sh; npm run security`, with the `pnpm` and `yarn` forms. Cause: the cost ruling on the unset-variable split read variable references only (`WORD_REFERENCE`), and the runner-configuration ruling counted `npm pkg` and `npm set-script` but not `config set`, which writes `.npmrc` or `.yarnrc` without naming it.
+
+Change in `staging/hooks/injection-guard-hook.mjs`:
+
+- `splitNameReadings()`: a command substitution stuck to a name character, quotes apart (`$(...)`, and in bash a backtick pair; `substitutionSpans()`), is read as empty in both readings, the way an unset variable is. What it prints is not known, so the reading is uncertain and asks. A substitution with a space or a separator beside it (`"security $(date)"`, `build-$(date +%F)/`) is not stuck to a name and is read as before.
+- `configWritten()`: `npm config set` (and `delete`, `rm`, `unset`, `edit`, `fix`; `PACKAGE_CONFIG_WRITES`), `npm c set`, `npm set`, and `pnpm` and `yarn` `config set` count as writing a runner's configuration. `config get` and `config list` do not.
+
+Tests: `tests/hook.test.js`, "a name split by a command substitution, and a package manager's config set (re-probe 9, K6)": 16 ask (2 through the PowerShell tool), all silent at 40637e2, and 7 silent. Staged hook suite before: 2810 passed, 16 failed. After: 2826 passed, 0 failed. Compared with 40637e2 in bypass mode over re-probe 9's lists (1575 commands): 14 changed, each a K6 form from silent to deny; none of the everyday commands changed.
+
+Smoke test after applying: at the root of a scratch project ask Claude to run `` rm -rf secu`:`rity ``; see a Guardian prompt naming security; decline. In bypass mode `tar czf backup-$(date +%F).tgz src` and `npm config get registry && npm test -- security` get no Guardian prompt.
+
 ### BUG-081: Audit walks every checkout under `.claude/worktrees/`
 
 **Status:** SMOKE-TESTING · **Found:** 2026-11-10

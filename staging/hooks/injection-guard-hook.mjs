@@ -1795,6 +1795,8 @@ function shellWords(text, dialect, depth = 0) {
 // a test filter or a module name (pytest -k security, npm test -- security).
 // They are the keys of TEST_RUN_OPTIONS and PYTHON_TEST_MODULES below.
 const PACKAGE_MANAGERS  = new Set(["npm", "pnpm", "yarn", "bun"]);
+// The config subcommands that write a package manager's settings file (re-probe 9, K6).
+const PACKAGE_CONFIG_WRITES = new Set(["set", "delete", "rm", "unset", "edit", "fix"]);
 const PACKAGE_RUNNERS   = new Set(["npx", "pnpx", "bunx"]);
 const TEST_SCRIPT       = /^(?:t|test)$/;
 const DIRECTORY_MOVERS  = new Set(["cd", "chdir", "pushd", "set-location", "sl", "push-location"]);
@@ -2603,28 +2605,49 @@ const NAME_PART = /[A-Za-z0-9_~.-]/;
  * It is read once as empty and once with the default its word gives
  * (secu${U:-rity}). Text in single quotes is read the same way, since a
  * shell it is handed to expands it (bash -c 'rm -rf secu$U"rity"').
+ * A command substitution stuck to a name the same way ($(...), and in
+ * bash `...`) is read as empty in both readings: what it prints is not
+ * known, and `rm -rf secu$(true)rity` deletes security (re-probe 9, K6).
  * @returns {string[]} the readings that differ from the text
  */
 function splitNameReadings(text, dialect) {
   const { tokens, uncertain } = lexShell(text, dialect);
   if (uncertain) return [];
+  /** Whether the text of a word is stuck to a name character on either side of [a, b), quotes apart. */
+  const stuck = (raw, a, b) => NAME_PART.test(raw.slice(0, a).replace(/["']/g, "").slice(-1)) ||
+    NAME_PART.test(raw.slice(b).replace(/["']/g, "").slice(0, 1));
   const readings = [() => "", referenceDefault].map((fill) => {
     let out = "";
     let at = 0;
     for (const tok of tokens) {
       if (tok.word === undefined) continue;
-      const raw = text.slice(tok.start, tok.end);
-      const spelled = raw.replace(WORD_REFERENCE, (m, value, offset) => {
-        const before = raw.slice(0, offset).replace(/["']/g, "").slice(-1);
-        const after = raw.slice(offset + m.length).replace(/["']/g, "").slice(0, 1);
-        return NAME_PART.test(before) || NAME_PART.test(after) ? fill(m, value) : m;
-      });
+      let raw = text.slice(tok.start, tok.end);
+      for (const [a, b] of substitutionSpans(raw, dialect).reverse()) if (stuck(raw, a, b)) raw = raw.slice(0, a) + raw.slice(b);
+      const spelled = raw.replace(WORD_REFERENCE, (m, value, offset) => (stuck(raw, offset, offset + m.length) ? fill(m, value) : m));
       out += text.slice(at, tok.start) + spelled;
       at = tok.end;
     }
     return out + text.slice(at);
   });
   return [...new Set(readings)].filter((reading) => reading !== text);
+}
+
+/** The places [start, end) of the command substitutions in a word's text: $(...), and in bash `...`. */
+function substitutionSpans(raw, dialect) {
+  const spans = [];
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] === "\\" && dialect === "bash") i++;
+    else if (raw.startsWith("$(", i)) {
+      const end = closingParen(raw, i + 2);
+      spans.push([i, end]);
+      i = end - 1;
+    } else if (raw[i] === "`" && dialect === "bash") {
+      const end = closingBacktick(raw, i + 1);
+      spans.push([i, end]);
+      i = end - 1;
+    }
+  }
+  return spans;
 }
 
 /**
@@ -2990,11 +3013,15 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
    * test run or a package script takes its configuration from (re-probe
    * 8, the cost ruling on runner configuration): by name in one of its
    * write places, or through `npm pkg` and `npm set-script`, which write
-   * package.json without naming it.
+   * package.json without naming it, and `npm config set` (`npm set`,
+   * `npm c set`, and pnpm's and yarn's config set and delete), which
+   * write .npmrc or .yarnrc and can name the shell scripts run in
+   * (re-probe 9, K6).
    */
   const configWritten = (s) => all.some((other) => {
     if (other === s || quiet(other)) return false;
-    if (PACKAGE_MANAGERS.has(commandName(other[0].word)) && other.some((tok) => tok.word === "pkg" || tok.word === "set-script")) return true;
+    if (PACKAGE_MANAGERS.has(commandName(other[0].word)) && other.some((tok, k) => tok.word === "pkg" || tok.word === "set-script" ||
+      (k === 1 && tok.word === "set") || ((tok.word === "config" || tok.word === "c") && PACKAGE_CONFIG_WRITES.has(other[k + 1]?.word)))) return true;
     const { whole, landed } = writePlaces(other);
     return whole.some(namesConfig) || landed.some((tok) => landsUnder(tok, (name) => RUNNER_CONFIG.test(name), configGlob));
   });

@@ -7351,6 +7351,50 @@ describe("PreToolUse hook - PowerShell text writers say the word, as echo does (
   }
 });
 
+describe("PreToolUse hook - a name split by a command substitution, and a package manager's config set (re-probe 9, K6)", () => {
+  for (const [command, tool] of [
+    // A substitution stuck to a name is read as empty.
+    ["rm -rf secu$(true)rity"],
+    ["rm -rf secu`:`rity"],
+    ["rm -rf secu$(:)rity"],
+    ['rm -rf "secu$(printf \'\')rity"'],
+    ["npx rimraf secu$(true)rity"],
+    ["rm -rf .claude/ho$(printf '')oks"],
+    ["cp notes/ok.md CLAU$(true)DE.md"],
+    ["bash -c 'rm -rf secu$(true)rity'"],
+    ['Remove-Item -Recurse "secu$()rity"', "PowerShell"],
+    ['Remove-Item -Recurse "secu$($null)rity"', "PowerShell"],
+    // config set writes .npmrc or .yarnrc, which can name the script shell.
+    ["printf 'rm -rf \"$npm_lifecycle_event\"' > e.sh; npm config set script-shell ./e.sh; npm run security"],
+    ["npm config set --location=project script-shell ./e.sh && npm run security"],
+    ["pnpm config set script-shell ./e.sh && pnpm run security"],
+    ["yarn config set script-shell ./e.sh && yarn security"],
+    ["npm set script-shell ./e.sh; npm run security"],
+    ["npm c set script-shell ./e.sh; npm test -- security"],
+  ]) {
+    stagedOnly(`asks${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      const out = runGuarded(command, { tool });
+      assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
+    });
+  }
+
+  for (const [command, tool] of [
+    // A substitution that is not stuck to a guarded name, or in a word that names none.
+    ['echo "v$(cat VERSION)" > out.txt'],
+    ["mkdir -p build-$(date +%F) && cp -r dist build-$(date +%F)/"],
+    ['git commit -m "release v$(cat VERSION)"'],
+    ["tar czf backup-$(date +%F).tgz src"],
+    ['Remove-Item -Recurse "build-$(Get-Date -f yyyy)"', "PowerShell"],
+    // config that only reads.
+    ["npm config get registry && npm test -- security"],
+    ["npm config list; npm run security"],
+  ]) {
+    stagedOnly(`silent${tool ? ` (${tool})` : ""}: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions", tool }));
+    });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
