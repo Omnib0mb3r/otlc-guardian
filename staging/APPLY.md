@@ -173,6 +173,7 @@ one of the cost rulings of re-probe 7 ((a), (b) and (c)) and re-probe 8.
 | BUG-080 (N2) | f2ddb47 | hook | `npm`, `pnpm` and `yarn` `config` is a write when any word after `config` is `set`, `delete`, `rm`, `unset`, `edit` or `fix`, whatever options come before it |
 | BUG-066 (N1) | 29b2dd4 | hook | a glob copy or move out of a folder the command unpacks, clones or downloads into, or that is not on disk, lands on the target folder itself: the project root and a watched folder ask; cmd `copy` and `move` wildcards are read |
 | BUG-066 (P1) | d386456 | hook | once a command has unpacked, cloned or downloaded something, a later step that takes it to the project root, a folder above it or a watched path asks, and so does a copy with an argument that is not spelled out; `xcopy` and cmd `copy` and `move` read a folder source; a listing piped into `Copy-Item` or `Move-Item` is read; `ln -s` with a glob is read as a copy |
+| BUG-066 (P2) | 49feffe | hook | unread content into a folder git runs hooks from (`.git/hooks`, `.husky`, `.githooks`, the folder `core.hooksPath` names) asks, as in an instruction file; an unpack, clone or download into a place that is not spelled out asks |
 
 Documented, not fixed: an obfuscated payload moved out of a code fence
 (BUG-042, S7, f5ecc42), `xargs cp` fed its file names on stdin (S5), a
@@ -744,7 +745,7 @@ and 2 applied: injection-guard 175 passed 1 failed (that test), init
 inbound 230/0, test:staging exit 0 (staged injection-guard 288/0, staged
 hook 2960/0, run with `GUARDIAN_TEST_HOOK_TIMEOUT_MS=90000`), the audit
 exit 0, check 18 passed 0 warnings. The commit after f2ddb47 changes
-only this file. P1 and P2 (d386456 and the commit after it) changed the
+only this file. P1 and P2 (d386456 and 49feffe) changed the
 staged hook since: in the repo the staged hook suite is 3146/0 and the
 inbound suite 345/0. The apply has not been measured again in a scratch
 clone with them. A hook test that fails with "The test
