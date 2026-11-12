@@ -42,6 +42,8 @@ import { detectType } from "../security/inbound/checks/type.js";
 import { WEAK_RULES } from "../security/inbound/checks/injection.js";
 import { INJECTION_PATTERNS } from "../security/01-injection-guard.js";
 import { decodeStream } from "../security/inbound/readers/pdf.js";
+import { readZip, readZipEntry } from "../security/inbound/readers/zip.js";
+import { imageTexts } from "../security/inbound/readers/image.js";
 import {
   systemAntivirus, encodeEntries, AMSI_CHUNK_BYTES, AMSI_OVERLAP_BYTES, AMSI_SCRIPT,
 } from "../security/inbound/checks/antivirus.js";
@@ -2045,6 +2047,95 @@ if (process.env.GUARDIAN_INBOUND_REAL_SAMPLES) {
     for (const [key, n] of [...tally].sort()) console.log(`    ${String(n).padStart(4)}  ${key}`);
   });
 }
+
+// ---------------------------------------------------------------------------
+// FIXTURES FROM REAL WRITERS
+// ---------------------------------------------------------------------------
+
+const FIXTURES = path.join(__dirname, "fixtures", "inbound");
+// Each file made by tests/fixtures/inbound/make_fixtures.py, and the type its bytes are.
+const FIXTURE_TYPES = {
+  "clean.xlsx": "ooxml-excel", "clean.png": "png", "clean.jpg": "jpeg", "clean.pdf": "pdf", "clean.dxf": "text",
+  "clean.step": "step", "clean.igs": "iges", "clean-ascii.stl": "stl-ascii", "clean-binary.stl": "stl-binary",
+};
+
+/**
+ * Every reading of a file's bytes in which a word could sit: as single
+ * bytes, as UTF-16 from either byte and in either order, and the same
+ * for what is packed inside (zip entries, the streams of a PDF, the
+ * text chunks of an image).
+ */
+function readings(buf, depth = 0) {
+  const out = [buf.toString("latin1"), buf.toString("utf16le"), buf.subarray(1).toString("utf16le"),
+    Buffer.from(buf.subarray(0, buf.length & ~1)).swap16().toString("utf16le")];
+  if (depth > 3) return out;
+  const type = detectType(buf);
+  if (type === "zip") {
+    for (const entry of readZip(buf).entries) {
+      if (!entry.isDir) out.push(entry.name, ...readings(readZipEntry(buf, entry, new Budget()).data, depth + 1));
+    }
+  } else if (type === "pdf") {
+    for (const m of buf.toString("latin1").matchAll(/stream\r?\n([\s\S]*?)\r?\n?endstream/g)) {
+      try {
+        out.push(...readings(zlib.inflateSync(Buffer.from(m[1], "latin1")), depth + 1));
+      } catch {
+        // Not a deflated stream: its bytes were read above as they are.
+      }
+    }
+  } else if (type === "png" || type === "jpeg") {
+    out.push(...imageTexts(buf, type, new Budget()).map((t) => t.text));
+  }
+  return out;
+}
+
+describe("Fixtures from real writers (tests/fixtures/inbound, Guardian-made)", () => {
+  test("the folder holds the listed fixtures and the script that makes them, nothing else", () => {
+    assert.deepEqual(readdirSync(FIXTURES).sort(), [...Object.keys(FIXTURE_TYPES), "make_fixtures.py"].sort());
+  });
+
+  for (const [name, type] of Object.entries(FIXTURE_TYPES)) {
+    test(`pass: ${name} is ${type} and clean, with no reason at all`, () => {
+      const r = checkInbound(path.join(FIXTURES, name), {}, { antivirus: fx.avClean, platform: "win32" });
+      assert.equal(r.file.detected_type, type);
+      assert.deepEqual(r.reasons, []);
+      assert.equal(r.verdict, "clean");
+    });
+  }
+
+  test("pass: a zip of all of them is clean", () => {
+    const entries = Object.keys(FIXTURE_TYPES).map((name) => ({ name, data: readFileSync(path.join(FIXTURES, name)) }));
+    const r = judge(fx.zip(entries), "job.zip");
+    assert.equal(r.verdict, "clean", JSON.stringify(r.reasons));
+    assert.equal(r.file.inner.length, entries.length);
+  });
+
+  // The repository is public. A writer puts the login name, the machine
+  // or a template's name into a file unless told otherwise, so every
+  // committed fixture is read in every encoding the readers decode.
+  const PRIVATE = /michael|zion|zsg/i;
+  for (const name of Object.keys(FIXTURE_TYPES)) {
+    test(`${name} holds no person's, employer's or machine's name`, () => {
+      for (const text of readings(readFileSync(path.join(FIXTURES, name)))) {
+        const found = PRIVATE.exec(text);
+        assert.equal(found, null, `${name} holds "${found?.[0]}" near "${text.slice(Math.max(0, (found?.index ?? 0) - 30), (found?.index ?? 0) + 40)}"`);
+      }
+    });
+  }
+
+  test("the check for private names sees a name in each place a writer can leave one", () => {
+    const sees = (buf) => readings(buf).some((text) => PRIVATE.test(text));
+    assert.ok(sees(Buffer.from("author: Michael\n")));
+    assert.ok(sees(Buffer.from("saved by zsg-cad", "utf16le")));
+    assert.ok(sees(Buffer.concat([Buffer.from([7]), Buffer.from("ZION template", "utf16le")])));
+    assert.ok(sees(Buffer.from("xmichael", "utf16le").swap16()));
+    assert.ok(sees(fx.zip([{ name: "docProps/core.xml", data: "<dc:creator>michael</dc:creator>" }])));
+    assert.ok(sees(fx.zip([{ name: "zion-title-block.txt", data: "x" }])));
+    assert.ok(sees(fx.png({ ztext: { Author: "michael" } })));
+    assert.ok(sees(fx.jpeg({ comment: "plotted by michael" })));
+    assert.ok(sees(fx.pdf([...fx.pdfPage(), fx.pdfObjectStream([[6, "<< /Author (michael) >>"]])])));
+    assert.ok(!sees(fx.docx()) && !sees(fx.png()) && !sees(fx.pdf(fx.pdfPage())));
+  });
+});
 
 describe("Limits - input size", () => {
   test("fail: over the input limit holds, unread, with the real sha256", () => {
