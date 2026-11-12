@@ -99,7 +99,7 @@ the ecosystem the hooks were already defending.
 
 ### Layer 2 - The Runtime Security Layer
 
-Five files under `security/`. All zero-dependency, all drop-in, all work on Windows,
+Five files and one folder under `security/`. All zero-dependency, all drop-in, all work on Windows,
 Linux, and macOS. **Most files are Node-only**; the injection guard has a Python
 parity implementation. See the per-file breakdown below for the exact language
 support of each component.
@@ -134,6 +134,16 @@ success/error response shapes, health check helper, environment variable validat
 Windows environment setup helper. Drop in, wire up, done. **No Python equivalent
 yet** - Python projects should use established libraries (`fastapi.middleware`, `slowapi`,
 `structlog`, `pydantic-settings`) for the same functionality.
+
+**`inbound/` - Inbound-file check (Node only)**
+Run `guardian inbound-check <file>` on a file that arrived from outside, such as a mail
+attachment, before anything opens it. It answers clean, hold or block (exit 0, 10, 20)
+from eight checks: real type, executables and scripts, Office macros, PDF scripts,
+archives, encryption, prompt injection (the same rule set as the injection guard) and
+the machine's antivirus. The file is only read: archives and documents are walked in
+memory under fixed limits, nothing is extracted or opened, no network is used, and a
+check that cannot do its job holds the file. Node built-ins only. The antivirus check
+needs Windows (Defender, or the registered AMSI provider); elsewhere every file holds.
 
 **`03-audit.js` - Standalone audit CLI (Node, scans both Node and Python source)**
 Run `guardian audit` from anywhere inside a project. Scans for hardcoded secrets,
@@ -225,9 +235,9 @@ Then run `guardian check` to confirm the install and see which coverage tier you
 
 ---
 
-## The Six Commands
+## The Seven Commands
 
-Once installed, you have six commands:
+Once installed, you have seven commands:
 
 **`guardian init`** - Run once inside each project you want Guardian in. Merge-safe and
 idempotent.
@@ -277,6 +287,15 @@ guardian check
 project. Useful when debugging why a file is (or isn't) being scanned by the hook.
 ```bash
 guardian list-watched
+```
+
+**`guardian inbound-check`** - Judge one file that arrived from outside before anything
+uses it. Prints the verdict and each reason; `--json` prints one JSON object for a
+caller, and `--meta` names a JSON file with what the mail said about it (sender,
+subject, the name as sent, the declared type), which is checked too.
+```bash
+guardian inbound-check invoice.pdf
+guardian inbound-check plc.zip --meta plc.zip.meta.json --json   # exit 0 clean, 10 hold, 20 block, 2 error
 ```
 
 > **Uninstalling is deliberately manual.** There is no `guardian uninstall` command

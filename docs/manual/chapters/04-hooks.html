@@ -2,6 +2,8 @@
 
 <p>Guardian ships two Claude Code hooks in <code>.claude/hooks/</code>. <code>injection-guard-hook.mjs</code> (1140 lines) runs before a file or shell tool call and can deny it, ask a person, or add a warning. <code>web-content-guard.mjs</code> (203 lines) runs after a web tool call and can only warn. Both import the scanner in <code>security/01-injection-guard.js</code> (<a href="#ch-runtime">chapter 03</a>), so they use the same patterns, normalization and decoding as the runtime guard. Everything below is read from the 1.5.0 working tree at <code>0fa32ce</code>.</p>
 
+<div class="limit"><b>Live and staged</b><p>This chapter describes two things and marks which is which. The live hooks are the files in <code>.claude/hooks/</code>, and they are what runs today. Behaviour marked "staged" or "not yet live" exists only in the copies under <code>staging/</code>, is listed in <a href="#hk-staged">Staged fixes</a>, and is covered by <code>npm run test:staging</code> alone. It reaches the live hooks when Lex applies <code>staging/APPLY.md</code> after a clean re-probe. On 2026-11-12 nothing staged has been applied.</p></div>
+
 <h3 id="hk-overview">The two hooks at a glance</h3>
 <div class="tbl dense"><table>
 <thead><tr><th>Hook</th><th>Event</th><th>Tools</th><th>Imports</th><th>Strongest outcome</th></tr></thead>

@@ -144,7 +144,7 @@ function inlineImages(html) {
   });
 }
 const coverSingle = cover.replace('<!--CONTENTS-->', contents(true));
-const single = `${head('OTLC Guardian Manual', 'How OTLC Guardian works, end to end: the audit engine, the runtime guard, the Claude Code hooks, install and update, exemptions, and the systems that depend on it.', `<style>\n${css}\n</style>`)}
+const single = `${head('OTLC Guardian Manual', 'How OTLC Guardian works, end to end: the audit engine, the runtime guard, the Claude Code hooks, install and update, exemptions, the systems that depend on it, and the inbound-file check.', `<style>\n${css}\n</style>`)}
 <body id="top">
 ${rail({ single: true })}
 <main class="page">

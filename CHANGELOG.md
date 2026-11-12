@@ -150,6 +150,52 @@ project (each project picks it up when `guardian update` is run there).
 
 ### Added
 
+- **`guardian inbound-check`: a file that arrives from outside is judged
+  before anything uses it (BUG-086).** New code under `security/inbound/`,
+  Node built-ins only. `guardian inbound-check <file> [--meta <json-file>]
+  [--json]` answers clean, hold or block (exit 0, 10, 20; exit 2 when it
+  could not judge) with one JSON object: `contract_version` 1, `verdict`,
+  `reasons`, `file` (hash, size, detected type, and every archive entry
+  under `inner`), the state of each check, `antivirus_engine`,
+  `guardian_version`, `ruleset_version`. Built for the mail daemon of
+  DevNeural, which runs it on every body and attachment that reaches
+  Lex's mailbox and ingests nothing without a clean verdict. The file is
+  only read: archives and documents are walked in memory, nothing is
+  extracted, opened by its own application or fetched. Eight checks:
+  - `type`: the type is what the bytes say. A name or declared type that
+    hides a program blocks; bytes of no known format hold. STEP, IGES and
+    STL are known by their structure, DWG by its version tag.
+  - `executable`: a program or script blocks by its bytes or its name, at
+    any depth. A `.scr` whose bytes are plain text is an AutoCAD script
+    and holds (`autocad-script`).
+  - `office`: VBA, Excel 4.0 and OpenDocument macros, DDE, and remote
+    templates and objects block; other outside links, ActiveX and
+    embedded packages hold. Embedded files are judged as files.
+  - `pdf`: JavaScript and `/Launch` block; forms that submit, rich
+    media, links to other files and undecodable streams hold.
+  - `archive`: zip (zip64), tar and gzip. An entry that would be written
+    outside its folder, a link and a bomb block; 7z, rar and the other
+    formats with no reader hold.
+  - `encrypted`: content behind a password holds. None is ever tried.
+  - `injection`: every text the file and the mail carry goes through the
+    runtime guard's `scan()`; a hit holds. `GUARD-INJ-011`,
+    `GUARD-INJ-015` and `GUARD-INJ-028` are reported as info
+    (`prompt-injection-weak`) when one of them is the only rule that hits
+    in a text, because each matches ordinary engineering prose. Invisible
+    characters hold when they can smuggle text and are info when they are
+    typographic.
+  - `antivirus`: the file is scanned once by Windows Defender when its
+    service runs, otherwise by the registered AMSI provider through the
+    script file `security/inbound/engines/amsi.ps1`, which also scans each
+    archive entry. A provider whose product Windows Security Center does
+    not list as enabled holds (`antivirus-disabled`), and so do no engine,
+    a failed scan and any machine that is not Windows.
+
+  Limits per file: 60 s, 200 MB input, 1 GB uncompressed, depth 3, 10,000
+  entries; an entry that expands more than 100 times at 1 MiB or more is
+  a bomb. A check that throws or did not run holds. `npm test` runs a
+  seventh suite, `tests/inbound.test.js` (345 tests), with Guardian-made
+  fixtures only. Manual chapter 08; threat model in `SECURITY.md`.
 - **Audit rule AGT-002: an instruction file carries a prompt-injection
   pattern (BUG-002).** The audit read no file an AI agent loads as its
   instructions. AGT-002 runs the runtime scanner's `scan()` over
@@ -1553,6 +1599,11 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
 ### Known limits (not fixed here)
 
+- The inbound-file check does not decode pixels or run OCR, does not
+  read inside DWG, binary DXF, audio, video or images other than PNG and
+  JPEG, and holds every file on a machine that is not Windows, because
+  the antivirus check cannot run there. The full list is in
+  `SECURITY.md`.
 - Detection is pattern-based. A reworded instruction with no known
   pattern still passes.
 - The content hook judges what a command spells out. It does not see a

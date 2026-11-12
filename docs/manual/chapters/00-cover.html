@@ -1,7 +1,7 @@
 <header class="cover" id="cover">
   <div class="eyebrow">OTLC Guardian &middot; the manual &middot; state of 2026-11-10 (1.5.0, unreleased)</div>
   <h1>Rules an agent reads. <span class="soft">Checks it cannot talk its way past.</span></h1>
-  <p class="lede">OTLC Guardian is a security floor for AI-assisted code. It ships the rules a coding agent reads at the start of a session, a static audit that checks a project before it is committed or deployed, a runtime scanner a project calls before and after every AI API call, and two Claude Code hooks that scan what an agent writes into files a later session will load as instructions. This manual explains each part as the code builds it today.</p>
+  <p class="lede">OTLC Guardian is a security floor for AI-assisted code. It ships the rules a coding agent reads at the start of a session, a static audit that checks a project before it is committed or deployed, a runtime scanner a project calls before and after every AI API call, and two Claude Code hooks that scan what an agent writes into files a later session will load as instructions. It also judges a file that arrives from outside, such as a mail attachment, before anything uses it. This manual explains each part as the code builds it today.</p>
   <div class="meta">
     <span class="chip ok"><i></i>written from the code at 1.5.0</span>
     <span class="chip warn"><i></i>known gaps named, with bug ids</span>
@@ -12,7 +12,7 @@
     <div class="fact"><div class="k">Runtime patterns</div><div class="v">28 + 16</div><div class="d">injection, secret</div></div>
     <div class="fact"><div class="k">Claude Code hooks</div><div class="v">2</div><div class="d">PreToolUse can block, PostToolUse warns</div></div>
     <div class="fact"><div class="k">Runtime dependencies</div><div class="v">0</div><div class="d">Node 22 or later, nothing from npm</div></div>
-    <div class="fact"><div class="k">Tests</div><div class="v">1,013</div><div class="d">6 suites, no known-bug test open</div></div>
+    <div class="fact"><div class="k">Tests</div><div class="v">1,358</div><div class="d">7 suites, no known-bug test open</div></div>
     <div class="fact"><div class="k">Field guides</div><div class="v">4</div><div class="d">the bug classes AI tools write most</div></div>
   </div>
 

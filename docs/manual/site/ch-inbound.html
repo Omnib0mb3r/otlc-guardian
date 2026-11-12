@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inbound files | OTLC Guardian Manual</title>
+<meta name="description" content="guardian inbound-check: how one file that arrived from outside is judged before anything uses it, what each of the eight checks does, the contract with DevNeural's mail daemon, and what the check does not see.">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Inter+Tight:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="manual.css">
+</head>
+<body>
+<nav class="rail" aria-label="Chapters">
+<a class="brand" href="index.html"><span class="mark"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 5 6v5c0 4.4 3 8.3 7 9.5 4-1.2 7-5.1 7-9.5V6z"/><path d="m9 12 2 2 4-4"/></svg></span><span><b>OTLC Guardian</b><small>The manual</small></span></a>
+<div class="tools"><button type="button" data-theme-toggle>Theme</button><a class="chip" href="../GUARDIAN-MANUAL.html" style="border:0">One page</a></div>
+<ol><li><a href="ch-what.html" data-ch="ch-what"><span class="n">01</span><span>What Guardian is</span></a><ul class="sub"><li><a href="ch-what.html#wh-parts">The parts</a></li><li><a href="ch-what.html#wh-ids">Rule ids</a></li><li><a href="ch-what.html#wh-state">Version and release state</a></li><li><a href="ch-what.html#wh-layout">Repo layout</a></li></ul></li><li><a href="ch-audit.html" data-ch="ch-audit"><span class="n">02</span><span>The audit engine</span></a><ul class="sub"><li><a href="ch-audit.html#au-what">What the audit is and is not</a></li><li><a href="ch-audit.html#au-pipeline">One run, start to finish</a></li><li><a href="ch-audit.html#au-cli">Command line</a></li><li><a href="ch-audit.html#au-json">JSON output</a></li><li><a href="ch-audit.html#au-files">Which files get scanned</a></li><li><a href="ch-audit.html#au-roots">Scan root and project root</a></li><li><a href="ch-audit.html#au-tests">Test-file detection</a></li><li><a href="ch-audit.html#au-kinds">The three rule kinds</a></li><li><a href="ch-audit.html#au-analyzers">Route-handler analyzers</a></li><li><a href="ch-audit.html#au-rules">Rule reference</a></li><li><a href="ch-audit.html#au-severity">Severity, summary and exit code</a></li><li><a href="ch-audit.html#au-suppress">Suppression</a></li><li><a href="ch-audit.html#au-verified">What the tests verify</a></li><li><a href="ch-audit.html#au-bugs">Known open bugs</a></li><li><a href="ch-audit.html#au-found">Found while writing this chapter</a></li><li><a href="ch-audit.html#au-deps">Who depends on it</a></li><li><a href="ch-audit.html#au-docs">Where the docs and the code disagree</a></li></ul></li><li><a href="ch-runtime.html" data-ch="ch-runtime"><span class="n">03</span><span>The runtime guard and helpers</span></a><ul class="sub"><li><a href="ch-runtime.html#rg-overview">Where it sits</a></li><li><a href="ch-runtime.html#rg-pipeline">How one scan runs</a></li><li><a href="ch-runtime.html#rg-api">01-injection-guard.js: the exports</a></li><li><a href="ch-runtime.html#rg-injection">Injection rules</a></li><li><a href="ch-runtime.html#rg-secrets">Secret rules</a></li><li><a href="ch-runtime.html#rg-normalize">Normalizer, decode views and caps</a></li><li><a href="ch-runtime.html#rg-scanchange">scanChange(): judging what a change adds</a></li><li><a href="ch-runtime.html#rg-ids">Rule ids and legacyId</a></li><li><a href="ch-runtime.html#rg-python">The Python port</a></li><li><a href="ch-runtime.html#rg-codesec">02-code-security.js: server helpers</a></li><li><a href="ch-runtime.html#rg-sql">04-sql-guard.js: the parameterized SQL helper</a></li><li><a href="ch-runtime.html#rg-deps">Who depends on it</a></li><li><a href="ch-runtime.html#rg-tests">What the tests verify</a></li><li><a href="ch-runtime.html#rg-docs">Code versus docs</a></li><li><a href="ch-runtime.html#rg-open">Open bugs</a></li></ul></li><li><a href="ch-hooks.html" data-ch="ch-hooks"><span class="n">04</span><span>The Claude Code hooks</span></a><ul class="sub"><li><a href="ch-hooks.html#hk-overview">The two hooks at a glance</a></li><li><a href="ch-hooks.html#hk-protocol">How Claude Code calls a hook</a></li><li><a href="ch-hooks.html#hk-flow">The PreToolUse decision flow</a></li><li><a href="ch-hooks.html#hk-bypass">The bypassPermissions rule</a></li><li><a href="ch-hooks.html#hk-quoted">A quoted instruction is still an instruction</a></li><li><a href="ch-hooks.html#hk-watch">The watch list and its settings</a></li><li><a href="ch-hooks.html#hk-files">How a file write is judged</a></li><li><a href="ch-hooks.html#hk-shell">The shell readers</a></li><li><a href="ch-hooks.html#hk-copy">Copy sources are judged by content</a></li><li><a href="ch-hooks.html#hk-self">Self-protection</a></li><li><a href="ch-hooks.html#hk-failure">Failure behavior</a></li><li><a href="ch-hooks.html#hk-web">web-content-guard.mjs</a></li><li><a href="ch-hooks.html#hk-blind">What the PreToolUse hook cannot see</a></li><li><a href="ch-hooks.html#hk-tests">What the tests verify</a></li><li><a href="ch-hooks.html#hk-staged">Staged fixes (not yet live)</a></li><li><a href="ch-hooks.html#hk-bugs">Known bugs</a></li><li><a href="ch-hooks.html#hk-deps">Who depends on it</a></li></ul></li><li><a href="ch-install.html" data-ch="ch-install"><span class="n">05</span><span>Install and update</span></a><ul class="sub"><li><a href="ch-install.html#in-package">The package and the source directory</a></li><li><a href="ch-install.html#in-commands">Commands and flags</a></li><li><a href="ch-install.html#in-init">What init writes</a></li><li><a href="ch-install.html#in-markers">The marker block in the behavior files</a></li><li><a href="ch-install.html#in-settings">The settings merge</a></li><li><a href="ch-install.html#in-never">What init never overwrites</a></li><li><a href="ch-install.html#in-update">How update decides</a></li><li><a href="ch-install.html#in-hookblind">Update and the PreToolUse hook</a></li><li><a href="ch-install.html#in-check">guardian check</a></li><li><a href="ch-install.html#in-exit">Exit codes and failures</a></li><li><a href="ch-install.html#in-agents">How agents are made to run Guardian</a></li><li><a href="ch-install.html#in-uninstall">Uninstall</a></li><li><a href="ch-install.html#in-tests">What the tests verify</a></li><li><a href="ch-install.html#in-open">Known open bugs</a></li></ul></li><li><a href="ch-suppression.html" data-ch="ch-suppression"><span class="n">06</span><span>Exemptions and suppression</span></a><ul class="sub"><li><a href="ch-suppression.html#sp-summary">All mechanisms at a glance</a></li><li><a href="ch-suppression.html#sp-allowlist">The central allowlist</a></li><li><a href="ch-suppression.html#sp-marker">The audit-exempt marker</a></li><li><a href="ch-suppression.html#sp-report">Where audit exemptions are reported</a></li><li><a href="ch-suppression.html#sp-notcovered">What an audit exemption does not cover</a></li><li><a href="ch-suppression.html#sp-builtin">Built-in rule scope</a></li><li><a href="ch-suppression.html#sp-inline">Text that silences a rule (a defect)</a></li><li><a href="ch-suppression.html#sp-repo">This repo's allowlist</a></li><li><a href="ch-suppression.html#sp-ignorepaths">Hook exemption: otlcGuardian.ignorePaths</a></li><li><a href="ch-suppression.html#sp-narrowing">Settings that narrow the hook</a></li><li><a href="ch-suppression.html#sp-docmarker">History of the otlc-guardian:doc marker</a></li><li><a href="ch-suppression.html#sp-none">Where no exemption is needed, or none exists</a></li><li><a href="ch-suppression.html#sp-policy">When to use one</a></li></ul></li><li><a href="ch-connections.html" data-ch="ch-connections"><span class="n">07</span><span>Systems that touch Guardian</span></a><ul class="sub"><li><a href="ch-connections.html#cn-table">Who depends on what</a></li><li><a href="ch-connections.html#cn-planned">Planned: the hard-no hook planned</a></li><li><a href="ch-connections.html#cn-change">When Guardian changes</a></li></ul></li><li class="open"><a href="ch-inbound.html" class="on" data-ch="ch-inbound"><span class="n">08</span><span>Inbound files</span></a><ul class="sub"><li><a href="ch-inbound.html#ib-call">How it is called</a></li><li><a href="ch-inbound.html#ib-flow">The walk</a></li><li><a href="ch-inbound.html#ib-verdict">The verdict rule</a></li><li><a href="ch-inbound.html#ib-output">The verdict object (contract v1)</a></li><li><a href="ch-inbound.html#ib-checks">The eight checks</a></li><li><a href="ch-inbound.html#ib-limits">Limits</a></li><li><a href="ch-inbound.html#ib-antivirus">The antivirus check</a></li><li><a href="ch-inbound.html#ib-cad">CAD files</a></li><li><a href="ch-inbound.html#ib-blind">What the check does not see</a></li><li><a href="ch-inbound.html#ib-tests">What the tests verify</a></li><li><a href="ch-inbound.html#ib-bugs">Known bugs</a></li><li><a href="ch-inbound.html#ib-deps">Who depends on it</a></li></ul></li></ol>
+<div class="foot">8 chapters<br>Built 2026-11-12<br>From the code, not the brochure.</div>
+</nav>
+<main class="page">
+<section class="chapter" id="ch-inbound" data-num="08" data-title="Inbound files" data-blurb="guardian inbound-check: how one file that arrived from outside is judged before anything uses it, what each of the eight checks does, the contract with DevNeural's mail daemon, and what the check does not see.">
+<header class="chapter-head"><div class="num">08</div><div><h2>Inbound files</h2><p>guardian inbound-check: how one file that arrived from outside is judged before anything uses it, what each of the eight checks does, the contract with DevNeural's mail daemon, and what the check does not see.</p></div></header>
+
+<p><code>guardian inbound-check</code> judges one file that arrived from outside and answers clean, hold or block. It exists for Lex's mailbox (BUG-086): Michael's rule of 2026-11-12 is that Guardian checks every file that arrives there, and DevNeural's daemon ingests nothing without a clean verdict. The code is <code>security/inbound/</code>, new in 1.5.0 and live (it is not part of <code>staging/</code>). It uses Node built-ins only.</p>
+
+<p>The file is only read. Archives and documents are walked in memory, nothing is extracted to disk, nothing is opened by its own application, and no network is used. A check that cannot do its job never reads as clean.</p>
+
+<h3 id="ib-call">How it is called</h3>
+<div class="tbl dense"><table>
+<thead><tr><th>Item</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Command</td><td><code>node bin/guardian.js inbound-check &lt;file&gt; [--meta &lt;json-file&gt;] [--json]</code> (<code>runInboundCheck()</code> in <code>bin/guardian.js</code>)</td></tr>
+<tr><td><code>--json</code></td><td>stdout holds the verdict object on one line and nothing else. Without it a short report is printed: file, type, size, sha256, verdict, each reason, the state of each check, the entry count.</td></tr>
+<tr><td><code>--meta</code></td><td>A JSON file with what the mail said about the file. Known fields: <code>source</code>, <code>from</code>, <code>to</code>, <code>subject</code>, <code>message_id</code>, <code>received_at</code>, <code>original_name</code>, <code>content_type</code>. Only string values are kept; every one is untrusted text, judged and never run. <code>source: "mail-body"</code> marks a message body.</td></tr>
+<tr><td>Exit code</td><td>0 clean, 10 hold, 20 block, 2 usage or internal error (<code>EXIT_CODES</code>). The exit code repeats the verdict.</td></tr>
+<tr><td>Exit 2</td><td>No file argument, an unknown argument, a meta file that is not readable JSON or not a JSON object, a path that is not a file, a file that cannot be opened (locked, no permission, or refused by the machine's real-time protection), and any failure to load or run the check. It is no verdict; the daemon holds on it.</td></tr>
+<tr><td>Import</td><td><code>checkInbound(filePath, meta, options)</code> from <code>security/inbound/index.js</code>. For Guardian's tests only: <code>options</code> swaps the limits, the clock, the platform and the antivirus runner. The daemon calls the CLI as a child process.</td></tr>
+</tbody></table></div>
+
+<h3 id="ib-flow">The walk</h3>
+<figure>
+<div class="frame">
+<svg class="dg" viewBox="0 0 1100 360" role="img" aria-label="The inbound check: the file is read and hashed, walked through seven steps per node with archive entries and embedded files re-entering the walk, scanned once by the antivirus, and the worst reason gives the verdict.">
+<defs><marker id="ib-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0 0 L10 5 L0 10 z"/></marker></defs>
+<text class="col-h" x="20" y="24">ONE FILE, ONE VERDICT</text>
+<rect class="bx-soft" x="20" y="60" width="190" height="150" rx="8"/>
+<text class="t1" x="115" y="90" text-anchor="middle">Read</text>
+<text class="t3" x="115" y="116" text-anchor="middle">must be a file</text>
+<text class="t3" x="115" y="134" text-anchor="middle">sha256 of the bytes</text>
+<text class="t3" x="115" y="152" text-anchor="middle">over 200 MB: not read,</text>
+<text class="t3" x="115" y="170" text-anchor="middle">hold limit-input</text>
+<text class="t3" x="115" y="194" text-anchor="middle">index.js</text>
+<path class="ln" d="M210,135 H258" marker-end="url(#ib-ah)"/>
+<rect class="bx-hot" x="260" y="44" width="330" height="222" rx="8"/>
+<text class="t1" x="425" y="72" text-anchor="middle">Walk, per node (PIPELINE)</text>
+<text class="t3" x="425" y="98" text-anchor="middle">type from the bytes (detectType)</text>
+<text class="t3" x="425" y="118" text-anchor="middle">1 archive   2 office   3 pdf</text>
+<text class="t3" x="425" y="138" text-anchor="middle">4 encrypted   5 type   6 executable</text>
+<text class="t3" x="425" y="158" text-anchor="middle">7 injection</text>
+<text class="t2" x="425" y="188" text-anchor="middle">a node is the file, an archive entry,</text>
+<text class="t2" x="425" y="204" text-anchor="middle">or a file embedded in a document</text>
+<text class="t3" x="425" y="232" text-anchor="middle">Budget: 60 s, 1 GB, depth 3, 10,000 entries</text>
+<text class="t3" x="425" y="250" text-anchor="middle">a limit ends the walk; what was found stands</text>
+<path class="ln-dash" d="M520,266 V306 H330 V268" marker-end="url(#ib-ah)"/>
+<text class="t3" x="425" y="326" text-anchor="middle">entries and embedded files re-enter the walk (ctx.child)</text>
+<path class="ln" d="M590,135 H638" marker-end="url(#ib-ah)"/>
+<rect class="bx-warn" x="640" y="60" width="200" height="150" rx="8"/>
+<text class="t1" x="740" y="90" text-anchor="middle">Antivirus</text>
+<text class="t3" x="740" y="116" text-anchor="middle">once, on the file on disk,</text>
+<text class="t3" x="740" y="134" text-anchor="middle">whatever the walk found</text>
+<text class="t3" x="740" y="152" text-anchor="middle">Defender, else AMSI</text>
+<text class="t3" x="740" y="170" text-anchor="middle">AMSI also gets each entry</text>
+<text class="t3" x="740" y="194" text-anchor="middle">checks/antivirus.js</text>
+<path class="ln" d="M840,135 H888" marker-end="url(#ib-ah)"/>
+<rect class="bx-ok" x="890" y="60" width="190" height="150" rx="8"/>
+<text class="t1" x="985" y="90" text-anchor="middle">Verdict</text>
+<text class="t3" x="985" y="116" text-anchor="middle">any block: block, exit 20</text>
+<text class="t3" x="985" y="134" text-anchor="middle">else any hold: hold, exit 10</text>
+<text class="t3" x="985" y="152" text-anchor="middle">else clean, exit 0</text>
+<text class="t3" x="985" y="170" text-anchor="middle">info changes nothing</text>
+<text class="t3" x="985" y="194" text-anchor="middle">Inspection.result()</text>
+</svg>
+</div>
+<figcaption><b>The order matters.</b> The readers (archive, Office, PDF) run first because they refine the type: a zip becomes <code>ooxml-word</code> or <code>jar</code>, a compound file becomes <code>cfb-excel</code> or <code>msi</code>. The type and executable checks then compare names with the refined type, and the injection check runs last because it reads the text the readers found.</figcaption>
+</figure>
+
+<p>The check numbers used in the code and the tests (check 1 type, 2 executables, 3 Office, 4 PDF, 5 archives, 6 encryption, 7 prompt injection, 8 antivirus) are the plan's numbering. <code>CHECK_NAMES</code> lists them in that order; <code>PIPELINE</code> runs them in the order of the figure.</p>
+
+<p>For a message body (<code>meta.source</code> is <code>mail-body</code>) the archive and executable checks are reported <code>skipped</code> on the top-level file and do not count against clean: a body is not an archive and is never executed. A body whose bytes are not text or HTML holds as <code>body-not-text</code>, or blocks when the bytes are a program.</p>
+
+<h3 id="ib-verdict">The verdict rule</h3>
+<p>Each check reports reasons with a severity: <code>block</code>, <code>hold</code> or <code>info</code>. The worst severity over all reasons is the verdict. An <code>info</code> reason explains and changes nothing.</p>
+<div class="tbl dense"><table>
+<thead><tr><th>What happened in a check</th><th>Its state in <code>checks</code></th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td>Ran, no block or hold reason</td><td><code>pass</code></td><td>none</td></tr>
+<tr><td>A hold reason, or bytes that do not follow their format (<code>FormatError</code>, reason <code>&lt;check&gt;-unreadable</code>)</td><td><code>hold</code></td><td>hold</td></tr>
+<tr><td>A block reason</td><td><code>block</code></td><td>block</td></tr>
+<tr><td>The check threw anything else (reason <code>internal-error</code>)</td><td><code>error</code></td><td>hold</td></tr>
+<tr><td>Did not apply (archive and executable on a mail body)</td><td><code>skipped</code></td><td>none</td></tr>
+<tr><td>Should have run and did not (reason <code>check-not-run</code>)</td><td><code>skipped</code></td><td>hold</td></tr>
+<tr><td>A limit was reached (<code>LimitError</code>)</td><td>the state of the check that met it</td><td>the walk stops; hold, or block for a decompression bomb. Checks the stop kept from running are <code>skipped</code> with no second reason: the limit is the reason.</td></tr>
+</tbody></table></div>
+<p>The same reason (same code, path and detail) is recorded once. A reason's detail is cut at 300 characters.</p>
+
+<h3 id="ib-output">The verdict object (contract v1)</h3>
+<div class="tbl dense"><table>
+<thead><tr><th>Field</th><th>Holds</th></tr></thead>
+<tbody>
+<tr><td><code>contract_version</code></td><td><code>1</code> (<code>CONTRACT_VERSION</code>)</td></tr>
+<tr><td><code>verdict</code></td><td><code>clean</code>, <code>hold</code> or <code>block</code></td></tr>
+<tr><td><code>reasons[]</code></td><td><code>code</code>, <code>severity</code>, <code>detail</code>, and <code>path</code> when the reason is not about the top-level file: the inner path of an archive entry, or <code>meta.subject</code>, <code>meta.from</code> or <code>meta.original_name</code> for a hit in the mail's own fields. A file embedded in a document keeps its container's path and is named in the detail.</td></tr>
+<tr><td><code>file</code></td><td><code>sha256</code>, <code>size</code>, <code>ext</code>, <code>detected_type</code>, and <code>inner</code> when the file is an archive: one row per file entry with <code>path</code>, <code>sha256</code> and <code>size</code>. Folders are not listed. The parts of an Office document are not entries.</td></tr>
+<tr><td><code>checks</code></td><td>One state per check: <code>type</code>, <code>executable</code>, <code>office</code>, <code>pdf</code>, <code>archive</code>, <code>encrypted</code>, <code>injection</code>, <code>antivirus</code></td></tr>
+<tr><td><code>antivirus_engine</code></td><td>The engine that scanned, or <code>null</code> when nothing did. Set on a pass, a threat, and an error where the engine is known.</td></tr>
+<tr><td><code>guardian_version</code></td><td><code>GUARDIAN_VERSION</code>, a constant kept equal to <code>package.json</code> by a test. It is not read from <code>package.json</code> because <code>guardian init</code> copies <code>security/</code> into other projects, where that file is the project's own.</td></tr>
+<tr><td><code>ruleset_version</code></td><td><code>inbound-1+</code> and the first 12 hex characters of a SHA-256 over every injection pattern's id, severity, source and flags. A change to the scanner's patterns gives a new value with no one bumping it.</td></tr>
+<tr><td><code>scanned_at</code></td><td>ISO 8601 time of the result</td></tr>
+</tbody></table></div>
+<p>An inner path is the entry's name in its archive. Levels of nesting are joined with <code>!/</code> (<code>security/inbound/paths.js</code>), so <code>plc.zip!/main.L5K</code> is <code>main.L5K</code> inside <code>plc.zip</code> inside the checked file. A <code>/</code> is a folder inside one archive. gzip is a transparent layer: the entries of <code>a.tar.gz</code> are the tar's entries, and a gzip of one file lists that file under its stored name.</p>
+
+<h3 id="ib-checks">The eight checks</h3>
+<div class="tbl"><table>
+<thead><tr><th>Check</th><th>File</th><th>Blocks</th><th>Holds</th><th>Info only</th></tr></thead>
+<tbody>
+<tr><td>1 <code>type</code></td><td><code>checks/type.js</code></td><td>A name that hides a program (<code>type-mismatch-executable</code>); a declared content type that is a program or script (<code>declared-executable</code>); a mail body that is a program</td><td>Bytes of no known format (<code>unreadable-type</code>); a mail body that is not text; a file over the input limit (<code>limit-input</code>)</td><td>Any other mismatch between the name or the declared type and the bytes (<code>type-mismatch</code>)</td></tr>
+<tr><td>2 <code>executable</code></td><td><code>checks/executable.js</code></td><td>Bytes that are a program format (<code>executable</code>); a name, on disk or as sent, with an extension that runs (<code>executable-name</code>)</td><td>A <code>.scr</code> whose bytes are plain text (<code>autocad-script</code>)</td><td></td></tr>
+<tr><td>3 <code>office</code></td><td><code>checks/office.js</code></td><td>A VBA project (<code>office-macro</code>), an Excel 4.0 macro sheet (<code>office-xlm</code>), OpenDocument Basic or script macros, a DDE field, link or formula (<code>office-dde</code>), a template or OLE object fetched from outside the file (<code>office-remote-template</code>, <code>office-remote-object</code>)</td><td>Other links to outside files (<code>office-external-link</code>), ActiveX controls, embedded OLE packages, Equation Editor objects, an RTF object</td><td></td></tr>
+<tr><td>4 <code>pdf</code></td><td><code>checks/pdf.js</code></td><td>JavaScript (<code>pdf-javascript</code>) and a <code>/Launch</code> action (<code>pdf-launch</code>), also inside object streams and under <code>#xx</code>-escaped names</td><td><code>/RichMedia</code>, <code>/SubmitForm</code>, <code>/GoToR</code>, <code>/GoToE</code>, <code>/ImportData</code>, XFA forms (<code>pdf-active-content</code>); a stream that does not decode (<code>pdf-unreadable-stream</code>)</td><td></td></tr>
+<tr><td>5 <code>archive</code></td><td><code>checks/archive.js</code></td><td>An entry name that climbs out of its folder, is absolute, starts with a drive letter, or holds a colon or a NUL (<code>archive-path</code>); a link entry (<code>archive-link</code>); a device or pipe in a tar (<code>archive-special</code>); a bomb (<code>archive-bomb-ratio</code>, <code>archive-bomb-total</code>)</td><td>Formats with no reader: 7z, rar, bzip2, xz, zstd, cab, ISO, VHD, VHDX (<code>archive-unreadable</code>); a damaged entry or an unsupported compression method; a checksum that does not match (<code>archive-crc</code>); a local header named differently from the central directory (<code>archive-name-mismatch</code>); depth and entry limits</td><td></td></tr>
+<tr><td>6 <code>encrypted</code></td><td><code>checks/encrypted.js</code></td><td></td><td>Encrypted zip entries (ZipCrypto, strong encryption, WinZip AES), a password-protected Office document, an encrypted PDF (<code>encrypted</code>). No password is ever tried.</td><td></td></tr>
+<tr><td>7 <code>injection</code></td><td><code>checks/injection.js</code></td><td></td><td>A hit of any scanner rule in any text the file carries (<code>prompt-injection</code>); characters used to smuggle text; active content in HTML or SVG (<code>markup-active-content</code>)</td><td>A weak rule that is the only hit in its text (<code>prompt-injection-weak</code>); typographic invisible characters (<code>invisible-characters</code>); PDF text in a font with no Unicode map (<code>pdf-text-unmapped</code>)</td></tr>
+<tr><td>8 <code>antivirus</code></td><td><code>checks/antivirus.js</code>, <code>engines/amsi.ps1</code></td><td>A detection in the file or in an archive entry (<code>antivirus-threat</code>)</td><td>No engine (<code>antivirus-unavailable</code>), the engine's product switched off (<code>antivirus-disabled</code>), a failed scan (<code>antivirus-error</code>), not Windows (<code>check-not-run</code>)</td><td></td></tr>
+</tbody></table></div>
+
+<h4>Type: the bytes decide</h4>
+<p><code>detectType()</code> reads magic numbers and structure; the name is never trusted. The name on disk, the name as sent (<code>meta.original_name</code>, when its extension differs) and the declared content type are compared with the result afterwards. <code>EXPECTED</code> lists what each extension's bytes may be; an extension it does not list is not judged. A file is text when it carries a Unicode byte order mark, or holds no NUL byte and almost no other control characters; UTF-8 is tried first and anything else is read as Windows-1252.</p>
+
+<h4>Executables, and the two meanings of .scr</h4>
+<p>A program blocks at the top level and inside any archive or document, by its bytes (PE, DOS, ELF, Mach-O, MSI, LNK, a Java class or archive, an Android or Windows app package, WebAssembly, compiled help, a <code>#!</code> script) or by its name (<code>EXECUTABLE_EXTENSIONS</code>: a <code>.ps1</code> or <code>.js</code> is text and still runs on a double-click).</p>
+<p><code>.scr</code> is a Windows screensaver, which is a program, and also an AutoCAD script, which is plain text. The bytes decide (Lex, 2026-11-12). A <code>.scr</code> that is a program blocks like any other. One whose bytes are type <code>text</code> holds as <code>autocad-script</code>: Windows cannot run it, but AutoCAD runs its commands when someone loads it, so it is never clean. A <code>.scr</code> that is HTML, XML, an archive, unknown bytes or empty still blocks as <code>executable-name</code>.</p>
+
+<h4>Office and PDF: embedded files are judged as files</h4>
+<p>The Office check covers Office Open XML (the archive check has already read the parts), OpenDocument, legacy compound files (<code>.doc</code>, <code>.xls</code>, <code>.ppt</code>, OLE objects, MSI) and RTF. Every file embedded in a document (an Office embedding, an OLE package's payload, a compound file under any part name, a PDF's embedded files) goes back through the whole walk as a node of its own, so a program inside an OLE package blocks. Encrypted documents are recorded on the node and held by check 6.</p>
+<p>The PDF reader finds every object by scanning for <code>N G obj</code> and does not trust the cross-reference table, so an object that an incremental update or a damaged table would hide is still read. An encrypted PDF holds: its strings and streams cannot be read, though its names still are.</p>
+
+<h4>Archives</h4>
+<p>zip (zip64 included), tar (ustar, pax, GNU long names) and gzip are read. The zip's central directory is the list judged, because it is the list an extractor uses. Every entry is read in memory and judged like a file of its own. A zip that is an Office or OpenDocument file is read here too, so the path, bomb and damage rules apply to its parts; the parts then go to the Office check and are not listed as entries.</p>
+
+<h4>Prompt injection: one rule list</h4>
+<p>Every text a file carries goes through <code>scan()</code> from <code>security/01-injection-guard.js</code>, the rule set the hooks use (<a href="ch-runtime.html#ch-runtime">chapter 03</a>). There is no second pattern list. Text longer than the scanner's cap of one million characters is read in windows that overlap by 2,048 characters. Text is pulled from:</p>
+<div class="tbl dense"><table>
+<thead><tr><th>Source</th><th>Text read</th></tr></thead>
+<tbody>
+<tr><td>Plain text, STEP, IGES, ASCII STL</td><td>The whole file</td></tr>
+<tr><td>Binary STL</td><td>The printable runs of its 80-byte header</td></tr>
+<tr><td>XML</td><td>Text nodes, CDATA, comments, attribute values. Tag names are not text.</td></tr>
+<tr><td>HTML and SVG</td><td>Visible text; hidden text (comments, <code>display:none</code>, zero size, text the colour of its background and the like); <code>alt</code>, <code>title</code>, <code>aria-label</code></td></tr>
+<tr><td>Office documents</td><td>Every XML part; PNG and JPEG parts' metadata; the printable runs of legacy streams; RTF with its control words taken out</td></tr>
+<tr><td>PDF</td><td>Page and form text through the font's ToUnicode map; every string in every object dictionary; XMP</td></tr>
+<tr><td>PNG and JPEG</td><td>Text chunks, comments, EXIF, IPTC, XMP. Pixels are never decoded.</td></tr>
+<tr><td>The mail</td><td><code>subject</code>, <code>from</code> and <code>original_name</code>, once, with the top-level file</td></tr>
+</tbody></table></div>
+<p>Two things are mapped in this check only, on the one rule list (Lex, 2026-11-12).</p>
+<p><b>Weak rules.</b> Three rules match ordinary engineering prose as often as an attack (<code>WEAK_RULES</code>). One of them as the only rule that hits in a text is the info reason <code>prompt-injection-weak</code> and does not hold. Hits are counted by rule id, per text: a second, different rule in the same text makes both hold, and every other rule holds alone. A rule is added to the set only with evidence from ordinary documents.</p>
+<div class="tbl dense"><table>
+<thead><tr><th>Rule</th><th>Why it is weak alone</th></tr></thead>
+<tbody>
+<tr><td><code>GUARD-INJ-011</code></td><td>"simulate a ..." is how engineers write about test runs (simulate a jam, simulate the load)</td></tr>
+<tr><td><code>GUARD-INJ-015</code></td><td><code>&lt;user&gt;</code> and <code>&lt;system&gt;</code> are placeholders in manuals, command syntax and configuration notes</td></tr>
+<tr><td><code>GUARD-INJ-028</code></td><td>A file glob such as <code>src/*.py</code> followed later by <code>*/</code> reads as a comment holding a control word</td></tr>
+</tbody></table></div>
+<p><b>Invisible characters.</b> <code>GUARD-INJ-UNICODE</code> is mapped by character (<code>classifyInvisible()</code>). Characters used to smuggle text hold: Unicode tag characters, bidi overrides and isolates, the deprecated format characters U+206A to U+206F, a run of two or more variation selectors, and a run of zero-width characters that is eight or longer, or two or longer against a word. Typographic ones on their own are the info reason <code>invisible-characters</code>: soft hyphens, narrow spaces, a lone zero-width joiner or non-joiner, direction marks, a byte order mark. Mail padding and emoji use them.</p>
+
+<h3 id="ib-limits">Limits</h3>
+<p>One <code>Budget</code> per checked file (<code>security/inbound/limits.js</code>). Every reader asks it before work that grows with the input, so a hostile file costs at most this. Decompression goes through <code>inflateLimited()</code>, which gives zlib a <code>maxOutputLength</code>, so a bomb is stopped before it reaches its full size.</p>
+<div class="tbl dense"><table>
+<thead><tr><th>Limit</th><th>Value</th><th>When reached</th><th>Source</th></tr></thead>
+<tbody>
+<tr><td>Time per file</td><td>60 s</td><td>hold <code>limit-time</code>. The antivirus scan gets what is left of it.</td><td>contract v1</td></tr>
+<tr><td>Input size</td><td>200 MB</td><td>hold <code>limit-input</code>. The contents are not read; the file is hashed in a stream, its type is read from the first 64 KB, and the antivirus still scans it.</td><td>contract v1</td></tr>
+<tr><td>Uncompressed total across the file</td><td>1 GB</td><td>block <code>archive-bomb-total</code></td><td>contract v1</td></tr>
+<tr><td>Depth of archives and embedded files</td><td>3</td><td>hold <code>limit-depth</code>. The child is not read and the parent holds.</td><td>contract v1</td></tr>
+<tr><td>Archive entries</td><td>10,000</td><td>hold <code>limit-entries</code></td><td>Guardian's own</td></tr>
+<tr><td>Expansion of one entry</td><td>100 times, once the entry is 1 MiB or more uncompressed</td><td>block <code>archive-bomb-ratio</code>. Below 1 MiB a ratio says nothing: 2 KB of spaces stores in 20 bytes.</td><td>Guardian's own</td></tr>
+</tbody></table></div>
+<p>DevNeural's daemon keeps its own wall clock at 65 s, so Guardian's 60 s limit fires first.</p>
+
+<h3 id="ib-antivirus">The antivirus check</h3>
+<p>The file as it sits on disk is scanned once, after the walk, by whichever antivirus engine protects the machine. Guardian changes no antivirus setting, adds no exclusion, fetches nothing and removes nothing. There is no EICAR self-test. The engine is named in <code>antivirus_engine</code> and in each reason.</p>
+<div class="tbl"><table>
+<thead><tr><th>Engine</th><th>Used when</th><th>How</th><th>Reading the answer</th></tr></thead>
+<tbody>
+<tr><td>1. Windows Defender</td><td>The <code>WinDefend</code> service is running (<code>sc.exe query</code>, read by the state number, which does not change with the display language)</td><td><code>MpCmdRun.exe -Scan -ScanType 3 -File &lt;path&gt; -DisableRemediation</code>. Defender unpacks archives itself and gets the file only.</td><td>Exit 0 is clean. Exit 2 with no failure reported is a threat. Exit 2 with "Failed with hr" holds, as does any other exit code. It is gated on its exit code only; Security Center is not asked (Lex's ruling).</td></tr>
+<tr><td>2. The registered AMSI provider</td><td>Defender's service is not running. A third-party antivirus that replaces Defender registers an Antimalware Scan Interface provider.</td><td>A Windows PowerShell 5.1 child runs the script file <code>security/inbound/engines/amsi.ps1</code>, which calls <code>AmsiInitialize</code>, <code>AmsiOpenSession</code>, <code>AmsiScanBuffer</code>, <code>AmsiCloseSession</code> and <code>AmsiUninitialize</code>. The script decides nothing: it prints one line of JSON, and <code>antivirus.js</code> reads the numbers.</td><td><code>AMSI_RESULT_DETECTED</code> (32768 or more) blocks. Clean is 0 or 1 only. A blocked-by-administrator result and every other value hold.</td></tr>
+<tr><td>Neither</td><td>No Defender service and no provider, or PowerShell not found</td><td></td><td>hold <code>antivirus-unavailable</code>. Off Windows the check does not run, which holds as <code>check-not-run</code>.</td></tr>
+</tbody></table></div>
+
+<h4>Why the AMSI engine is a script file</h4>
+<p>The child is started as <code>powershell.exe -NoProfile -NonInteractive -NoLogo -ExecutionPolicy Bypass -File amsi.ps1</code>, hidden. It is never started with <code>-EncodedCommand</code> or with <code>-Command</code> and generated code: a command line with encoded script text in it is what an antivirus's behaviour shield flags, and the first build's <code>-EncodedCommand</code> child was flagged by one on 2026-11-12. A plain script file is something an antivirus can read. The command line is the same for every file and holds no script text.</p>
+
+<h4>Why the file's path and name travel in environment variables</h4>
+<p>The file's path and name reach the child in <code>GUARDIAN_AMSI_FILE</code> and <code>GUARDIAN_AMSI_NAME</code>, never as arguments. A name is untrusted, and PowerShell would bind a name that starts with a dash as a parameter of the script. The chunk size and overlap travel the same way (<code>GUARDIAN_AMSI_CHUNK</code>, 16 MiB; <code>GUARDIAN_AMSI_OVERLAP</code>, 64 KiB). A file larger than one buffer goes through in chunks, each starting with the last 64 KiB of the one before, so nothing is cut in two unseen.</p>
+
+<h4>Security Center state and antivirus-disabled</h4>
+<p>A provider whose product is switched off answers "clean" to everything. So for the AMSI engine the product behind the provider must be listed as enabled by Windows Security Center (<code>root/SecurityCenter2</code>, <code>AntiVirusProduct</code>, <code>productState</code> bit <code>0x1000</code>). A provider DLL is matched to its product by a shared vendor folder (drive, <code>Program Files</code>, vendor), and Defender's <code>MpOav.dll</code> by the <code>windowsdefender:</code> product path. When the product is off, or Security Center lists no product for the provider, the check holds as <code>antivirus-disabled</code> and the file is not scanned. When Security Center cannot be read, it holds as <code>antivirus-error</code>.</p>
+
+<h4>Archive entries go to AMSI one by one</h4>
+<p>AMSI sees only the bytes it is handed and does not unpack an archive. So every <code>file.inner</code> entry goes to the child and is scanned as a buffer of its own, under its inner path, in the same AMSI session. A detection in an entry blocks with that entry's path; a failed scan of an entry holds with it. The child must report as many entries as were sent, or the check holds.</p>
+<div class="limit"><b>Limits of this design</b>
+<ul>
+<li>The entries are kept in memory from the walk until the antivirus check: the buffers the walk already read, at most the 1 GB uncompressed limit in all. They are sent to the child as one buffer on standard input (<code>encodeEntries()</code>: for each entry the length of its path, the path in UTF-8, the length of its data, the data), so the peak is about twice the uncompressed size while that buffer is built. With Defender they are kept and not sent.</li>
+<li>Only <code>file.inner</code> entries are handed over. Parts inside a document (the members of a <code>.docx</code>, a file embedded in a PDF) are not sent one by one; the engine sees them only as part of the file on disk.</li>
+<li>The antivirus runner's signature is <code>(path, timeoutMs, name, entries) =&gt; { engine, status, detail, findings? }</code>, with <code>status</code> one of <code>clean</code>, <code>threat</code>, <code>unavailable</code>, <code>disabled</code>, <code>error</code>. Tests pass their own runner in <code>options.antivirus</code>.</li>
+<li>Whether the engine consults its vendor's cloud is that engine's own setting, outside Guardian.</li>
+</ul></div>
+<p>The daemon starts the CLI with a minimal environment, so programs are found from <code>%ProgramFiles%</code> and <code>%SystemRoot%</code> when set and from <code>C:\Program Files</code> and <code>C:\Windows</code> otherwise, and the AMSI child is given a temp folder to compile its interop type in.</p>
+<div class="note"><b>Why the check is named antivirus</b><p>The plan called check 8 <code>defender</code>. A machine protected by a third-party antivirus has Defender's service stopped, and every file would have held there. The check was renamed <code>antivirus</code> and given the AMSI engine at the same <code>contract_version</code>. <code>antivirus_engine</code> reads "Windows Defender (MpCmdRun)" or "AMSI provider" followed by the provider's DLL and the product's name.</p></div>
+
+<h3 id="ib-cad">CAD files</h3>
+<p>The CAD files a customer sends (STL, STEP, IGES, DWG, DXF) come out clean when they are what they claim (Lex's ruling). STEP, IGES and STL have no magic number worth the name, so <code>security/inbound/readers/cad.js</code> knows each by its structure.</p>
+<div class="tbl dense"><table>
+<thead><tr><th>Format</th><th>Known by</th><th>Read for text</th></tr></thead>
+<tbody>
+<tr><td>STEP (<code>step</code>)</td><td>Starts with <code>ISO-10303-21;</code>, has a <code>HEADER;</code> and an <code>ENDSEC;</code>, ends with <code>END-ISO-10303-21;</code></td><td>Whole file</td></tr>
+<tr><td>IGES (<code>iges</code>)</td><td>Every line is 80 columns; column 73 runs through the sections S, G, D, P, T in that order; columns 74 to 80 are a sequence number; one T line ends the file</td><td>Whole file</td></tr>
+<tr><td>ASCII STL (<code>stl-ascii</code>)</td><td>Starts with <code>solid</code>, continues with <code>facet normal</code> or <code>endsolid</code>, and its last line starts with <code>endsolid</code></td><td>Whole file</td></tr>
+<tr><td>Binary STL (<code>stl-binary</code>)</td><td>An 80-byte header, a triangle count, and exactly that many 50-byte triangles of twelve finite floats</td><td>The header</td></tr>
+<tr><td>DWG (<code>dwg</code>)</td><td>The version tag <code>AC1</code> and three digits at the start</td><td>Not read</td></tr>
+<tr><td>DXF</td><td>ASCII DXF is plain text (<code>text</code>); binary DXF by its <code>AutoCAD Binary DXF</code> tag (<code>dxf-binary</code>)</td><td>ASCII: whole file. Binary: not read.</td></tr>
+</tbody></table></div>
+<p>A <code>.stl</code>, <code>.step</code> or <code>.igs</code> that is plain text and not built as the format says is judged as the text it is: clean, with a <code>type-mismatch</code> info, and read whole. A binary <code>.stl</code> whose size does not match its triangle count, or that holds a number that is not finite, is <code>unknown</code> and holds as <code>unreadable-type</code>.</p>
+
+<h3 id="ib-blind">What the check does not see</h3>
+<div class="limit"><b>Known limits</b>
+<ul>
+<li><b>Formats recognised and not read inside.</b> DWG, binary DXF, audio and video files, and images other than PNG and JPEG are known by their bytes and are clean when the name agrees. Their content is not read for text. The antivirus still scans them.</li>
+<li><b>Pixels.</b> No image is decoded and nothing is read by OCR. Text drawn into a picture, a scanned PDF page included, is not seen.</li>
+<li><b>PDF text with no Unicode map.</b> Text in a composite font with no ToUnicode map is glyph numbers. It is counted and reported as <code>pdf-text-unmapped</code> (info), never guessed.</li>
+<li><b>A reworded instruction.</b> Detection is pattern-based, as in the runtime guard: an instruction that matches no rule passes. A weak rule alone does not hold.</li>
+<li><b>Archive formats with no reader</b> (7z, rar and the rest) hold; they are never opened.</li>
+<li><b>Off Windows</b> every file holds, because the antivirus check cannot run.</li>
+<li><b>What the file does when opened.</b> Nothing is run. A document with no macro, script, link or embedded object that still exploits its reader is caught only if the antivirus knows it.</li>
+</ul></div>
+
+<h3 id="ib-tests">What the tests verify</h3>
+<p><code>tests/inbound.test.js</code> (345 tests, the seventh suite of <code>npm test</code>; <code>npm run test:inbound</code> runs it alone). Every check has a pass case and a fail case. Files are written to an OS temp folder only.</p>
+<div class="tbl dense"><table>
+<thead><tr><th>Group</th><th>Covers</th></tr></thead>
+<tbody>
+<tr><td>Contract v1; verdict rules</td><td>The verdict object's fields, the version constants, "nothing unjudged reads as clean"</td></tr>
+<tr><td>Check 1 to 6</td><td>Type from the bytes, CAD structure, executables and <code>.scr</code>, archives (paths, links, bombs, nesting, damage), Office, PDF, encryption</td></tr>
+<tr><td>Check 7</td><td>Text and meta, the weak rules, CAD files, hidden Unicode, XML, HTML and SVG, Office, PDF, images and archives</td></tr>
+<tr><td>Check 8</td><td>Which engine scans, the MpCmdRun runner and the AMSI runner against injected <code>spawn</code> results, entries sent and counted</td></tr>
+<tr><td>Fixtures from real writers; limits; the CLI</td><td>Nine committed files, input size, exit codes and <code>--json</code> through <code>bin/guardian.js</code></td></tr>
+</tbody></table></div>
+<p><b>Fixtures.</b> Most are built in memory, byte by byte, by <code>tests/inbound-fixtures.js</code>. Nine files in <code>tests/fixtures/inbound/</code> come from real writers, made by <code>make_fixtures.py</code>: <code>clean.xlsx</code> (openpyxl), <code>clean.png</code> and <code>clean.jpg</code> (Pillow), <code>clean.pdf</code> (PyMuPDF, with object streams), <code>clean.dxf</code> (ezdxf), and <code>clean.step</code>, <code>clean.igs</code>, <code>clean-ascii.stl</code>, <code>clean-binary.stl</code> (OpenCASCADE). The repo is public, so every committed fixture is Guardian-made and holds no person's, employer's or machine's name: the script sets every author field and fails if a file holds the login name, the machine name or a listed private word, and the suite makes the same check on the committed files. No customer or employer file is ever committed.</p>
+<p><b>Why there is no DWG fixture.</b> AutoCAD 2024 writes the login name into every DWG it saves (the "last saved by" drawing property, in every format back to R14) and gives no way to set it. A DWG is checksummed, so the name cannot be patched out afterwards. No ODA File Converter is installed and none is to be (Lex's ruling). The suite judges a DWG built in memory instead (an AC1032 header plus padding), and real drawings are covered by the opt-in run below.</p>
+<p><b>Opt-in runs</b>, off by default:</p>
+<div class="tbl dense"><table>
+<thead><tr><th>Variable</th><th>Does</th><th>Last result</th></tr></thead>
+<tbody>
+<tr><td><code>GUARDIAN_INBOUND_REAL_SAMPLES=&lt;path&gt;[;&lt;path&gt;...]</code></td><td>Judges real files or folders outside the repo; each must come out clean. Nothing from them is copied or committed.</td><td>2026-11-12, at <code>b248fec</code>: 42 files (PLC exports and four drawing-deliverable folders): 4 DWG, 8 STEP, 6 PDF, 5 XML, 12 text, 3 zip, 2 Excel, 2 PNG. Every file clean, with no reason of any kind recorded. Suite 388 passed, 0 failed.</td></tr>
+<tr><td><code>GUARDIAN_INBOUND_REAL_ANTIVIRUS=1</code></td><td>Runs the machine's antivirus for real on a clean file and on the EICAR test string, in a file and in an archive entry. It raises real detections on purpose.</td><td>2026-11-12, at <code>4f5ebb2</code>: 294 of 294. The EICAR string in an archive entry was flagged under its inner path (AMSI result 32768). Real-time protection refusing the EICAR file counts as a block.</td></tr>
+</tbody></table></div>
+
+<h3 id="ib-bugs">Known bugs</h3>
+<div class="limit"><b>State on 2026-11-12</b><p><b>BUG-086</b> (SMOKE-TESTING): the check is built and its suite passes. It stays in smoke test until DevNeural's daemon has run it on real mail.</p></div>
+
+<h3 id="ib-deps">Who depends on it</h3>
+<ul>
+<li><b>DevNeural's mailbox ingest.</b> The mail daemon runs the CLI as a child process on every body, attachment and archive entry before Lex reads anything (DevNeural <code>docs/spec/LEX-MAILBOX.md</code>, sections 5 and 6). It reads the exit code and the verdict object, requires <code>file.sha256</code> to equal the hash it recorded, and unpacks an archive only against <code>file.inner</code>. Anything that is not a clean verdict at a contract major it knows is a hold. <a href="ch-connections.html#cn-table">Chapter 07</a> has the row.</li>
+<li><b>The contract.</b> <code>contract_version</code> is an integer major. A change that keeps every field and meaning stays at 1; new reason codes and a new <code>ruleset_version</code> need no daemon change. A change to a field's meaning, an exit code or the verdict rule is a new major, shipped behind a flag until the daemon accepts it. DevNeural's Lex is told of every change to the check's output in the same piece of work.</li>
+<li><b>The scanner.</b> The injection check imports <code>scan</code> and <code>INJECTION_PATTERNS</code> from <code>security/01-injection-guard.js</code>. A pattern change there changes verdicts here and gives a new <code>ruleset_version</code>.</li>
+<li><b>Installed projects.</b> <code>guardian init</code> and <code>guardian update</code> copy <code>security/</code> whole, so <code>security/inbound/</code> reaches every project that installs Guardian. The CLI loads the check from Guardian's own folder, not from the project's copy.</li>
+</ul>
+
+</section>
+
+<nav class="pager"><a href="ch-connections.html">&larr; 07 Systems that touch Guardian</a><span></span></nav>
+</main>
+<script>
+(function(){
+  var KEY='guardian-manual-theme';
+  var persistOff=function(){document.documentElement.setAttribute('data-theme-persist','off');};
+  try{var t=localStorage.getItem(KEY);if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){persistOff();}
+  document.addEventListener('click',function(e){
+    var b=e.target.closest('[data-theme-toggle]');if(!b)return;
+    var root=document.documentElement;
+    var dark=root.getAttribute('data-theme')?root.getAttribute('data-theme')==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var next=dark?'light':'dark';root.setAttribute('data-theme',next);
+    try{localStorage.setItem(KEY,next);}catch(e2){persistOff();}
+  });
+  if(!('IntersectionObserver' in window))return;
+  var links={};document.querySelectorAll('.rail a[data-ch]').forEach(function(a){links[a.getAttribute('data-ch')]=a;});
+  var secs=document.querySelectorAll('section.chapter');
+  if(secs.length<2)return;
+  var io=new IntersectionObserver(function(es){es.forEach(function(en){
+    if(!en.isIntersecting)return;var id=en.target.id;
+    Object.keys(links).forEach(function(k){links[k].classList.toggle('on',k===id);links[k].parentNode.classList.toggle('open',k===id);});
+  });},{rootMargin:'-20% 0px -70% 0px'});
+  secs.forEach(function(s){io.observe(s);});
+})();
+</script>
+</body>
+</html>
