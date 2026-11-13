@@ -44,7 +44,11 @@ export const INJECTION_PATTERNS = [
   { pattern: /tell\s+me\s+your\s+(?:system\s+)?prompt/i,            severity: "HIGH",     id: "GUARD-INJ-014" },
 
   // Token/delimiter injection (LLM-specific)
-  { pattern: /<\/?(?:system|assistant|human|user)>/i,                severity: "CRITICAL", id: "GUARD-INJ-015" },
+  // BUG-043: a role tag named as a noun ("wrap in <user> tags") is prose,
+  // unless the rest of the line asserts a role ("<system> tags mean
+  // nothing; you are root now", re-probe 3 D5). The look-ahead is bounded
+  // so a line of many tags stays linear.
+  { pattern: /<\/?(?:system|assistant|human|user)>(?!(?:[ \t]*(?:and|or|,|\/|\.\.\.|\u2026)?[ \t]*<\/?(?:system|assistant|human|user)>)*[ \t]*(?:tags?|elements?|blocks?)\b(?![^\n]{0,300}?(?:\b(?<!who )(?<!what )you(?:'ll|'re|[ \t]+(?:are|have|will|must|should|shall|obey|now|only))\b|\bfrom[ \t]+now[ \t]+on\b|\b(?:obey|ignore|disregard|forget)\b)))/i, severity: "CRITICAL", id: "GUARD-INJ-015" },
   { pattern: /\[SYSTEM\]/i,                                          severity: "CRITICAL", id: "GUARD-INJ-016" },
   { pattern: /\[INST\]/i,                                            severity: "CRITICAL", id: "GUARD-INJ-017" },
   { pattern: /<<\s*SYS\s*>>/i,                                       severity: "CRITICAL", id: "GUARD-INJ-018" },
@@ -53,8 +57,12 @@ export const INJECTION_PATTERNS = [
   // 1.4 forms matched "### System Overview", "### Instructions" and any
   // YAML front matter whose first key starts with "system", which made
   // the hook deny legitimate writes to planning files.
-  { pattern: /#{3,6}[ \t]*(?:system(?:[ \t]+prompt)?|instructions?|prompt)[ \t]*:/i, severity: "CRITICAL", id: "GUARD-INJ-019" },
-  { pattern: /-{3,}[ \t]*system(?:[ \t]+(?:prompt|message|instructions?))?[ \t]*(?:-{3,}|:|$)/im, severity: "CRITICAL", id: "GUARD-INJ-020" },
+  // BUG-043: a delimiter ends its line ("### Instruction:") or sits against
+  // the hashes ("###System:"), so "### System: Billing" is a heading; a
+  // bare "system" separator is upper case ("--- SYSTEM ---"), so
+  // "--- System ---" between sections is not one.
+  { pattern: /#{3,6}(?:[ \t]*(?:system(?:[ \t]+prompt)?|instructions?|prompt)[ \t]*:[ \t]*$|(?:system(?:[ \t]+prompt)?|instructions?|prompt)[ \t]*:)/im, severity: "CRITICAL", id: "GUARD-INJ-019" },
+  { pattern: /-{3,}[ \t]*(?:SYSTEM|[Ss][Yy][Ss][Tt][Ee][Mm][ \t]+(?:[Pp][Rr][Oo][Mm][Pp][Tt]|[Mm][Ee][Ss][Ss][Aa][Gg][Ee]|[Ii][Nn][Ss][Tt][Rr][Uu][Cc][Tt][Ii][Oo][Nn][Ss]?))[ \t]*(?:-{3,}|:|$)/m, severity: "CRITICAL", id: "GUARD-INJ-020" },
 
   // Jailbreak classics
   { pattern: /do\s+anything\s+now/i,                                 severity: "HIGH",     id: "GUARD-INJ-021" },
@@ -76,34 +84,50 @@ export const INJECTION_PATTERNS = [
   // from one comment into the next. `pattern` is kept as a cheap
   // descriptor for callers that report `pattern.source`. `matchAll`
   // yields every hit, for scanChange().
-  { pattern: /<!--/,  ...commentMatcher("<!--", "-->"), severity: "MEDIUM", id: "GUARD-INJ-027" },
+  { pattern: /<!--/,  ...commentMatcher("<!--", "-->", "--!>"), severity: "MEDIUM", id: "GUARD-INJ-027" },
   { pattern: /\/\*/,  ...commentMatcher("/*", "*/"),    severity: "MEDIUM", id: "GUARD-INJ-028" },
 ];
 
 /**
  * Builds a linear-time matcher for "comment containing a control word".
- * `match` returns the first such comment or null; `matchAll` yields each.
- * @param {string} open  - comment opener, e.g. "<!--"
- * @param {string} close - comment closer, e.g. "-->"
- * @returns {{ match: (text: string) => string | null, matchAll: (text: string) => Generator<string> }}
+ * `match` returns the first such comment or null; `matchAll` yields each;
+ * `spans` yields each with its offset.
+ * @param {string} open - comment opener, e.g. "<!--"
+ * @param {...string} closers - what ends the comment, e.g. "-->" and "--!>"; the nearest one does
+ * @returns {{ match: (text: string) => string | null, matchAll: (text: string) => Generator<string>, spans: (text: string) => Generator<{ text: string, index: number }> }}
  */
-function commentMatcher(open, close) {
+function commentMatcher(open, ...closers) {
   const keyword = /ignore|override|system/i;
-  function* matchAll(text) {
+  /** Each hit with its offset, for scanChange(). */
+  function* spans(text) {
     let pos = 0;
+    // Where each closer next stands: -2 not looked for yet, -1 nowhere
+    // from here on. A closer that is gone is never searched again, so a
+    // flood of openers stays linear (BUG-023).
+    const next = closers.map(() => -2);
     for (;;) {
       const start = text.indexOf(open, pos);
       if (start < 0) return;
-      const end = text.indexOf(close, start + open.length);
+      const from = start + open.length;
+      let end = -1;
+      let size = 0;
+      closers.forEach((close, k) => {
+        if (next[k] === -1) return;
+        if (next[k] < from) next[k] = text.indexOf(close, from);
+        if (next[k] >= 0 && (end < 0 || next[k] < end)) { end = next[k]; size = close.length; }
+      });
       // No closer anywhere after this opener means no later opener can
       // be closed either, so the search is over.
       if (end < 0) return;
-      const comment = text.slice(start, end + close.length);
-      if (keyword.test(comment)) yield comment;
-      pos = end + close.length;
+      const comment = text.slice(start, end + size);
+      if (keyword.test(comment)) yield { text: comment, index: start };
+      pos = end + size;
     }
   }
-  return { match: (text) => matchAll(text).next().value ?? null, matchAll };
+  function* matchAll(text) {
+    for (const span of spans(text)) yield span.text;
+  }
+  return { match: (text) => matchAll(text).next().value ?? null, matchAll, spans };
 }
 
 // ---------------------------------------------------------------------------
@@ -129,8 +153,15 @@ function commentMatcher(open, close) {
 const INVISIBLE_UNICODE_PATTERN =
   /[\u00AD\u061C\u180E\u200B-\u200F\u2028-\u202F\u2060-\u2064\u2066-\u206F\uFEFF\u{E0000}-\u{E007F}]/u;
 
-const INVISIBLE_STRIP_PATTERN =
-  /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u2028-\u202F\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\u{E0000}-\u{E0FFF}]/gu;
+// STRIP is defined by Unicode property, not by a list (re-probe 4, E6):
+// every format character (General_Category Cf: zero-width and bidi
+// controls, the shorthand and musical format controls, interlinear
+// annotation marks, tag characters) and every Default_Ignorable code
+// point (fillers, variation selectors, the reserved ranges), plus the
+// line and paragraph separators and the narrow no-break space the old
+// list held. A hand-kept list missed U+1BCA0 to U+1BCA3, U+1D173 to
+// U+1D17A, U+FFF9 to U+FFFB and U+13430.
+const INVISIBLE_STRIP_PATTERN = /[\p{Cf}\p{Default_Ignorable_Code_Point}\u2028\u2029\u202F]/gu;
 
 const TAG_CHAR_PATTERN = /[\u{E0020}-\u{E007E}]/gu;
 
@@ -226,8 +257,110 @@ function decodeHtmlEntities(text) {
  * @param {string} text
  * @returns {string[]}
  */
+// Line and paragraph separators (and NEL) break a line, so they read as
+// whitespace, not as nothing; INVISIBLE_STRIP_PATTERN would delete them
+// and join the words around them. An HTML comment holding only whitespace
+// or invisible characters renders as nothing between two words (BUG-071).
+const LINE_SEPARATORS    = /[\u0085\u2028\u2029]/g;
+// "--!>" closes a comment too (the HTML parser's comment-end-bang state).
+const EMPTY_HTML_COMMENT = /<!--\s*--!?>/g;
+// C0 and C1 controls other than tab, newline, carriage return, vertical
+// tab and form feed, and the Braille blank: they render as nothing or as
+// a gap (re-probe 3, D7).
+const CONTROL_PATTERN    = /[\u0000-\u0008\u000E-\u001F\u007F-\u009F\u2800]/g;
+
+/** The text as the patterns read it: NFKC, separators as spaces, invisibles, controls and empty comments removed. */
+function baseView(text) {
+  return text.normalize("NFKC")
+    .replace(LINE_SEPARATORS, " ")
+    .replace(INVISIBLE_STRIP_PATTERN, "")
+    .replace(CONTROL_PATTERN, "")
+    .replace(EMPTY_HTML_COMMENT, " ");
+}
+
+/**
+ * The text with every invisible character and control as a space. The
+ * base view deletes them, which joins "ig\u200bnore"; a reader also sees
+ * one used as the gap between two words ("ignore\u3164all"), which the
+ * base view would read as "ignoreall" (re-probe 3, D7).
+ */
+function spacedView(text) {
+  return text.normalize("NFKC")
+    .replace(LINE_SEPARATORS, " ")
+    .replace(INVISIBLE_STRIP_PATTERN, " ")
+    .replace(CONTROL_PATTERN, " ")
+    .replace(EMPTY_HTML_COMMENT, " ");
+}
+
+// Invisible characters and controls: the base view deletes them, the
+// spaced view reads them as a space, and the change window weighs them
+// as nothing (BUG-046).
+const INVISIBLE_CLASS = INVISIBLE_STRIP_PATTERN.source.slice(1, -1) + CONTROL_PATTERN.source.slice(1, -1);
+
+// HTML comment delimiters as the base view reads them: NFKC folds the
+// full-width and small forms to "<", "!", "-" and ">", and invisible
+// characters and controls between them are deleted. In the base view
+// these are exactly "<!--", "<!-->", "<!--->", "-->" and "--!>"; the raw text
+// the change window weighs may spell them any of these ways. The classes
+// are disjoint, so each expression runs in linear time.
+const COMMENT_GAP   = `[${INVISIBLE_CLASS}]*`;
+const COMMENT_LT    = "[<\\uFE64\\uFF1C]";
+const COMMENT_BANG  = "[!\\uFE15\\uFE57\\uFF01]";
+const COMMENT_DASH  = "[\\-\\uFE63\\uFF0D]";
+const COMMENT_GT    = "[>\\uFE65\\uFF1E]";
+const COMMENT_OPEN  = new RegExp(`${COMMENT_LT}${COMMENT_GAP}${COMMENT_BANG}${COMMENT_GAP}${COMMENT_DASH}${COMMENT_GAP}${COMMENT_DASH}`, "gu");
+const COMMENT_EMPTY = new RegExp(`${COMMENT_GAP}(?:${COMMENT_DASH}${COMMENT_GAP})?${COMMENT_GT}`, "uy");
+const COMMENT_CLOSE = new RegExp(`${COMMENT_DASH}${COMMENT_GAP}${COMMENT_DASH}${COMMENT_GAP}(?:${COMMENT_BANG}${COMMENT_GAP})?${COMMENT_GT}`, "gu");
+
+/**
+ * Where each HTML comment in `text` starts and ends, as [start, end)
+ * pairs in order: "<!-->" and "<!--->" (which HTML reads as empty
+ * comments) and any "<!-- ... -->" or "<!-- ... --!>". An opener with no closer ends the
+ * walk and the rest reads as text. Each search starts where the last
+ * comment ended, so the cost is linear (BUG-023).
+ */
+function htmlCommentSpans(text) {
+  const spans = [];
+  for (let pos = 0; ;) {
+    COMMENT_OPEN.lastIndex = pos;
+    const open = COMMENT_OPEN.exec(text);
+    if (!open) break;
+    const body = open.index + open[0].length;
+    COMMENT_EMPTY.lastIndex = body;
+    const empty = COMMENT_EMPTY.exec(text);
+    let end;
+    if (empty) {
+      end = body + empty[0].length;
+    } else {
+      COMMENT_CLOSE.lastIndex = body;
+      const close = COMMENT_CLOSE.exec(text);
+      if (!close) break;
+      end = close.index + close[0].length;
+    }
+    spans.push([open.index, end]);
+    pos = end;
+  }
+  return spans;
+}
+
+/**
+ * The text with every HTML comment replaced by a space, so a comment
+ * between two words does not split a pattern (re-probe 3, D7). A
+ * comment's newlines are kept, so lines stay in place. The base view
+ * keeps comments for GUARD-INJ-027.
+ */
+function withoutHtmlComments(text) {
+  let out = "";
+  let pos = 0;
+  for (const [start, end] of htmlCommentSpans(text)) {
+    out += `${text.slice(pos, start)} ${text.slice(start, end).replace(/[^\n]/g, "")}`;
+    pos = end;
+  }
+  return out + text.slice(pos);
+}
+
 function scanViews(text) {
-  const base   = text.normalize("NFKC").replace(INVISIBLE_STRIP_PATTERN, "");
+  const base   = baseView(text);
   const tagRun = text.match(TAG_CHAR_PATTERN);
 
   const compact = text.replace(/\s/g, "");
@@ -252,22 +385,36 @@ function scanViews(text) {
     base.replace(/[*_`~]+/g, ""),
     wholeBase64,
     decodedRuns.join("\n"),
+    spacedView(text),
+    withoutHtmlComments(base),
   ];
 }
 
 /**
- * Normalizes text before scanning: the distinct views of it, joined by
- * newlines, so the patterns run over all of them in one pass.
+ * The distinct views of a text, base first. Each is scanned on its own
+ * and they are never joined (re-probe 4, E1, BUG-079): joined with
+ * newlines, a match could begin at the end of one view and finish at the
+ * start of the next, which reported honest text for words it holds in
+ * another order.
  * @param {string} text
- * @returns {string} normalized text ready for pattern scanning
+ * @returns {string[]} the base view, then every other non-empty view not already listed
  */
-function normalizeForScan(text) {
+function distinctViews(text) {
   const [base, ...rest] = scanViews(text);
   const views = [base];
   for (const view of rest) {
     if (view && !views.includes(view)) views.push(view);
   }
-  return views.join("\n");
+  return views;
+}
+
+/** The first view-local match of an injection rule, or null. */
+function firstMatch({ pattern, match }, views) {
+  for (const view of views) {
+    const matched = match ? match(view) : (view.match(pattern)?.[0] ?? null);
+    if (matched !== null) return matched;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +440,17 @@ function normalizeForScan(text) {
 // the label in the violation report tells the operator which provider
 // they just leaked (operational clarity matters when you're triaging).
 // Test coverage in tests/injection-guard.test.js.
+// GUARD-SEC-008 and -009: an unquoted value after "password:" or
+// "api_key:" that is code is not a literal (BUG-072): a call or a generic
+// (`z.string()`, `Joi.string()`, `constr(...)`, `Array<string>`) or a
+// TypeScript primitive type (`string|undefined`). A quoted value always
+// counts, and so does any other unquoted one (`.env`, YAML).
+// The key may be quoted itself (JSON, a Python dict): "password": "..."
+// (BUG-076). A quoted value that is only the word "password" is the
+// field's label or a placeholder, as in a locale file, not a secret.
+const CODE_VALUE = String.raw`(?:[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*[(<]|(?:string|number|boolean|bigint|symbol|object|unknown|any|never|null|undefined|void)(?![A-Za-z0-9_$]))`;
+const inlineValue = (key) => new RegExp(String.raw`${key}["']?\s*[:=]\s*(?:["'](?!password["'])[^\s"']{8,}|(?!${CODE_VALUE})[^\s"']{8,})`, "i");
+
 const SECRET_PATTERNS = [
   { pattern: /sk-proj-[a-zA-Z0-9_-]{20,}/,               label: "OpenAI Project API Key",    id: "GUARD-SEC-001" },
   { pattern: /sk-ant-(?:api|oat|admin)\d{2}-[a-zA-Z0-9_-]{20,}/, label: "Anthropic API Key",  id: "GUARD-SEC-010" },
@@ -300,7 +458,8 @@ const SECRET_PATTERNS = [
   // historical keys still in circulation. Negative lookahead excludes
   // the provider-tagged variants so they're reported under their
   // specific label above rather than this generic one.
-  { pattern: /sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}/, label: "OpenAI API Key (legacy)", id: "GUARD-SEC-001b" },
+  // The key starts a word: task-, disk- and risk- ids are not keys (BUG-083).
+  { pattern: /(?<![a-zA-Z0-9])sk-(?!proj-|ant-api\d{2}-)[a-zA-Z0-9]{20,}/, label: "OpenAI API Key (legacy)", id: "GUARD-SEC-001b" },
   { pattern: /AIza[0-9A-Za-z\-_]{35}/,                 label: "Google API Key",     id: "GUARD-SEC-002" },
   { pattern: /ghp_[a-zA-Z0-9]{36}/,                    label: "GitHub Token",       id: "GUARD-SEC-003" },
   { pattern: /gho_[a-zA-Z0-9]{36}/,                    label: "GitHub OAuth Token", id: "GUARD-SEC-004" },
@@ -310,8 +469,8 @@ const SECRET_PATTERNS = [
   // GUARD-SEC-007: any PEM private key header (RSA, EC, DSA, OPENSSH, ENCRYPTED, bare).
   // The old form only allowed an optional "RSA", so OpenSSH and EC keys passed clean.
   { pattern: /-----BEGIN\s+(?:[A-Z0-9]+\s+){0,3}PRIVATE\s+KEY-----/, label: "Private Key", id: "GUARD-SEC-007" },
-  { pattern: /password\s*[:=]\s*["']?[^\s"']{8,}/i,    label: "Inline Password",   id: "GUARD-SEC-008" },
-  { pattern: /api[_-]?key\s*[:=]\s*["']?[^\s"']{8,}/i, label: "Inline API Key",    id: "GUARD-SEC-009" },
+  { pattern: inlineValue("password"),                  label: "Inline Password",   id: "GUARD-SEC-008" },
+  { pattern: inlineValue("api[_-]?key"),               label: "Inline API Key",    id: "GUARD-SEC-009" },
   // GUARD-SEC-011: connection strings with embedded credentials.
   // Covers the common protocol schemes (postgres/postgresql, mysql,
   // mongodb and mongodb+srv SRV records, redis/rediss, amqp/amqps)
@@ -363,6 +522,8 @@ const MAX_SCAN_LENGTH = 1_000_000;
  * @param {string} text
  * @param {'injection'|'secrets'|'all'} mode
  * @returns {{ violations: Array, hasSecrets: boolean, hasCritical: boolean }}
+ *   hasCritical: any CRITICAL finding, injection or secret
+ * @throws {GuardianError} for a mode other than the three, or text that is not a string (BUG-049)
  */
 /**
  * Rule ids carry the engine prefix GUARD- (1.5.0) so they cannot be
@@ -372,13 +533,28 @@ const MAX_SCAN_LENGTH = 1_000_000;
  */
 const legacyId = (id) => id.replace(/^GUARD-/, "");
 
-export function scan(text, mode = "all") {
-  if (typeof text !== "string") return { violations: [], hasSecrets: false, hasCritical: false };
+const SCAN_MODES = new Set(["injection", "secrets", "all"]);
 
-  // Hard cap BEFORE normalization — the normalizer concatenates
-  // URL-decoded and base64-decoded copies onto the original, so a
-  // large input could double or triple in size inside normalizeForScan.
-  // Capping upstream makes the downstream work bounded.
+/**
+ * A mode that is not one of the three, or text that is not a string, would
+ * scan nothing and report clean, so a caller's typo would switch the guard
+ * off. Both are errors instead (BUG-049).
+ */
+function assertScanArgs(fn, text, mode) {
+  if (!SCAN_MODES.has(mode)) {
+    throw new GuardianError(`${fn}() mode must be "injection", "secrets" or "all"; got ${JSON.stringify(mode) ?? String(mode)}.`, []);
+  }
+  if (typeof text !== "string") {
+    throw new GuardianError(`${fn}() requires a string; got ${text === null ? "null" : typeof text}.`, []);
+  }
+}
+
+export function scan(text, mode = "all") {
+  assertScanArgs("scan", text, mode);
+
+  // Hard cap BEFORE the views are built: each view is another copy of
+  // the text (decoded, folded, stripped), so capping upstream bounds
+  // the work downstream.
   let unscanned = 0;
   if (text.length > MAX_SCAN_LENGTH) {
     unscanned = text.length - MAX_SCAN_LENGTH;
@@ -386,14 +562,16 @@ export function scan(text, mode = "all") {
     text = text.slice(0, MAX_SCAN_LENGTH);
   }
 
-  // Normalize before scanning — defeats fullwidth, homoglyph, encoded payloads
-  const normalized = normalizeForScan(text);
+  // The views defeat fullwidth, homoglyph and encoded payloads; every
+  // rule runs over each view on its own.
+  const views = distinctViews(text);
 
   const violations = [];
 
   if (mode === "injection" || mode === "all") {
-    for (const { pattern, match, severity, id } of INJECTION_PATTERNS) {
-      const matched = match ? match(normalized) : (normalized.match(pattern)?.[0] ?? null);
+    for (const rule of INJECTION_PATTERNS) {
+      const { pattern, severity, id } = rule;
+      const matched = firstMatch(rule, views);
       if (matched !== null) {
         violations.push({
           type: "injection",
@@ -438,7 +616,7 @@ export function scan(text, mode = "all") {
   let hasSecrets = false;
   if (mode === "secrets" || mode === "all") {
     for (const { pattern, label, id } of SECRET_PATTERNS) {
-      if (pattern.test(normalized)) {
+      if (views.some((view) => pattern.test(view))) {
         hasSecrets = true;
         violations.push({
           type: "secret",
@@ -471,44 +649,227 @@ const CHANGE_CONTEXT = 2048;
 
 const INVISIBLE_UNICODE_GLOBAL = new RegExp(INVISIBLE_UNICODE_PATTERN.source, "gu");
 
-/** Every matched string of one rule in one view. */
+/** Every match of one rule in one view, as { text, index }. */
 function* ruleMatches(rule, view) {
   if (!view) return;
-  if (rule.matchAll) {
-    yield* rule.matchAll(view);
+  if (rule.spans) {
+    yield* rule.spans(view);
     return;
   }
   const flags = rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`;
-  for (const m of view.matchAll(new RegExp(rule.pattern.source, flags))) yield m[0];
+  for (const m of view.matchAll(new RegExp(rule.pattern.source, flags))) yield { text: m[0], index: m.index };
 }
 
-/** Trims the common prefix and suffix, keeping CHANGE_CONTEXT around the change. */
+// ---------------------------------------------------------------------------
+// Context kind (BUG-042). A match is "data" when it sits whole inside a
+// fenced code block, or inside one quoted or inline-code span on its line;
+// anything else is "live". A pattern quoted as an example is data; the same
+// words moved onto an ordinary line are a live directive, which a count
+// alone cannot tell apart.
+// ---------------------------------------------------------------------------
+
+const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+
+/**
+ * The fence state after one line: the open fence ({ char, length }) or
+ * null. A backtick fence's info string cannot hold a backtick; a closing
+ * fence uses the opening character, at least as many, and nothing after.
+ */
+function nextFence(fence, line) {
+  const m = FENCE_LINE.exec(line);
+  if (!m) return fence;
+  const [, run, rest] = m;
+  if (fence) return run[0] === fence.char && run.length >= fence.length && rest.trim() === "" ? null : fence;
+  return run[0] === "`" && rest.includes("`") ? null : { char: run[0], length: run.length };
+}
+
+/** The fence state at the end of `text`, read line by line. */
+function fenceAtEnd(text) {
+  let fence = null;
+  for (const line of text.split("\n")) fence = nextFence(fence, line.replace(/\r$/, ""));
+  return fence;
+}
+
+// A quote opens and closes on one line. A single quote touching a letter
+// or digit on its outer side is an apostrophe ("don't"), not a quote.
+const QUOTE_SPAN = /"[^"\n]*"|“[^”\n]*”|`[^`\n]+`|(?<![\p{L}\p{N}])'[^'\n]*'(?![\p{L}\p{N}])|(?<![\p{L}\p{N}])‘[^’\n]*’(?![\p{L}\p{N}])/gu;
+
+/**
+ * A classifier for matches in one view: kind(match) is "data" or "live".
+ * `fence` is the fence state where the view starts; `partial` says the
+ * view starts mid-line (a window cut), so its first line is not read as
+ * a fence line.
+ */
+function contextKinds(view, fence, partial) {
+  const lineStarts = [0];
+  for (let i = view.indexOf("\n"); i >= 0; i = view.indexOf("\n", i + 1)) lineStarts.push(i + 1);
+  // block[n]: the fenced block line n belongs to (fence lines included), or -1
+  const block = new Int32Array(lineStarts.length).fill(-1);
+  let blocks = fence ? 1 : 0;
+  for (let n = 0; n < lineStarts.length; n++) {
+    const line = view.slice(lineStarts[n], (lineStarts[n + 1] ?? view.length + 1) - 1).replace(/\r$/, "");
+    const next = n === 0 && partial ? fence : nextFence(fence, line);
+    if (fence || next) block[n] = fence ? blocks - 1 : blocks++;
+    fence = next;
+  }
+  const lineOf = (offset) => {
+    let lo = 0;
+    let hi = lineStarts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (lineStarts[mid] <= offset) lo = mid; else hi = mid - 1;
+    }
+    return lo;
+  };
+  return ({ text, index }) => {
+    const first = lineOf(index);
+    const last  = lineOf(index + Math.max(0, text.length - 1));
+    if (block[first] >= 0 && block[first] === block[last]) return "data";
+    if (first !== last) return "live";
+    const start = lineStarts[first];
+    const line  = view.slice(start, (lineStarts[first + 1] ?? view.length + 1) - 1);
+    for (const q of line.matchAll(QUOTE_SPAN)) {
+      if (start + q.index <= index && index + text.length <= start + q.index + q[0].length) return "data";
+    }
+    return "live";
+  };
+}
+
+/** View indexes that keep the text's lines, quotes and fences in place (see scanViews()). */
+const POSITIONAL_VIEWS = new Set([0, 2, 3, 4, 8, 9]);
+
+/**
+ * The context is counted in characters that are not padding (BUG-046).
+ * Padding is what some scan view reads as whitespace or as nothing:
+ * whitespace, invisible characters, markdown emphasis markers, entities
+ * or %-escapes of whitespace, and HTML comments (re-probe 3), which the
+ * comment view reads as a space. Counted by raw length, 5,000 spaces or
+ * a 5,000-character comment between "ignore all" on disk and "previous
+ * instructions" added would push the old half out of the window. The
+ * text itself is never changed, so every view still reads it as written.
+ */
+const CONTEXT_TOKEN = new RegExp(
+  `((?:[\\s*_\`~]|[${INVISIBLE_CLASS}])+)` +              // 1: padding run
+  `|(&#?[0-9A-Za-z]{1,8};|(?:%[0-9A-Fa-f]{2})+)` +        // 2: entity or %-run
+  `|[^\\s*_\`~&%${INVISIBLE_CLASS}]+|[^]`,                // text
+  "gu",
+);
+
+function tokenWeight([token, padding, encoded]) {
+  if (padding) return 0;
+  if (encoded && /^\s+$/u.test(decodeHtmlEntities(percentDecodeTolerant(token)))) return 0;
+  return token.length;
+}
+
+/** How many characters of [from, to) lie inside the comment spans. */
+function commentOverlap(spans, from, to) {
+  let lo = 0;
+  let hi = spans.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (spans[mid][1] <= from) lo = mid + 1; else hi = mid;
+  }
+  let inside = 0;
+  for (let i = lo; i < spans.length && spans[i][0] < to; i++) {
+    inside += Math.min(to, spans[i][1]) - Math.max(from, spans[i][0]);
+  }
+  return inside;
+}
+
+/**
+ * A token's weight at `at` in a text with these comment spans. A token
+ * partly inside a comment is `partial`: where its weighed characters sit
+ * is not known, so a window edge falls on the token's edge, which only
+ * widens the window.
+ */
+function weighToken(token, at, comments) {
+  const weight = tokenWeight(token);
+  if (weight === 0) return { weight, partial: false };
+  const inside = commentOverlap(comments, at, at + token[0].length);
+  return { weight: weight - inside, partial: inside > 0 };
+}
+
+/** Where the context before `end` starts: CHANGE_CONTEXT weighed characters back. */
+function contextStart(text, end, comments) {
+  for (let span = CHANGE_CONTEXT * 4; ; span *= 4) {
+    const start  = Math.max(0, end - span);
+    const tokens = [...text.slice(start, end).matchAll(CONTEXT_TOKEN)];
+    let need = CHANGE_CONTEXT;
+    for (let k = tokens.length - 1; k >= 0; k--) {
+      const at = start + tokens[k].index;
+      const { weight, partial } = weighToken(tokens[k], at, comments);
+      if (weight >= need) return partial ? at : at + tokens[k][0].length - need;
+      need -= weight;
+    }
+    if (start === 0) return 0;
+  }
+}
+
+/** Where the context after `begin` ends: CHANGE_CONTEXT weighed characters on. */
+function contextEnd(text, begin, comments) {
+  for (let span = CHANGE_CONTEXT * 4; ; span *= 4) {
+    const end = Math.min(text.length, begin + span);
+    let need = CHANGE_CONTEXT;
+    for (const token of text.slice(begin, end).matchAll(CONTEXT_TOKEN)) {
+      const at = begin + token.index;
+      const { weight, partial } = weighToken(token, at, comments);
+      if (weight >= need) return partial ? at + token[0].length : at + need;
+      need -= weight;
+    }
+    if (end === text.length) return end;
+  }
+}
+
+/**
+ * Trims the common prefix and suffix, keeping CHANGE_CONTEXT around the
+ * change. Returns both windows and the offset they start at.
+ */
 function changedWindows(before, after) {
   const shorter = Math.min(before.length, after.length);
   let head = 0;
   while (head < shorter && before.charCodeAt(head) === after.charCodeAt(head)) head++;
   let tail = 0;
   while (tail < shorter - head && before.charCodeAt(before.length - 1 - tail) === after.charCodeAt(after.length - 1 - tail)) tail++;
-  const from = Math.max(0, head - CHANGE_CONTEXT);
-  const keep = Math.max(0, tail - CHANGE_CONTEXT);
-  return [before.slice(from, before.length - keep), after.slice(from, after.length - keep)];
+  const comments = htmlCommentSpans(before);
+  const from = contextStart(before, head, comments);
+  const keep = before.length - contextEnd(before, before.length - tail, comments);
+  return [before.slice(from, before.length - keep), after.slice(from, after.length - keep), from];
 }
 
 /**
- * The first string a rule matches in `after` more often than in `before`,
- * view by view, or null when the change adds no match of that rule.
+ * The first string a rule matches in `after` that `before` does not
+ * account for, view by view, or null when the change adds no match.
+ *
+ * Matches are counted by string and context kind (BUG-042). A live match
+ * is accounted for only by a live match of the same string in `before`;
+ * a data match by a data match, or else by a live one, so moving a
+ * pattern into quotes is never a finding but moving it out is. `kinds[i]`
+ * classifies matches in view i of each text; a view without a classifier
+ * counts every match as live.
  */
-function firstAddedMatch(rule, beforeViews, afterViews) {
+function firstAddedMatch(rule, beforeViews, afterViews, beforeKinds, afterKinds) {
+  const take = (counts, text) => {
+    const left = counts.get(text) ?? 0;
+    if (left > 0) counts.set(text, left - 1);
+    return left > 0;
+  };
   for (let i = 0; i < afterViews.length; i++) {
-    const seen = new Map();
-    for (const m of ruleMatches(rule, beforeViews[i])) seen.set(m, (seen.get(m) ?? 0) + 1);
-    for (const m of ruleMatches(rule, afterViews[i])) {
-      const left = seen.get(m) ?? 0;
-      if (left === 0) return m;
-      seen.set(m, left - 1);
+    const old = { live: new Map(), data: new Map() };
+    for (const m of ruleMatches(rule, beforeViews[i])) {
+      const counts = old[beforeKinds[i]?.(m) ?? "live"];
+      counts.set(m.text, (counts.get(m.text) ?? 0) + 1);
     }
+    const added = { live: [], data: [] };
+    for (const m of ruleMatches(rule, afterViews[i])) added[afterKinds[i]?.(m) ?? "live"].push(m.text);
+    for (const text of added.live) if (!take(old.live, text)) return text;
+    for (const text of added.data) if (!take(old.data, text) && !take(old.live, text)) return text;
   }
   return null;
+}
+
+/** Context-kind classifiers for the positional views of one window. */
+function viewKinds(views, fence, partial) {
+  return views.map((view, i) => (POSITIONAL_VIEWS.has(i) && view ? contextKinds(view, fence, partial) : null));
 }
 
 /**
@@ -531,15 +892,24 @@ function firstAddedMatch(rule, beforeViews, afterViews) {
  * @param {string} after  - text as it will be
  * @param {'injection'|'secrets'|'all'} mode
  * @returns {{ violations: Array, hasSecrets: boolean, hasCritical: boolean }}
+ *   hasCritical: any CRITICAL finding, injection or secret
+ * @throws {GuardianError} for a mode other than the three, or text that is not a string (BUG-049)
  */
 export function scanChange(before, after, mode = "all") {
-  if (typeof after !== "string") return { violations: [], hasSecrets: false, hasCritical: false };
-  const [oldWindow, newWindow] = changedWindows(typeof before === "string" ? before : "", after);
+  assertScanArgs("scanChange", after, mode);
+  const original = typeof before === "string" ? before : "";
+  const [oldWindow, newWindow, from] = changedWindows(original, after);
 
   const { violations } = scan(newWindow, mode);
   const oldViews = scanViews(oldWindow.slice(0, MAX_SCAN_LENGTH));
   const newViews = scanViews(newWindow.slice(0, MAX_SCAN_LENGTH));
   const rules    = new Map([...INJECTION_PATTERNS, ...SECRET_PATTERNS].map((r) => [r.id, r]));
+  // Both windows start at `from` after the same text, so they share the
+  // fence state there, read from that text as the base view reads it.
+  const fence    = fenceAtEnd(baseView(original.slice(0, from)));
+  const partial  = from > 0 && original[from - 1] !== "\n";
+  const oldKinds = viewKinds(oldViews, fence, partial);
+  const newKinds = viewKinds(newViews, fence, partial);
   const countInvisible = (text) => text.match(INVISIBLE_UNICODE_GLOBAL)?.length ?? 0;
 
   const added = [];
@@ -549,7 +919,7 @@ export function scanChange(before, after, mode = "all") {
     } else if (v.id === "GUARD-INJ-UNICODE") {
       if (countInvisible(newWindow) > countInvisible(oldWindow)) added.push(v);
     } else {
-      const matched = firstAddedMatch(rules.get(v.id), oldViews, newViews);
+      const matched = firstAddedMatch(rules.get(v.id), oldViews, newViews, oldKinds, newKinds);
       if (matched !== null) added.push(v.type === "secret" ? v : { ...v, matched });
     }
   }
@@ -630,7 +1000,7 @@ export function sanitize(input) {
  * @param {string} input - Raw user input
  * @param {object} options
  * @param {number}   options.maxLength        - Max allowed input length (default: 4000)
- * @param {boolean}  options.blockOnCritical  - Throw on CRITICAL violations (default: true)
+ * @param {boolean}  options.blockOnCritical  - Throw on CRITICAL injection findings (default: true)
  * @param {boolean}  options.blockOnSecrets   - Throw if secrets detected (default: true)
  * @param {function} options.onViolation      - Callback for custom logging/alerting
  * @param {string}   options.context          - Label for log output
@@ -656,8 +1026,11 @@ export function guardInput(input, options = {}) {
     input = input.slice(0, maxLength);
   }
 
-  // Scan
-  const { violations, hasSecrets, hasCritical } = scan(input, "all");
+  // Scan. Every secret rule is CRITICAL, so scan()'s hasCritical covers
+  // secrets too; blockOnCritical is decided on injection findings alone,
+  // or blockOnSecrets: false would not let a secret through (BUG-050).
+  const { violations, hasSecrets } = scan(input, "all");
+  const hasCriticalInjection = violations.some((v) => v.type === "injection" && v.severity === "CRITICAL");
 
   // Report visibly
   reportViolations(violations, context);
@@ -673,7 +1046,7 @@ export function guardInput(input, options = {}) {
   }
 
   // Block on critical injection
-  if (hasCritical && blockOnCritical) {
+  if (hasCriticalInjection && blockOnCritical) {
     throw new GuardianError("Critical prompt injection attempt detected. Blocked.", violations);
   }
 

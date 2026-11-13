@@ -6,18 +6,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node .claude/hooks/injection-guard-hook.mjs"
+            "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/injection-guard-hook.mjs\""
           }
         ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "WebFetch|WebSearch|mcp__firecrawl__crawl|mcp__exa__search",
+        "matcher": "^(?:WebFetch|WebSearch|mcp__(?:firecrawl|exa|claude-in-chrome|chrome-devtools|playwright|car-browser|context7)__.*)$",
         "hooks": [
           {
             "type": "command",
-            "command": "node .claude/hooks/web-content-guard.mjs"
+            "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/web-content-guard.mjs\""
           }
         ]
       }

@@ -12,15 +12,15 @@
 // the entry point is dramatically higher leverage than waiting until
 // it has been laundered through Claude's reasoning into a plan file.
 //
-// Triggered on: PostToolUse → WebFetch, WebSearch.
+// Triggered on: PostToolUse → WebFetch, WebSearch, and every tool of the
+// MCP servers that return third-party web content (firecrawl, exa,
+// claude-in-chrome, chrome-devtools, playwright, car-browser, context7),
+// matched by server prefix (BUG-036).
 //
-// Note: as of 1.3.1 the watched tool list is hardcoded to the four
-// canonical web tools (WebFetch, WebSearch, mcp__firecrawl__crawl,
-// mcp__exa__search). Pre-1.3.1 the docstring claimed "any web content
-// tool registered against this hook" but the code only ever consulted
-// the hardcoded set. Configurability is on the roadmap; until then,
-// this hook only fires on those four tool names. If you need to add
-// another web tool, fork-and-edit the WATCHED_TOOLS set below.
+// The watched tools are hardcoded (WATCHED_TOOLS, WEB_SERVERS below), and
+// the code only consults that list, whatever the matcher registers.
+// Configurability is on the roadmap; to add another web server, edit
+// WEB_SERVERS here and the PostToolUse matcher in bin/guardian.js.
 //
 // Action: Advisory only — never blocks. The hook returns
 // `additionalContext` in the hook response so Claude sees a clear
@@ -71,18 +71,24 @@ if (!scan) failOpenLoudly("scanner module does not export scan() (run: guardian 
 // WATCHED TOOLS
 // ---------------------------------------------------------------------------
 //
-// The exact set of tool_name values this hook will fire on. Adding a
-// new web-fetching tool to your environment? Edit this set. The hook
-// is intentionally NOT configurable via .claude/settings.json yet —
+// The tools this hook scans: Claude Code's two web tools, and every tool
+// of an MCP server that returns third-party web content, matched by the
+// server's "mcp__<server>__" prefix (BUG-036). The 1.5.0 list named
+// "mcp__firecrawl__crawl" and "mcp__exa__search", which are not the
+// servers' real tool names. A tool of these servers that returns no text
+// is harmless to scan. Adding a web server here means adding it to the
+// PostToolUse matcher in bin/guardian.js (GUARDIAN_HOOKS) too. The hook
+// is intentionally NOT configurable via .claude/settings.json yet:
 // configurability is on the roadmap but the surface needs careful
 // thought to avoid users accidentally disabling the security default.
 
-const WATCHED_TOOLS = new Set([
-  "WebFetch",
-  "WebSearch",
-  "mcp__firecrawl__crawl",
-  "mcp__exa__search",
-]);
+const WATCHED_TOOLS = new Set(["WebFetch", "WebSearch"]);
+const WEB_SERVERS = ["firecrawl", "exa", "claude-in-chrome", "chrome-devtools", "playwright", "car-browser", "context7"];
+
+function isWebTool(toolName) {
+  if (typeof toolName !== "string") return false;
+  return WATCHED_TOOLS.has(toolName) || WEB_SERVERS.some((server) => toolName.startsWith(`mcp__${server}__`));
+}
 
 // ---------------------------------------------------------------------------
 // SCANNER WRAPPER
@@ -160,10 +166,9 @@ process.stdin.on("end", () => {
     const data     = JSON.parse(input);
     const toolName = data.tool_name;
 
-    // Only scan recognized web tools — bail otherwise. This list is
-    // hardcoded by design (see the docstring at the top of the file);
-    // adding a new tool requires editing this set in a fork.
-    if (!WATCHED_TOOLS.has(toolName)) process.exit(0);
+    // Only scan recognized web tools; bail otherwise. The list is
+    // hardcoded by design (see WATCHED TOOLS above).
+    if (!isWebTool(toolName)) process.exit(0);
 
     const text = extractText(data.tool_response).trim();
     if (!text) process.exit(0);
