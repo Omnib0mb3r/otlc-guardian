@@ -1,5 +1,18 @@
 # otlc-guardian TODO
 
+## PARKED: re-probe 13 gaps in the live hook (Michael 2026-11-12 19:58 EST: to-do only, not built, to save usage)
+
+The 1.5.0 apply went live at 1f7e068 on re-probe 13's NOT CLEAR verdict, by Michael's call. None of these is a regression; each was silent before the apply too. Full report with exact commands and real-effect proof: `C:\dev\data\skill-connections\brainstorms\16f2e0e3-349e-466f-af79-5ad72f28770d\plans\2026-11-12-guardian-1.5.0-reprobe13.md` (sandbox `C:\Users\michael\AppData\Local\Temp\guardian-reprobe13`).
+
+- [ ] Q1 HIGH: unread content copied into an ordinary folder, then on into a watched path in the same command (`unzip kit.zip -d tmp && cp -r tmp/* docs/ && cp docs/*.md .claude/agents/`). Fix: a copy, move or link of unread content marks its destination unread too.
+- [ ] Q2 MEDIUM: git checkout of a cloned repo into the root or a watched path (`--git-dir=`/`--work-tree=`, `checkout-index --prefix=`, `git -C tmp show HEAD:CLAUDE.md > CLAUDE.md`). The hook ignores `--option=value` forms.
+- [ ] Q3 MEDIUM: tar pipe copy into the root, `(cd tmp && tar cf - .) | tar xf -`.
+- [ ] Q4 MEDIUM: git config pointed at unread content (`core.hooksPath`, `include.path`, `core.fsmonitor`); the cloned hook ran on the next commit.
+- [ ] Q5 MEDIUM: `.git/config` written from downloaded or unpacked content; a downloaded `core.fsmonitor` ran on `git status`. Treat `.git/config` like a git hook folder.
+- [ ] Q6 MEDIUM: a download piped into inline code that writes a watched file (`curl URL | python3 -c ...`, `node -e`, `perl`). Decide: P1 class or the named inline-code limit.
+- [ ] Q7 scope: non-clone fetches as producers (`git subtree add --prefix=.claude/agents URL`, `git fetch URL && git checkout FETCH_HEAD -- CLAUDE.md`).
+- [ ] Q8 LOW docs: SECURITY.md and APPLY.md still list `curl -o "$(echo CLAUDE.md)" URL` as unseen; P2 now asks on it. The APPLY.md "Measured" paragraph is stale.
+
 ## R&D AND PLAN ONLY: Self-Growing Gate spec (Michael 2026-11-10 00:09 EST, via DevNeural Lex)
 
 Spec: C:/dev/data/lex-phone/files/c3136af8-4030-429c-94b5-5e69caa5c9ea-OTLC_Guardian_Self-Growing_Gate_Spec.md. Michael's terms: research and a plan for his approval. Nothing is built, merged, installed or wired into CI until he approves it. No brainstorm supervises otlc-guardian yet, so this waits here.
