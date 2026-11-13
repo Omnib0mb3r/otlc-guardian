@@ -4429,8 +4429,11 @@ function shellWriteTargets(command, cwd, depth = 0, dialect = "bash", found = { 
   if (depth > MAX_SHELL_DEPTH) return targets;
   found.inbound ??= new Set();
   found.carried ??= [];
-  // Git Bash spells a drive as a folder (/c/Users); PowerShell and cmd do not.
-  const spelledPath = (p) => (dialect === "bash" ? drivePath(p) : p);
+  // Git Bash spells a drive as a folder (/c/Users); PowerShell and cmd do
+  // not, and they split a path at a backslash on every host. Their paths
+  // are slashed before they are resolved, so `..\..\notes` climbs on a
+  // host whose own paths do not split there (BUG-088).
+  const spelledPath = (p) => (dialect === "bash" ? drivePath(p) : p.replace(/\\/g, "/"));
   const abs = (dir, p) => path.resolve(dir, spelledPath(p.replace(/^~(?=$|[\\/])/, os.homedir()))).replace(/\\/g, "/");
   // A marked path is kept the way the file system tells names apart, so
   // `unzip a.zip -d Tmp && cp -r tmp/sub .` is the same folder on Windows.
