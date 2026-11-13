@@ -6,6 +6,16 @@ on 2026-11-10 (relayed by Lex the same day): he no longer applies staging by
 hand. The worker agent in this repo never writes the live protected files.
 Read `staging/README.md` for why the staged copies exist.
 
+**Applied on 2026-11-12, commit `1f7e068`. Nothing is pending.** Lex ran steps 1 to 3
+from `f52438d`, and step 3 matched: injection-guard 175 passed and 1 failed (the
+named `liveOnly` test), every other suite green, check 18 passed with no
+warning. Michael ruled to apply although re-probe 13 was not clear; its gaps
+(Q1 to Q8) are parked in `TODO.md` and are not being built. Step 4 is done:
+no test is `stagedOnly()` or `liveOnly()`, and the three staged files are
+identical to the live ones. The tables below are the record of what that
+apply changed. The next staged fix starts from these files and gets a new
+row; until then there is nothing here to apply.
+
 What that means for the control: in Guardian's own repo the "a person
 confirms" step on its enforcement files is replaced by two things, an
 independent re-probe that must be clean and this runbook's checks with a

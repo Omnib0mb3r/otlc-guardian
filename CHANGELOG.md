@@ -272,13 +272,327 @@ project (each project picks it up when `guardian update` is run there).
   SEC-012, SEC-013, SEC-014); each now has both. The new samples found
   BUG-082 and BUG-083.
 
-### Staged (fixed in staging/, not yet live)
+### Fixed
 
-These fixes are in the staged copies of the protected files
-(`staging/hooks/`, `staging/security/`) and tested by
-`npm run test:staging`. They reach the live hooks and scanner when the
-maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
+- **Audit rules SEC-005 and SEC-006 see a quoted key (BUG-076).** A
+  committed `config.json` holding `"password": "hunter2hunter2"` or
+  `"api_key": "..."`, or a Python dict with the same keys, passed the
+  audit: both rules wanted `:` or `=` straight after the key word. The
+  key may now be quoted. A value of plain words that names the field
+  (`"Password"`, `"Enter your password"`, `"Your API key"`) is a label
+  and is skipped, which also stops SEC-005 firing on label objects in
+  JavaScript.
+- **The hook test suites no longer fail at random on a loaded machine
+  (BUG-077).** The test harness gave each hook process 10 seconds and
+  reported a kill as "status null"; under load a different test failed
+  each run. The harness now waits 30 seconds
+  (`GUARDIAN_TEST_HOOK_TIMEOUT_MS` overrides it) and says when it, not the
+  hook, stopped a run. Tests only; the hook timeout in settings is unchanged.
+- **Guardian's CLAUDE.md no longer quotes a live injection phrase
+  (BUG-002).** The VISIBLE AUDIT OUTPUT example quoted a CRITICAL
+  pattern, and `guardian init` merges that file into every project's
+  CLAUDE.md, so each project's instruction file carried one. The example
+  now mirrors what `reportViolations()` prints, with a placeholder for
+  the matched text. A test checks that the instruction files of a fresh
+  init scan clean.
 
+- **WEB-002 reads code, not comments, and costs linear time (BUG-038,
+  audit half).** A comment that named the policy (`# TODO: add_header
+  Content-Security-Policy`, `// helmet() goes here`, an HTML comment)
+  counted as setting one and silenced WEB-002. Evidence files are now read
+  with their comments removed by file kind: `#` (quote-aware) for nginx
+  config, Python, YAML, shell, TOML and `.env`; `//` and `/* */`
+  (string-aware) for JS/TS and CSS; `<!-- -->` for HTML, Vue and Svelte.
+  A commented-out nginx server block no longer counts as one. The
+  server-block test was a lazy regex retried from every `server {`
+  opener, quadratic on a large file of openers (2.5 s on 450 KB); it is
+  now two linear searches with the same meaning.
+
+- **`update` keeps a wider matcher the user chose (BUG-037).** The
+  1.5.0 migration took Guardian's hook out of every block whose matcher
+  differed from the default, so a registration under `*`, `.*` or a
+  list with more tools was moved back under the narrower default. A
+  block that already holds Guardian's hook under a matcher covering every
+  tool the hook needs now keeps it (its command is anchored in place);
+  only narrower or duplicate registrations are removed.
+
+- **The web guard is registered for every web content server (BUG-036,
+  registration half).** `guardian init` and `update` register the web
+  content guard on `^(?:WebFetch|WebSearch|mcp__(?:firecrawl|exa|claude-in-chrome|chrome-devtools|playwright|car-browser|context7)__.*)$`: WebFetch, WebSearch, and every tool of the
+  firecrawl, exa, claude-in-chrome, chrome-devtools, playwright,
+  car-browser and context7 MCP servers. The 1.5.0 matcher named
+  `mcp__firecrawl__crawl` and `mcp__exa__search`, which are not the
+  servers' real tool names, so it never fired on them. `update` moves an
+  existing registration from the old matcher. `guardian check` reads
+  matchers as Claude Code does: an exact list split on `|` or `,` with
+  spaces allowed, else a regex, where an invalid one covers nothing; it
+  used to split on `|` only and failed `Write |Edit`, which Claude Code
+  accepts.
+
+- **Hook commands are anchored to the project root (BUG-028, BUG-034).**
+  `guardian init` and `update` register `node "${CLAUDE_PROJECT_DIR}/.claude/hooks/injection-guard-hook.mjs"` and the same form for
+  the web content guard. The relative form (`node .claude/hooks/...`)
+  stopped resolving once a session changed directory, and with Bash in
+  the matcher every Bash call after a `cd` raised a hook error and went
+  unscanned. `update` rewrites an existing relative registration in
+  place, keeping the user's other fields on it, and reads every spelling
+  of Guardian's own command (relative, `$CLAUDE_PROJECT_DIR`,
+  `${CLAUDE_PROJECT_DIR}`, quoted or not) as one entry, so none is added
+  twice. A project with no settings file gets one written from Guardian's
+  hook list instead of a copy of Guardian's own repo settings.
+  `guardian check` warns on a relative command. Tested under Git Bash
+  from a subfolder; under the PowerShell fallback the form relies on
+  Claude Code substituting `${CLAUDE_PROJECT_DIR}`, which its hooks
+  reference documents. This repo's own `.claude/settings.json` is a
+  protected file and moves to the form when the maintainer applies
+  `staging/APPLY.md`.
+
+- **Python delimiter rules stop matching headings, separators and prose
+  (BUG-043, Python half).** `GUARD-INJ-019`, `GUARD-INJ-020` and
+  `GUARD-INJ-015` in `security/injection_guard.py` match as the staged
+  Node rules do; a parity check in `tests/injection-guard.test.js` runs
+  the same fixtures through both.
+
+- **Python `scan()` fails closed (BUG-049, Python half).** In
+  `security/injection_guard.py`, `scan()` raises `ValueError` for a mode
+  other than `'injection'`, `'secrets'` or `'all'` and `TypeError` for
+  text that is not a string, instead of returning no findings. The Node
+  half throws `GuardianError` (below). `tests/injection-guard.test.js` now runs a Python parity
+  check when `python` is on PATH (and lists it as skipped when not),
+  including `guard_input(block_on_secrets=False)` letting a secret through
+  (BUG-050).
+
+- **INJ-003 on shadcn `chart.jsx` resolved without a rule change
+  (BUG-003).** The finding is right: `ChartStyle` writes the `id` prop and
+  ChartConfig colours into a `<style>` element unescaped, which can break
+  out under server rendering when config holds user data. The documented
+  fix is a per-rule allowlist line,
+  `src/components/ui/chart.jsx  [INJ-003]  # reason: ...`, recorded once
+  the project has checked its config is developer-defined (manual chapter
+  06, `guides/INDEX.md`).
+
+- **AUTHZ-001 sees auth middleware (BUG-070).** Only the handler body
+  was read, so `router.delete(path, requireAuth, handler)`, the most
+  common Express auth shape, was reported CRITICAL as unauthenticated.
+  Auth now counts in the route-level middleware and in an earlier
+  `router.use(requireAuth)` on the same object. The handler is now found
+  as the call's last inline function, so an options object in middleware
+  (`passport.authenticate("jwt", { session: false })`) is no longer read
+  as the handler. Authenticated handlers found this way are checked by
+  AUTHZ-003.
+
+- **AUTHZ-003 needs an ownership check tied to the caller (BUG-069).**
+  The JavaScript IDOR rule took any `userId:` or bare `teamId` mention as
+  an ownership check, so `where: { id: req.params.docId, userId:
+  req.params.userId }` passed. Like AUTHZ-013 (BUG-030), the owner column
+  must now be compared with or bound to the verified caller (`req.user`,
+  `session.user`, `auth()` and similar) or a name taken from it first.
+  AUTHZ-013 gains the same bound-name form (`uid = current_user.id`).
+
+- **WEB-001 matches credential words, not substrings (BUG-033).** It
+  missed `setItem(TOKEN_KEY, accessToken)` and
+  `setItem("auth", JSON.stringify({ accessToken }))`, and flagged
+  `setItem("refreshCount", "1")`. Keys may now be literals or
+  identifiers, a value that names a token counts, and words are split
+  at camelCase and non-letters, so `refreshCount`, `themeTokens` and
+  `tokenizer` no longer count.
+
+- **AUTHZ-011 no longer reports reads (BUG-032).** Every database
+  `execute` counted as a side effect, so a `GET` running
+  `db.execute(select(...))` was reported HIGH as an unauthenticated write.
+  An execute is now a write unless the handler builds a select and no
+  write (`insert(`, `update(`, `delete(`, or an INSERT, UPDATE, DELETE or
+  DDL string); an execute of a statement built elsewhere still counts.
+  AUTHZ-013 keeps counting reads, since a read by a caller-supplied id
+  leaks the row.
+
+- **AUTHZ-011 blind spots closed (BUG-031).** A router-level
+  `Depends(get_db)` (or any `dependencies=[Depends(` in the file, a route
+  decorator's included) silenced every Python handler in the file; now
+  only a router built in the file whose dependency list is auth counts,
+  and only for that router's handlers. Public routes are judged per path
+  segment, so `/api/tokens/{token_id}` is no longer public. A bare
+  `api_key` mention no longer counts as auth; `APIKeyHeader` and
+  `Depends(get_api_key)` do.
+
+- **AUTHZ-013 catches the textbook IDOR (BUG-030).** A 404 for a missing
+  row and a caller-supplied `user_id` or `org_id` (path or signature
+  parameter) counted as ownership checks, so a handler that deletes any
+  document by id passed. Python ownership evidence must now tie the
+  object to the authenticated caller (`Document.owner_id == user.id`,
+  `filter_by(owner_id=current_user.id)`, `user.id != doc.owner_id`), or be
+  an authorization helper, a permission or tenancy signal, or a 403.
+
+- **INJ-001 matches `eval(` as a word, and `new Function(` (BUG-040).**
+  The pattern had no boundary, so `retrieval(query)` was reported
+  CRITICAL, and the description claimed a user-input check the rule does
+  not make. It now skips names ending in `eval` and Puppeteer's
+  `page.$eval(`, also catches `new Function(`, and is described as
+  "eval() or new Function() runs a string as code".
+
+- **INJ-002 reads an assignment, not a comparison (BUG-082).** The
+  pattern matched the first `=` of `==` and `===`, so
+  `a.innerHTML === b.innerHTML` was reported HIGH, and it missed
+  `innerHTML +=`, which is the same XSS sink. `=` and `+=` now fire and
+  a comparison does not.
+
+- **SEC-001b needs the key to start a word (BUG-083, audit half).** The
+  legacy OpenAI pattern had no left boundary, so `task-`, `disk-` or
+  `risk-` followed by 20 letters and digits (a job id) was reported
+  CRITICAL as a hardcoded key. The audit rule now requires `sk-` at the
+  start of a word. The runtime pattern `GUARD-SEC-001b` has the same
+  boundary in the Python port and in the Node scanner (below).
+
+- **The audit no longer reads `.claude/worktrees/` (BUG-081).** Claude
+  Code keeps its git worktrees there, each a second checkout of the same
+  code, so every finding was reported once more per worktree (one real
+  project: 18,206 findings, 404 without the worktrees). Only that folder
+  is skipped; a folder that is merely named `worktrees` is still read,
+  and a worktree given as the target is audited.
+
+- **DEP-002 can fire (BUG-039).** A bare `.env` has no extension, so the
+  walker never collected it and the committed-`.env` check never ran.
+  `collectFiles()` now keeps a `.env` by name, for DEP-002 only (the
+  secret rules still do not read it). DEP-002 asks git: a tracked `.env`
+  is reported even if `.gitignore` lists it, an ignored untracked one is
+  not, and with no git or no repository the file is reported. DEP-001 no
+  longer counts a `HEALTH...` variable in `.env` as a health route.
+
+- **`guardian scan` exits non-zero on a finding (BUG-068).** It printed
+  the findings and exited 0, so `cat untrusted.txt | guardian scan &&
+  send-to-model` sent poisoned text on. Exit codes are now 0 clean, 1 at
+  least one pattern, 2 nothing scanned (no text, which used to be 1, or a
+  scanner that failed to load, which used to be an uncaught exit 1).
+
+- **A project under a folder named `test`, `tests` or `spec` keeps its
+  rules (BUG-052).** The test-file exclusions ran on the absolute path,
+  so every file of such a project counted as test code and lost the 17
+  test-excluded rules. `excludedByRule()` now tests the path inside the
+  project root.
+
+- **What an audit exemption means for the project checks is defined
+  (BUG-059).** An exemption silences findings about a file and never
+  hides the file as evidence. The absence checks DEP-001 and WEB-002
+  keep reading exempt files (a health route or CSP header there still
+  counts); the presence check DEP-002 now leaves exempt files out, so an
+  allowlisted `.env` is not reported. Tested and documented in manual
+  chapter 06.
+
+- **Only a marker comment exempts a file (BUG-057).** Any occurrence of
+  `otlc-guardian:audit-exempt` in a file's first 4 KB used to exempt it,
+  including a string, a regex or a sentence about the marker. The marker
+  now counts only on its own comment line (`//`, `#`, `/*`, `*`, `<!--`,
+  `--`), as a whole word. A file that relied on a bare mention is audited
+  again; give it a real marker line or an allowlist entry.
+
+- **An allowlist entry with an empty reason is rejected (BUG-056).**
+  `src/a.js  # reason:` with nothing after the prefix used to exempt the
+  file, though SECURITY.md says entries without a reason are rejected.
+  `loadAllowlist()` now ignores the line and warns
+  `.audit-allowlist:N - reason is empty, line ignored`.
+
+- **Audit secret rules now cover every runtime secret format (BUG-054).**
+  The 1.5.0 runtime widening (BUG-026) had not reached the audit, so a
+  committed fine-grained GitHub token or an OpenSSH key passed
+  `guardian audit`. SEC-003 now matches every GitHub token form (`ghp_`,
+  `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), SEC-004 any PEM private
+  key header, and SEC-010 Anthropic OAuth and admin keys; SEC-011 is
+  length-bounded like the runtime rule. New rules: SEC-012 (Google API
+  key), SEC-013 (Slack token), SEC-014 (Stripe live key). The audit now
+  has 45 rules (37 pattern, 5 analyzer, 3 project). A test maps every
+  runtime `GUARD-SEC` id to its audit rule and fails when one is missing.
+
+- **An unreadable file no longer crashes the audit (BUG-055).** DEP-001's
+  check read every file with a bare `readFileSync`, so a file that
+  vanished or lost its read permission mid-scan threw out of `runAudit`.
+  It now reads through `readForCheck()`, which names the file and the
+  reason on stderr (stdout stays clean for `--json`) and counts the file
+  as having no text.
+
+- **Importing the audit module no longer runs an audit (BUG-053).** The
+  CLI block at the bottom of `security/03-audit.js` ran on every load, so
+  `import { runAudit } from "otlc-guardian/audit"` audited the importer's
+  directory and could exit its process. It now runs only when the file is
+  the program Node started, compared by real path so npm's bin symlink still
+  works.
+- **`init` installs a project's files, not Guardian's repo files
+  (BUG-060).** It copied Guardian's whole `.github/` folder, including a
+  `CODEOWNERS` that made Guardian's maintainer the owner of everything, and
+  Guardian's issue and PR templates; and it copied Guardian's own audit
+  allowlist, whose `bin/` and `tests/` entries exempted whatever a project
+  kept at those paths. `init` now adds only the audit workflow and
+  `secret_scanning.yml`, and writes a project allowlist with entries for the
+  `security/` modules it installs. An existing allowlist is never rewritten.
+  Projects set up earlier keep the copied files; SETUP.md lists them.
+- **An invalid settings file stops `init` and `update` before they write
+  (BUG-061).** Invalid JSON in `.claude/settings.json` was found only at step
+  6, after the behavior files, `.gitignore`, `.env.example` and `security/`
+  were written, and the run ended in a stack trace. A preflight now refuses
+  invalid JSON and valid JSON that is not an object before any write, and a
+  later failure prints the reason and what to do instead of a stack trace.
+- **A bad audit argument no longer passes (BUG-051).** A path that did not
+  exist scanned 0 files and exited 0, even with `--fail-on-error`, and an
+  unknown flag was ignored, so a CI typo turned the gate into a pass. An
+  unknown flag, a second path or a missing path is now a usage error (exit
+  2, message on stderr, nothing scanned). `--help` prints usage. `guardian
+  audit` passes the code through and treats a child killed by a signal as a
+  failure.
+- **`guardian check` fails on a broken or unregistered hook (BUG-062).** A
+  failed hook smoke test was a warning and `check` still printed "correctly
+  installed" and exited 0, and nothing read `.claude/settings.json`, so the
+  CI gate could not fail on a hook that protects nothing. A failed smoke test
+  (including the hook's own fail-open exit) is now a failure, and a new
+  registration check requires both hooks in `settings.json` or
+  `settings.local.json` on matchers that cover `Write` and `WebFetch`.
+  Invalid JSON and `disableAllHooks` fail too.
+- **`guardian check` fails on a settings value Claude Code rejects
+  (BUG-073).** Claude Code loads nothing from a settings file in which a
+  known key has the wrong type, hooks included, and `check` tested only
+  `disableAllHooks === true`, so `"disableAllHooks": "true"` or a hook
+  `"timeout": "1"` passed. `check` now reads every known key with the
+  staged hook's type tables, names each wrong value and its place
+  (`"hooks.PreToolUse[0].hooks[0].timeout"`), and counts nothing from
+  that file as registered. A parity test keeps the two copies of the
+  tables the same.
+- **The hook no longer fails open in CommonJS projects (BUG-063, first half).**
+  The scanner is an ES module with a `.js` extension, so in a project whose
+  `package.json` says `"type": "commonjs"` (npm 11's `npm init -y` default)
+  the hook could not load it and let every write through unscanned. A new
+  `security/package.json` with `"type": "module"` pins the folder; `init`
+  installs it, `update` restores it, `check` requires it, and `init` warns
+  when an existing one says otherwise. The hook does not protect that file
+  yet.
+- **Partial scans gave wrong project-level answers (BUG-041).** Reported by
+  DevNeural: auditing `07-daemon/src/capture/hooks` reported DEP-001 though
+  the project serves a health route in another folder. Project checks
+  answered from the scanned subtree only. Checks that prove an absence
+  across the project (DEP-001, WEB-002) now read the project root's files
+  on a partial scan, and their finding names the project root; DEP-002, a
+  presence check, still reads the scanned files. A single file given as
+  the target used to scan nothing at all; it is now audited.
+- **Docs that disagreed with the code (review finding 15).** The audit
+  rule breakdown is now the audit's own header (34 pattern, 5 analyzer,
+  3 project; 42 in all) in README.md and the skill, which still said 33.
+  SECURITY.md said 9 secret patterns; there are 16. SETUP.md listed the
+  PreToolUse hook as Write/Edit only, and README.md and SETUP.md gave the
+  web hook's matcher without the MCP tool names it registers.
+- **`guardian update` did nothing for an existing install (BUG-025).** It
+  was an alias for `init`, which never overwrites a file, so no fix ever
+  reached a project that already had Guardian. `update` now replaces
+  Guardian-owned files (`security/*`, `.claude/hooks/*`) and the marker
+  sections of the behavior files, and moves Guardian's hook registration
+  to the current matcher. `security/.audit-allowlist`, `.github/` and
+  everything outside the markers are left alone.
+- The Edit branch scanned `old_string`, so removing a bad line was flagged.
+  Only added content is scanned now.
+- Project root comes from `CLAUDE_PROJECT_DIR`, then the payload `cwd`,
+  then `process.cwd()`.
+- An empty string in `ignorePaths` matched every path and turned the hook
+  off. Empty entries are skipped.
+- The in-memory rate limiter never evicted keys. Expired windows are swept
+  once the map passes `RATE_LIMIT_SWEEP_THRESHOLD` (default 10000).
+- `security/.audit-allowlist` claimed CI fails when the allowlist grows.
+  CI only prints the count; the comment now says so.
 - **A hook written after a cd into `.git` asks (BUG-080, re-probe 9
   K3).** `cd .git/hooks && cp ../../g.sh commit-msg && cd ../.. && git
   commit -m security` was silent and deleted `security/` for real: J1
@@ -915,7 +1229,7 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
 
 - **SECURITY.md states the boundary (re-probe 3 D9).** The threat model now
   says what the hooks are (a tripwire against injected instructions, not
-  a sandbox), what they do not see once `staging/` is applied (commands
+  a sandbox), what they do not see (commands
   that do not name a guarded file, programs and cmdlets outside the
   list, destruction of anything that is not Guardian's, settings values
   Claude Code rejects for other reasons), and how to contain an agent
@@ -1248,328 +1562,6 @@ maintainer applies `staging/APPLY.md`, and move to "Fixed" then.
   from, so a Write, Edit or shell command that changes it to
   `"type": "commonjs"` or removes it asks (denied in bypass mode) instead
   of silently switching the scanner off.
-
-### Fixed
-
-- **Audit rules SEC-005 and SEC-006 see a quoted key (BUG-076).** A
-  committed `config.json` holding `"password": "hunter2hunter2"` or
-  `"api_key": "..."`, or a Python dict with the same keys, passed the
-  audit: both rules wanted `:` or `=` straight after the key word. The
-  key may now be quoted. A value of plain words that names the field
-  (`"Password"`, `"Enter your password"`, `"Your API key"`) is a label
-  and is skipped, which also stops SEC-005 firing on label objects in
-  JavaScript.
-- **The hook test suites no longer fail at random on a loaded machine
-  (BUG-077).** The test harness gave each hook process 10 seconds and
-  reported a kill as "status null"; under load a different test failed
-  each run. The harness now waits 30 seconds
-  (`GUARDIAN_TEST_HOOK_TIMEOUT_MS` overrides it) and says when it, not the
-  hook, stopped a run. Tests only; the hook timeout in settings is unchanged.
-- **Guardian's CLAUDE.md no longer quotes a live injection phrase
-  (BUG-002).** The VISIBLE AUDIT OUTPUT example quoted a CRITICAL
-  pattern, and `guardian init` merges that file into every project's
-  CLAUDE.md, so each project's instruction file carried one. The example
-  now mirrors what `reportViolations()` prints, with a placeholder for
-  the matched text. A test checks that the instruction files of a fresh
-  init scan clean.
-
-- **WEB-002 reads code, not comments, and costs linear time (BUG-038,
-  audit half).** A comment that named the policy (`# TODO: add_header
-  Content-Security-Policy`, `// helmet() goes here`, an HTML comment)
-  counted as setting one and silenced WEB-002. Evidence files are now read
-  with their comments removed by file kind: `#` (quote-aware) for nginx
-  config, Python, YAML, shell, TOML and `.env`; `//` and `/* */`
-  (string-aware) for JS/TS and CSS; `<!-- -->` for HTML, Vue and Svelte.
-  A commented-out nginx server block no longer counts as one. The
-  server-block test was a lazy regex retried from every `server {`
-  opener, quadratic on a large file of openers (2.5 s on 450 KB); it is
-  now two linear searches with the same meaning.
-
-- **`update` keeps a wider matcher the user chose (BUG-037).** The
-  1.5.0 migration took Guardian's hook out of every block whose matcher
-  differed from the default, so a registration under `*`, `.*` or a
-  list with more tools was moved back under the narrower default. A
-  block that already holds Guardian's hook under a matcher covering every
-  tool the hook needs now keeps it (its command is anchored in place);
-  only narrower or duplicate registrations are removed.
-
-- **The web guard is registered for every web content server (BUG-036,
-  registration half).** `guardian init` and `update` register the web
-  content guard on `^(?:WebFetch|WebSearch|mcp__(?:firecrawl|exa|claude-in-chrome|chrome-devtools|playwright|car-browser|context7)__.*)$`: WebFetch, WebSearch, and every tool of the
-  firecrawl, exa, claude-in-chrome, chrome-devtools, playwright,
-  car-browser and context7 MCP servers. The 1.5.0 matcher named
-  `mcp__firecrawl__crawl` and `mcp__exa__search`, which are not the
-  servers' real tool names, so it never fired on them. `update` moves an
-  existing registration from the old matcher. `guardian check` reads
-  matchers as Claude Code does: an exact list split on `|` or `,` with
-  spaces allowed, else a regex, where an invalid one covers nothing; it
-  used to split on `|` only and failed `Write |Edit`, which Claude Code
-  accepts.
-
-- **Hook commands are anchored to the project root (BUG-028, BUG-034).**
-  `guardian init` and `update` register `node "${CLAUDE_PROJECT_DIR}/.claude/hooks/injection-guard-hook.mjs"` and the same form for
-  the web content guard. The relative form (`node .claude/hooks/...`)
-  stopped resolving once a session changed directory, and with Bash in
-  the matcher every Bash call after a `cd` raised a hook error and went
-  unscanned. `update` rewrites an existing relative registration in
-  place, keeping the user's other fields on it, and reads every spelling
-  of Guardian's own command (relative, `$CLAUDE_PROJECT_DIR`,
-  `${CLAUDE_PROJECT_DIR}`, quoted or not) as one entry, so none is added
-  twice. A project with no settings file gets one written from Guardian's
-  hook list instead of a copy of Guardian's own repo settings.
-  `guardian check` warns on a relative command. Tested under Git Bash
-  from a subfolder; under the PowerShell fallback the form relies on
-  Claude Code substituting `${CLAUDE_PROJECT_DIR}`, which its hooks
-  reference documents. This repo's own `.claude/settings.json` is a
-  protected file and moves to the form when the maintainer applies
-  `staging/APPLY.md`.
-
-- **Python delimiter rules stop matching headings, separators and prose
-  (BUG-043, Python half).** `GUARD-INJ-019`, `GUARD-INJ-020` and
-  `GUARD-INJ-015` in `security/injection_guard.py` match as the staged
-  Node rules do; a parity check in `tests/injection-guard.test.js` runs
-  the same fixtures through both.
-
-- **Python `scan()` fails closed (BUG-049, Python half).** In
-  `security/injection_guard.py`, `scan()` raises `ValueError` for a mode
-  other than `'injection'`, `'secrets'` or `'all'` and `TypeError` for
-  text that is not a string, instead of returning no findings. The Node
-  half is staged. `tests/injection-guard.test.js` now runs a Python parity
-  check when `python` is on PATH (and lists it as skipped when not),
-  including `guard_input(block_on_secrets=False)` letting a secret through
-  (BUG-050).
-
-- **INJ-003 on shadcn `chart.jsx` resolved without a rule change
-  (BUG-003).** The finding is right: `ChartStyle` writes the `id` prop and
-  ChartConfig colours into a `<style>` element unescaped, which can break
-  out under server rendering when config holds user data. The documented
-  fix is a per-rule allowlist line,
-  `src/components/ui/chart.jsx  [INJ-003]  # reason: ...`, recorded once
-  the project has checked its config is developer-defined (manual chapter
-  06, `guides/INDEX.md`).
-
-- **AUTHZ-001 sees auth middleware (BUG-070).** Only the handler body
-  was read, so `router.delete(path, requireAuth, handler)`, the most
-  common Express auth shape, was reported CRITICAL as unauthenticated.
-  Auth now counts in the route-level middleware and in an earlier
-  `router.use(requireAuth)` on the same object. The handler is now found
-  as the call's last inline function, so an options object in middleware
-  (`passport.authenticate("jwt", { session: false })`) is no longer read
-  as the handler. Authenticated handlers found this way are checked by
-  AUTHZ-003.
-
-- **AUTHZ-003 needs an ownership check tied to the caller (BUG-069).**
-  The JavaScript IDOR rule took any `userId:` or bare `teamId` mention as
-  an ownership check, so `where: { id: req.params.docId, userId:
-  req.params.userId }` passed. Like AUTHZ-013 (BUG-030), the owner column
-  must now be compared with or bound to the verified caller (`req.user`,
-  `session.user`, `auth()` and similar) or a name taken from it first.
-  AUTHZ-013 gains the same bound-name form (`uid = current_user.id`).
-
-- **WEB-001 matches credential words, not substrings (BUG-033).** It
-  missed `setItem(TOKEN_KEY, accessToken)` and
-  `setItem("auth", JSON.stringify({ accessToken }))`, and flagged
-  `setItem("refreshCount", "1")`. Keys may now be literals or
-  identifiers, a value that names a token counts, and words are split
-  at camelCase and non-letters, so `refreshCount`, `themeTokens` and
-  `tokenizer` no longer count.
-
-- **AUTHZ-011 no longer reports reads (BUG-032).** Every database
-  `execute` counted as a side effect, so a `GET` running
-  `db.execute(select(...))` was reported HIGH as an unauthenticated write.
-  An execute is now a write unless the handler builds a select and no
-  write (`insert(`, `update(`, `delete(`, or an INSERT, UPDATE, DELETE or
-  DDL string); an execute of a statement built elsewhere still counts.
-  AUTHZ-013 keeps counting reads, since a read by a caller-supplied id
-  leaks the row.
-
-- **AUTHZ-011 blind spots closed (BUG-031).** A router-level
-  `Depends(get_db)` (or any `dependencies=[Depends(` in the file, a route
-  decorator's included) silenced every Python handler in the file; now
-  only a router built in the file whose dependency list is auth counts,
-  and only for that router's handlers. Public routes are judged per path
-  segment, so `/api/tokens/{token_id}` is no longer public. A bare
-  `api_key` mention no longer counts as auth; `APIKeyHeader` and
-  `Depends(get_api_key)` do.
-
-- **AUTHZ-013 catches the textbook IDOR (BUG-030).** A 404 for a missing
-  row and a caller-supplied `user_id` or `org_id` (path or signature
-  parameter) counted as ownership checks, so a handler that deletes any
-  document by id passed. Python ownership evidence must now tie the
-  object to the authenticated caller (`Document.owner_id == user.id`,
-  `filter_by(owner_id=current_user.id)`, `user.id != doc.owner_id`), or be
-  an authorization helper, a permission or tenancy signal, or a 403.
-
-- **INJ-001 matches `eval(` as a word, and `new Function(` (BUG-040).**
-  The pattern had no boundary, so `retrieval(query)` was reported
-  CRITICAL, and the description claimed a user-input check the rule does
-  not make. It now skips names ending in `eval` and Puppeteer's
-  `page.$eval(`, also catches `new Function(`, and is described as
-  "eval() or new Function() runs a string as code".
-
-- **INJ-002 reads an assignment, not a comparison (BUG-082).** The
-  pattern matched the first `=` of `==` and `===`, so
-  `a.innerHTML === b.innerHTML` was reported HIGH, and it missed
-  `innerHTML +=`, which is the same XSS sink. `=` and `+=` now fire and
-  a comparison does not.
-
-- **SEC-001b needs the key to start a word (BUG-083, audit half).** The
-  legacy OpenAI pattern had no left boundary, so `task-`, `disk-` or
-  `risk-` followed by 20 letters and digits (a job id) was reported
-  CRITICAL as a hardcoded key. The audit rule now requires `sk-` at the
-  start of a word. The runtime pattern `GUARD-SEC-001b` has the same
-  boundary in the Python port; the Node scanner's is staged (below).
-
-- **The audit no longer reads `.claude/worktrees/` (BUG-081).** Claude
-  Code keeps its git worktrees there, each a second checkout of the same
-  code, so every finding was reported once more per worktree (one real
-  project: 18,206 findings, 404 without the worktrees). Only that folder
-  is skipped; a folder that is merely named `worktrees` is still read,
-  and a worktree given as the target is audited.
-
-- **DEP-002 can fire (BUG-039).** A bare `.env` has no extension, so the
-  walker never collected it and the committed-`.env` check never ran.
-  `collectFiles()` now keeps a `.env` by name, for DEP-002 only (the
-  secret rules still do not read it). DEP-002 asks git: a tracked `.env`
-  is reported even if `.gitignore` lists it, an ignored untracked one is
-  not, and with no git or no repository the file is reported. DEP-001 no
-  longer counts a `HEALTH...` variable in `.env` as a health route.
-
-- **`guardian scan` exits non-zero on a finding (BUG-068).** It printed
-  the findings and exited 0, so `cat untrusted.txt | guardian scan &&
-  send-to-model` sent poisoned text on. Exit codes are now 0 clean, 1 at
-  least one pattern, 2 nothing scanned (no text, which used to be 1, or a
-  scanner that failed to load, which used to be an uncaught exit 1).
-
-- **A project under a folder named `test`, `tests` or `spec` keeps its
-  rules (BUG-052).** The test-file exclusions ran on the absolute path,
-  so every file of such a project counted as test code and lost the 17
-  test-excluded rules. `excludedByRule()` now tests the path inside the
-  project root.
-
-- **What an audit exemption means for the project checks is defined
-  (BUG-059).** An exemption silences findings about a file and never
-  hides the file as evidence. The absence checks DEP-001 and WEB-002
-  keep reading exempt files (a health route or CSP header there still
-  counts); the presence check DEP-002 now leaves exempt files out, so an
-  allowlisted `.env` is not reported. Tested and documented in manual
-  chapter 06.
-
-- **Only a marker comment exempts a file (BUG-057).** Any occurrence of
-  `otlc-guardian:audit-exempt` in a file's first 4 KB used to exempt it,
-  including a string, a regex or a sentence about the marker. The marker
-  now counts only on its own comment line (`//`, `#`, `/*`, `*`, `<!--`,
-  `--`), as a whole word. A file that relied on a bare mention is audited
-  again; give it a real marker line or an allowlist entry.
-
-- **An allowlist entry with an empty reason is rejected (BUG-056).**
-  `src/a.js  # reason:` with nothing after the prefix used to exempt the
-  file, though SECURITY.md says entries without a reason are rejected.
-  `loadAllowlist()` now ignores the line and warns
-  `.audit-allowlist:N - reason is empty, line ignored`.
-
-- **Audit secret rules now cover every runtime secret format (BUG-054).**
-  The 1.5.0 runtime widening (BUG-026) had not reached the audit, so a
-  committed fine-grained GitHub token or an OpenSSH key passed
-  `guardian audit`. SEC-003 now matches every GitHub token form (`ghp_`,
-  `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), SEC-004 any PEM private
-  key header, and SEC-010 Anthropic OAuth and admin keys; SEC-011 is
-  length-bounded like the runtime rule. New rules: SEC-012 (Google API
-  key), SEC-013 (Slack token), SEC-014 (Stripe live key). The audit now
-  has 45 rules (37 pattern, 5 analyzer, 3 project). A test maps every
-  runtime `GUARD-SEC` id to its audit rule and fails when one is missing.
-
-- **An unreadable file no longer crashes the audit (BUG-055).** DEP-001's
-  check read every file with a bare `readFileSync`, so a file that
-  vanished or lost its read permission mid-scan threw out of `runAudit`.
-  It now reads through `readForCheck()`, which names the file and the
-  reason on stderr (stdout stays clean for `--json`) and counts the file
-  as having no text.
-
-- **Importing the audit module no longer runs an audit (BUG-053).** The
-  CLI block at the bottom of `security/03-audit.js` ran on every load, so
-  `import { runAudit } from "otlc-guardian/audit"` audited the importer's
-  directory and could exit its process. It now runs only when the file is
-  the program Node started, compared by real path so npm's bin symlink still
-  works.
-- **`init` installs a project's files, not Guardian's repo files
-  (BUG-060).** It copied Guardian's whole `.github/` folder, including a
-  `CODEOWNERS` that made Guardian's maintainer the owner of everything, and
-  Guardian's issue and PR templates; and it copied Guardian's own audit
-  allowlist, whose `bin/` and `tests/` entries exempted whatever a project
-  kept at those paths. `init` now adds only the audit workflow and
-  `secret_scanning.yml`, and writes a project allowlist with entries for the
-  `security/` modules it installs. An existing allowlist is never rewritten.
-  Projects set up earlier keep the copied files; SETUP.md lists them.
-- **An invalid settings file stops `init` and `update` before they write
-  (BUG-061).** Invalid JSON in `.claude/settings.json` was found only at step
-  6, after the behavior files, `.gitignore`, `.env.example` and `security/`
-  were written, and the run ended in a stack trace. A preflight now refuses
-  invalid JSON and valid JSON that is not an object before any write, and a
-  later failure prints the reason and what to do instead of a stack trace.
-- **A bad audit argument no longer passes (BUG-051).** A path that did not
-  exist scanned 0 files and exited 0, even with `--fail-on-error`, and an
-  unknown flag was ignored, so a CI typo turned the gate into a pass. An
-  unknown flag, a second path or a missing path is now a usage error (exit
-  2, message on stderr, nothing scanned). `--help` prints usage. `guardian
-  audit` passes the code through and treats a child killed by a signal as a
-  failure.
-- **`guardian check` fails on a broken or unregistered hook (BUG-062).** A
-  failed hook smoke test was a warning and `check` still printed "correctly
-  installed" and exited 0, and nothing read `.claude/settings.json`, so the
-  CI gate could not fail on a hook that protects nothing. A failed smoke test
-  (including the hook's own fail-open exit) is now a failure, and a new
-  registration check requires both hooks in `settings.json` or
-  `settings.local.json` on matchers that cover `Write` and `WebFetch`.
-  Invalid JSON and `disableAllHooks` fail too.
-- **`guardian check` fails on a settings value Claude Code rejects
-  (BUG-073).** Claude Code loads nothing from a settings file in which a
-  known key has the wrong type, hooks included, and `check` tested only
-  `disableAllHooks === true`, so `"disableAllHooks": "true"` or a hook
-  `"timeout": "1"` passed. `check` now reads every known key with the
-  staged hook's type tables, names each wrong value and its place
-  (`"hooks.PreToolUse[0].hooks[0].timeout"`), and counts nothing from
-  that file as registered. A parity test keeps the two copies of the
-  tables the same.
-- **The hook no longer fails open in CommonJS projects (BUG-063, first half).**
-  The scanner is an ES module with a `.js` extension, so in a project whose
-  `package.json` says `"type": "commonjs"` (npm 11's `npm init -y` default)
-  the hook could not load it and let every write through unscanned. A new
-  `security/package.json` with `"type": "module"` pins the folder; `init`
-  installs it, `update` restores it, `check` requires it, and `init` warns
-  when an existing one says otherwise. The hook does not protect that file
-  yet.
-- **Partial scans gave wrong project-level answers (BUG-041).** Reported by
-  DevNeural: auditing `07-daemon/src/capture/hooks` reported DEP-001 though
-  the project serves a health route in another folder. Project checks
-  answered from the scanned subtree only. Checks that prove an absence
-  across the project (DEP-001, WEB-002) now read the project root's files
-  on a partial scan, and their finding names the project root; DEP-002, a
-  presence check, still reads the scanned files. A single file given as
-  the target used to scan nothing at all; it is now audited.
-- **Docs that disagreed with the code (review finding 15).** The audit
-  rule breakdown is now the audit's own header (34 pattern, 5 analyzer,
-  3 project; 42 in all) in README.md and the skill, which still said 33.
-  SECURITY.md said 9 secret patterns; there are 16. SETUP.md listed the
-  PreToolUse hook as Write/Edit only, and README.md and SETUP.md gave the
-  web hook's matcher without the MCP tool names it registers.
-- **`guardian update` did nothing for an existing install (BUG-025).** It
-  was an alias for `init`, which never overwrites a file, so no fix ever
-  reached a project that already had Guardian. `update` now replaces
-  Guardian-owned files (`security/*`, `.claude/hooks/*`) and the marker
-  sections of the behavior files, and moves Guardian's hook registration
-  to the current matcher. `security/.audit-allowlist`, `.github/` and
-  everything outside the markers are left alone.
-- The Edit branch scanned `old_string`, so removing a bad line was flagged.
-  Only added content is scanned now.
-- Project root comes from `CLAUDE_PROJECT_DIR`, then the payload `cwd`,
-  then `process.cwd()`.
-- An empty string in `ignorePaths` matched every path and turned the hook
-  off. Empty entries are skipped.
-- The in-memory rate limiter never evicted keys. Expired windows are swept
-  once the map passes `RATE_LIMIT_SWEEP_THRESHOLD` (default 10000).
-- `security/.audit-allowlist` claimed CI fails when the allowlist grows.
-  CI only prints the count; the comment now says so.
 
 ### Changed (behavior you will notice)
 

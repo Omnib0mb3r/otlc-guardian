@@ -735,7 +735,8 @@ function runCheck() {
     },
     {
       // Pins security/*.js to ES modules. Without it, a "type": "commonjs"
-      // project cannot load the scanner and the hook fails open (BUG-063).
+      // project cannot load the scanner, and the hook then blocks file writes
+      // and shell commands until it can (BUG-063; re-probe 7, H10).
       label: "security/package.json (ES module pin for the scanner)",
       path: path.join(CWD, "security", "package.json"),
       required: true,

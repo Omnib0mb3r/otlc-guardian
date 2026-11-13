@@ -282,8 +282,8 @@ on lower severities. It compares the write with the file on disk, so
 patterns a file already quotes (Guardian's own CLAUDE.md section does)
 do not block a rewrite; a new copy of one does. The PostToolUse hook runs after the fetch, so
 it can only warn. If a hook itself fails, the tool call is not blocked,
-but the failure is printed and reported as a hook error. Staged, not yet live
-(re-probe 7, H10): without its scanner (`security/01-injection-guard.js`) or its
+but the failure is printed and reported as a hook error. One failure does
+block (re-probe 7, H10): without its scanner (`security/01-injection-guard.js`) or its
 settings reader (`security/claude-settings.js`) the PreToolUse hook blocks file
 writes and shell commands until `guardian update` has put the file back. Both are wired up
 automatically by `guardian init` and registered in `.claude/settings.json`.
@@ -309,7 +309,7 @@ Claude session as instructions, memory, or research:
 
 ### Hook 2: `web-content-guard.mjs` (PostToolUse on WebFetch, WebSearch and the web MCP servers)
 
-Registered on `^(?:WebFetch|WebSearch|mcp__(?:firecrawl|exa|claude-in-chrome|chrome-devtools|playwright|car-browser|context7)__.*)$`: WebFetch, WebSearch, and every tool of the firecrawl, exa, claude-in-chrome, chrome-devtools, playwright, car-browser and context7 MCP servers. The hook script scanning those servers by prefix is staged in `staging/`, not yet live; until it is applied, the live script scans only WebFetch, WebSearch, `mcp__firecrawl__crawl` and `mcp__exa__search` (BUG-036).
+Registered on `^(?:WebFetch|WebSearch|mcp__(?:firecrawl|exa|claude-in-chrome|chrome-devtools|playwright|car-browser|context7)__.*)$`: WebFetch, WebSearch, and every tool of the firecrawl, exa, claude-in-chrome, chrome-devtools, playwright, car-browser and context7 MCP servers. The hook script scans those servers by name prefix (BUG-036).
 
 Fires every time Claude fetches a URL or runs a web search, and scans the
 returned content **before Claude reasons about it**. This is the entry
@@ -340,9 +340,8 @@ guard does not read it; its tool list is fixed in the script.
 - `watchPaths` - extra paths to scan (added to defaults)
 - `ignorePaths` - paths to exclude from scanning. Write each as a path
   from the project root (`docs/security-spec.md`, or `docs` for the
-  whole folder). The live hook still matches an entry anywhere in the path
-  (BUG-058, fix staged in staging/, not yet live); once applied, an entry
-  matches only that file or folder.
+  whole folder). An entry matches only that file or folder
+  (BUG-058).
 - `extendDefaults: false` - replace the default list entirely with your own
 
 ### Hook exemptions
