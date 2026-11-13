@@ -98,6 +98,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-084 | SMOKE-TESTING | Hook without `CLAUDE_PROJECT_DIR` takes the session folder as the project root: from `src/` the project's `.mcp.json` and Guardian's files one level up are not judged |
 | BUG-085 | SMOKE-TESTING | HIGH (staged hook): the shell reader drops text that bash runs (a `$(...)` in a heredoc, a `#` that is no comment, an escaped quote in `$'...'`), so a delete of Guardian's files behind it is silent |
 | BUG-086 | SMOKE-TESTING | Nothing checks a file that arrives in Lex's mailbox before DevNeural ingests it: `guardian inbound-check` (contract v1, eight checks) does not exist yet |
+| BUG-087 | OPEN | Live hook (after the 1.5.0 apply): false denies in bypass mode on shell commands that never spell a guarded name (`VAR=... npm run test:staging | grep`, a `sed -i` on CHANGELOG.md with a `for` loop, a Python heredoc) |
 
 <!-- INDEX END -->
 
@@ -2325,5 +2326,53 @@ Lex's rulings (2026-11-12 14:45Z): Node built-ins only; committed fixtures are G
 Smoke test, pending, Lex runs it with DevNeural: the mail daemon runs `inbound-check` on real mail in its own minimal environment (a clean attachment is released, a held one is reported with Guardian's reasons). RESOLVED when that has passed.
 
 Blocked (Lex, 2026-11-12): the smoke test cannot run until DevNeural builds the mail daemon. No caller of `inbound-check` exists yet; the daemon waits on DevNeural's INPUT-TAINT work, its BUG-662 and BUG-663, and the first-line gate. DevNeural's mailbox spec (`docs/spec/LEX-MAILBOX.md`, revision 7.2) cites Guardian `d46be67`. The status stays SMOKE-TESTING until then.
+
+### BUG-087: The live hook denies commands that never spell a guarded name
+
+**Status:** OPEN · **Found:** 2026-11-12
+
+Seen by the worker during `staging/APPLY.md` step 4, in the first session that ran under the applied hook (`1f7e068`), with permission prompts bypassed, so each ask was a deny. Each message was "This command names X, part of Guardian's own enforcement or settings, and is not a known read-only command". None of the three commands spells X. Not investigated (Lex, 2026-11-12): the cause is not known, and whether each is a false ask or an intended one is not decided. Each command began with `cd C:/dev/Projects/otlc-guardian &&`, and `S` or `$TEMP/claude/...` below is the session's scratchpad folder.
+
+1. Denied as naming `.claude`:
+
+   ```
+   GUARDIAN_TEST_HOOK_TIMEOUT_MS=90000 npm run test:staging 2>&1 | grep -E "Passed :|Failed :|Total  :|staged suites|passed, .* failed|FAIL" | tail -12
+   ```
+
+   The same command with `| tail -15` in place of the `grep` ran before the apply. After it, `env GUARDIAN_TEST_HOOK_TIMEOUT_MS=90000 node tests/staging.mjs > LOG 2>&1; echo "exit $?"` ran.
+
+2. Denied as naming `security`. One command, joined with `&&`:
+
+   ```
+   sed -i '360s/  half is staged\. /  half throws `GuardianError` (below). /; 444s/port; the Node scanner'"'"'s is staged (below)\./port and in the Node scanner (below)./; 1231s/ once `staging\/` is applied (commands/ (commands/' CHANGELOG.md
+   sed -n 360p CHANGELOG.md && sed -n 444p CHANGELOG.md && sed -n 1231p CHANGELOG.md
+   grep -n "BUG-063" bin/guardian.js | cut -c1-200
+   echo "--- index statuses"
+   sed -n '/INDEX START/,/INDEX END/p' BUGS.md | grep -o "^| BUG-[0-9]* | [A-Z-]*" | awk '{print $4}' | sort | uniq -c
+   for b in 027 036 038 (and 27 more numbers); do sed -n '/INDEX START/,/INDEX END/p' BUGS.md | grep -o "^| BUG-$b | [A-Z-]*"; done | awk '{printf "%s:%s  ", $2, $4}'; echo; grep -c "Staging commit: recorded" BUGS.md; grep -n "Staging commit" BUGS.md | head -5 | cut -c1-200
+   ```
+
+   No word of it is `security`. It holds a `for` loop, a variable inside a quoted pattern (`$b`), backticks inside single quotes, and the quote splice `'"'"'`.
+
+3. Denied as naming `.claude/settings.local.json`:
+
+   ```
+   S="$TEMP/claude/C--dev-Projects-otlc-guardian/<session id>/scratchpad" && python - "$S/s4c.py" <<'EOF'
+   import io, sys
+   p = sys.argv[1]
+   s = io.open(p, encoding="utf-8").read()
+   old = 'staged = s[a + len(head):b].strip("\\n")\n'
+   assert s.count(old) == 1
+   s = s.replace(old, old + 'staged = staged[staged.index("- **"):]\n')
+   io.open(p, "w", encoding="utf-8").write(s)
+   EOF
+   PYTHONIOENCODING=utf-8 python "$S/s4c.py" | cut -c1-200 && grep -n "^### " CHANGELOG.md | sed -n 1,8p && grep -n -i "not yet live\|until .\{0,30\}applied\|once .\{0,20\}applied\|is staged\|staged hook\|staged scanner\|staged file\|live hook" CHANGELOG.md | cut -c1-170 | head -40
+   ```
+
+   A similar Python heredoc that edited a scratch file ran earlier in the same session, before the apply.
+
+Also denied in that session, and correct by the hook's rule, since each spells a guarded file: `diff -q` of a staged hook against `.claude/hooks/...`, and `grep -n ... security/01-injection-guard.js` joined to other commands. They are here only so they are not counted with the three above.
+
+Cost: a worker in bypass mode cannot run the staged gate as `staging/APPLY.md` and the handovers spell it, and has to guess a spelling the hook lets through. Related: BUG-080 (false asks on folders that are not Guardian's) and the re-probe 13 gaps parked in `TODO.md`.
 
 <!-- DETAILS END -->

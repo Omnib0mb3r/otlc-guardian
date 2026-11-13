@@ -12,6 +12,7 @@ The 1.5.0 apply went live at 1f7e068 on re-probe 13's NOT CLEAR verdict, by Mich
 - [ ] Q6 MEDIUM: a download piped into inline code that writes a watched file (`curl URL | python3 -c ...`, `node -e`, `perl`). Decide: P1 class or the named inline-code limit.
 - [ ] Q7 scope: non-clone fetches as producers (`git subtree add --prefix=.claude/agents URL`, `git fetch URL && git checkout FETCH_HEAD -- CLAUDE.md`).
 - [ ] Q8 LOW docs: SECURITY.md and APPLY.md still list `curl -o "$(echo CLAUDE.md)" URL` as unseen; P2 now asks on it. The APPLY.md "Measured" paragraph is stale.
+- [ ] Manual, parked with these (Lex, 2026-11-12): fold the chapter 04 table "What the 1.5.0 apply changed" (`docs/manual/chapters/04-hooks.html`, `hk-staged`) into the chapter text, the settings-weakening table and the `commandWrites()` table, as `staging/APPLY.md` step 4.3 says, and rewrite from the code the passages in chapters 03, 04 and 06 that step 4 only reworded as "before the apply ... fixed". The manual is accurate as it stands (nothing claims a fix is not yet live); this is polish, about 75 KB of a 172 KB chapter.
 
 ## R&D AND PLAN ONLY: Self-Growing Gate spec (Michael 2026-11-10 00:09 EST, via DevNeural Lex)
 
