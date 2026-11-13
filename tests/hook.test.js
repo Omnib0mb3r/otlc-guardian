@@ -4568,15 +4568,18 @@ function guardedProject(dir) {
 
 /**
  * Runs one command in a fresh guardedProject().
- * @param {{ mode?: string, tool?: string, sub?: string }} [options] - the
- *   permission mode, the tool ("Bash" by default) and a folder under the
- *   root to run from
+ * @param {{ mode?: string, tool?: string, sub?: string, homeAbove?: boolean }} [options] - the
+ *   permission mode, the tool ("Bash" by default), a folder under the
+ *   root to run from, and whether the home folder is the folder that
+ *   holds the project. A test of `~` as a folder above the project sets
+ *   homeAbove: where the OS temp folder sits relative to the home folder
+ *   differs by machine (inside it on Windows, beside it on Linux; BUG-088).
  */
-function runGuarded(command, { mode, tool = "Bash", sub = "" } = {}) {
+function runGuarded(command, { mode, tool = "Bash", sub = "", homeAbove = false } = {}) {
   return withTempProject((dir) => {
     const root = guardedProject(dir);
     return runHook(PRE_HOOK, { tool_name: tool, cwd: path.join(root, sub), tool_input: { command }, ...(mode ? { permission_mode: mode } : {}) },
-      { CLAUDE_PROJECT_DIR: root });
+      { CLAUDE_PROJECT_DIR: root, ...(homeAbove ? { HOME: dir, USERPROFILE: dir } : {}) });
   });
 }
 
@@ -5334,7 +5337,7 @@ describe("PreToolUse hook - a path stuck to an option that names no write target
     "env -C.. npx rimraf .",
   ]) {
     test(`asks: ${command}`, () => {
-      const out = runGuarded(command);
+      const out = runGuarded(command, { homeAbove: command.includes("~") });
       assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
     });
   }
@@ -6821,7 +6824,7 @@ describe("PreToolUse hook - a folder above the project stuck to -P or -B (re-pro
     "npx some-tool -B../..",
   ]) {
     test(`asks: ${command}`, () => {
-      const out = runGuarded(command);
+      const out = runGuarded(command, { homeAbove: command.includes("~") });
       assert.equal(decisionOf(out), "ask", `${command} -> ${out.slice(0, 200) || "(silent)"}`);
     });
   }

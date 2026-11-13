@@ -1563,6 +1563,16 @@ project (each project picks it up when `guardian update` is run there).
   `"type": "commonjs"` or removes it asks (denied in bypass mode) instead
   of silently switching the scanner off.
 
+- **A cmd or PowerShell path with `..\` resolves the same on every host
+  (BUG-088).** The hook resolved such a path before it turned the
+  backslashes into forward slashes, so on Linux and macOS `..\..\notes`
+  never climbed and `cmd /c mklink /J .claude\agents\n ..\..\notes` asked
+  as a link to a missing target where Windows denied it for the payload
+  the link reaches. The path is now slashed first. Found by the first CI
+  run on Linux after the apply, with two tests of `~` that assumed the OS
+  temp folder sits inside the home folder; those tests now set the home
+  folder themselves.
+
 ### Changed (behavior you will notice)
 
 - A write that used to produce a warning can now be refused.
