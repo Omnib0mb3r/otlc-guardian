@@ -99,7 +99,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-085 | SMOKE-TESTING | HIGH (staged hook): the shell reader drops text that bash runs (a `$(...)` in a heredoc, a `#` that is no comment, an escaped quote in `$'...'`), so a delete of Guardian's files behind it is silent |
 | BUG-086 | SMOKE-TESTING | Nothing checks a file that arrives in Lex's mailbox before DevNeural ingests it: `guardian inbound-check` (contract v1, eight checks) does not exist yet |
 | BUG-087 | OPEN | Live hook (after the 1.5.0 apply): false denies in bypass mode on shell commands that never spell a guarded name (`VAR=... npm run test:staging | grep`, a `sed -i` on CHANGELOG.md with a `for` loop, a Python heredoc) |
-| BUG-088 | SMOKE-TESTING | CI on Linux (run 43353978682, `15d9b14`): `tests/hook.test.js` fails 3 of 3131 that pass on Windows (`npx rimraf -t~` and `wget -P~ URL` silent, a PowerShell `cmd /c mklink /J` asks where a deny is expected) |
+| BUG-088 | RESOLVED | CI on Linux (run 43353978682, `15d9b14`): `tests/hook.test.js` fails 3 of 3131 that pass on Windows (`npx rimraf -t~` and `wget -P~ URL` silent, a PowerShell `cmd /c mklink /J` asks where a deny is expected) |
 
 <!-- INDEX END -->
 
@@ -2378,7 +2378,7 @@ Cost: a worker in bypass mode cannot run the staged gate as `staging/APPLY.md` a
 
 ### BUG-088: Three hook tests fail on Linux CI
 
-**Status:** SMOKE-TESTING · **Found:** 2026-11-12
+**Status:** RESOLVED · **Found:** 2026-11-12 · **Fixed:** 2026-11-12
 
 Fix applied (2026-11-12): `ebabe41` (the test setup and the staged hook), promoted to the live hook by Lex in `a220755`. Smoke test: the CI run on pushed `main` goes green. Run 43357655887 on `a220755` passed.
 
