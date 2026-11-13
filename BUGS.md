@@ -99,6 +99,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-085 | SMOKE-TESTING | HIGH (staged hook): the shell reader drops text that bash runs (a `$(...)` in a heredoc, a `#` that is no comment, an escaped quote in `$'...'`), so a delete of Guardian's files behind it is silent |
 | BUG-086 | SMOKE-TESTING | Nothing checks a file that arrives in Lex's mailbox before DevNeural ingests it: `guardian inbound-check` (contract v1, eight checks) does not exist yet |
 | BUG-087 | OPEN | Live hook (after the 1.5.0 apply): false denies in bypass mode on shell commands that never spell a guarded name (`VAR=... npm run test:staging | grep`, a `sed -i` on CHANGELOG.md with a `for` loop, a Python heredoc) |
+| BUG-088 | IN-PROGRESS | CI on Linux (run 43353978682, `15d9b14`): `tests/hook.test.js` fails 3 of 3131 that pass on Windows (`npx rimraf -t~` and `wget -P~ URL` silent, a PowerShell `cmd /c mklink /J` asks where a deny is expected) |
 
 <!-- INDEX END -->
 
@@ -2374,5 +2375,22 @@ Seen by the worker during `staging/APPLY.md` step 4, in the first session that r
 Also denied in that session, and correct by the hook's rule, since each spells a guarded file: `diff -q` of a staged hook against `.claude/hooks/...`, and `grep -n ... security/01-injection-guard.js` joined to other commands. They are here only so they are not counted with the three above.
 
 Cost: a worker in bypass mode cannot run the staged gate as `staging/APPLY.md` and the handovers spell it, and has to guess a spelling the hook lets through. Related: BUG-080 (false asks on folders that are not Guardian's) and the re-probe 13 gaps parked in `TODO.md`.
+
+### BUG-088: Three hook tests fail on Linux CI
+
+**Status:** IN-PROGRESS · **Found:** 2026-11-12
+
+GitHub CI (Security Audit, run 43353978682, ubuntu) on pushed `main` at `15d9b14`: `tests/hook.test.js` 3128 passed, 3 failed of 3131. On Windows the suite passes (3146 of 3146). The first push since the 1.5.0 apply, so the first time these tests ran on Linux. Failing:
+
+- `asks: npx rimraf -t~`: silent.
+- `asks: wget -P~ https://example.test/a.tgz`: silent.
+- `denies (PowerShell): cmd /c mklink /J .claude\agents\n ..\..\notes`: an ask, where a deny is expected.
+
+Where the work stopped (2026-11-12, the session was cleared): the bug is logged and the three tests are located, `tests/hook.test.js` lines 5320, 6815 and 7695. Nothing is fixed and no file but this one is changed. The CI log was read only for the three verdicts. On Linux the mklink command got "This command copies, links, downloads or clones a folder or file into /tmp/gu...", an ask.
+
+Not verified, to check first:
+
+- The two `~` tests. The test project is made under the OS temp folder. On Windows that folder is inside the user profile, so `~` is a folder above the project and the folder-above rule asks. On the Linux runner the temp folder is `/tmp` and `HOME` is elsewhere, so `~` is not above the project and silence is the right answer. If so the tests assume where the temp folder is, and the hook is right: give those two tests a `HOME` that is a folder above the test project on every platform, so they test the rule and not the machine, with no platform skip.
+- The mklink test. Its neighbour `cmd /c mklink /D .claude\agents\n notes` passes on Linux; this one names its target as `..\..\notes`, relative to the link's folder, with backslashes. The deny needs the hook to read the files under that target. Check whether the hook resolves a backslash path relative to the link's folder with code that splits on `/` only off Windows. If so it is a hook gap in the cmd reader on a non-Windows host: fix it in the live hook (`.claude/hooks/injection-guard-hook.mjs`, which is the source now; the hook will refuse the worker's edit, so say so and stop), or, if cmd's path rules cannot be honoured off Windows by design, guard that one test by platform with the reason.
 
 <!-- DETAILS END -->
