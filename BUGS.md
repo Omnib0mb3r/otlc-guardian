@@ -98,7 +98,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-084 | SMOKE-TESTING | Hook without `CLAUDE_PROJECT_DIR` takes the session folder as the project root: from `src/` the project's `.mcp.json` and Guardian's files one level up are not judged |
 | BUG-085 | SMOKE-TESTING | HIGH (staged hook): the shell reader drops text that bash runs (a `$(...)` in a heredoc, a `#` that is no comment, an escaped quote in `$'...'`), so a delete of Guardian's files behind it is silent |
 | BUG-086 | SMOKE-TESTING | Nothing checks a file that arrives in Lex's mailbox before DevNeural ingests it: `guardian inbound-check` (contract v1, eight checks) does not exist yet |
-| BUG-087 | DEFERRED | Live hook (after the 1.5.0 apply): false denies in bypass mode on shell commands that never spell a guarded name (`VAR=... npm run test:staging | grep`, a `sed -i` on CHANGELOG.md with a `for` loop, a Python heredoc) |
+| BUG-087 | IN-PROGRESS | Live hook (after the 1.5.0 apply): false denies in bypass mode on shell commands that never spell a guarded name (`VAR=... npm run test:staging | grep`, a `sed -i` on CHANGELOG.md with a `for` loop, a Python heredoc) |
 | BUG-088 | RESOLVED | CI on Linux (run 43353978682, `15d9b14`): `tests/hook.test.js` fails 3 of 3131 that pass on Windows (`npx rimraf -t~` and `wget -P~ URL` silent, a PowerShell `cmd /c mklink /J` asks where a deny is expected) |
 
 <!-- INDEX END -->
@@ -2330,9 +2330,9 @@ Blocked (Lex, 2026-11-12): the smoke test cannot run until DevNeural builds the 
 
 ### BUG-087: The live hook denies commands that never spell a guarded name
 
-**Status:** DEFERRED · **Found:** 2026-11-12
+**Status:** IN-PROGRESS · **Found:** 2026-11-12
 
-Deferred (Lex, 2026-11-12): held for the weekly usage limit until 2026-11-17; investigation not started.
+Deferred (Lex, 2026-11-12): held for the weekly usage limit until 2026-11-17; investigation not started. Resumed (Lex, 2026-11-17): the hold is lifted; investigation started.
 
 Seen by the worker during `staging/APPLY.md` step 4, in the first session that ran under the applied hook (`1f7e068`), with permission prompts bypassed, so each ask was a deny. Each message was "This command names X, part of Guardian's own enforcement or settings, and is not a known read-only command". None of the three commands spells X. Not investigated (Lex, 2026-11-12): the cause is not known, and whether each is a false ask or an intended one is not decided. Each command began with `cd C:/dev/Projects/otlc-guardian &&`, and `S` or `$TEMP/claude/...` below is the session's scratchpad folder.
 
