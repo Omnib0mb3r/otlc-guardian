@@ -4165,16 +4165,63 @@ function expandedWords(toks, command) {
 }
 
 /**
- * Whether the word at `k` is the value of an option that takes one as
- * the next word (sort -k KEY, uniq -f N, uniq --skip-fields N), so the
- * program never reads it as an option.
+ * The words of a program's command that are certainly the value of an
+ * option, found by walking its arguments from the first, as getopt does
+ * (BUG-087, re-probe of 5d644e5): a short option on the program's list
+ * of valued letters takes the rest of its cluster or else the next word,
+ * whatever that word looks like (`sort -T -t X`: -t is -T's value, and X
+ * stands where an option can), and `--` ends the options. A long option
+ * without "=" may or may not take the next word: both readings are
+ * walked, and only a word that is a value in every reading counts. A
+ * letter not on the list leaves the rest unknown.
+ * @returns {Set<number>} the indexes into `words` (words[0] is the program)
  */
-function optionValueAt(name, words, k) {
+function optionValues(name, words) {
   const spec = READ_ONLY_OPTIONS[name];
-  const before = words[k - 1] ?? "";
-  if (!spec || words.slice(1, k).includes("--")) return false;
-  if (name === "uniq" && UNIQ_VALUED_LONG.test(before)) return true;
-  return /^-[A-Za-z]+$/.test(before) && spec.valued.has(before.at(-1)) && [...before.slice(1, -1)].every((letter) => spec.flags.has(letter));
+  if (!spec) return new Set();
+  const roles = words.map(() => new Set());
+  const seen = new Set();
+  const walk = (k, operandsOnly) => {
+    const key = `${k}:${operandsOnly}`;
+    if (k >= words.length || seen.has(key)) return;
+    seen.add(key);
+    const a = words[k];
+    if (operandsOnly || a === "-" || !/^[-+]/.test(a)) {
+      roles[k].add("operand");
+      walk(k + 1, operandsOnly || Boolean(spec.leading));
+    } else if (a === "--") {
+      roles[k].add("option");
+      walk(k + 1, true);
+    } else if (a.startsWith("--")) {
+      roles[k].add("option");
+      walk(k + 1, false);
+      const valued = name === "uniq" && UNIQ_VALUED_LONG.test(a);
+      if (!a.includes("=") && (valued || !/^--(?:help|version)$/.test(a))) {
+        if (k + 1 < words.length) roles[k + 1].add("value");
+        walk(k + 2, false);
+      }
+    } else {
+      roles[k].add("option");
+      if (a.startsWith("+") || (spec.digits && /^-\d+$/.test(a))) return walk(k + 1, false);
+      for (let j = 1; j < a.length; j++) {
+        const letter = a[j];
+        if (spec.valued.has(letter)) {
+          if (j + 1 < a.length) return walk(k + 1, false);
+          if (k + 1 < words.length) roles[k + 1].add("value");
+          return walk(k + 2, false);
+        }
+        if (!spec.flags.has(letter)) {
+          // Not on the list: it may take a value or not.
+          walk(k + 1, false);
+          if (k + 1 < words.length) roles[k + 1].add("value");
+          return walk(k + 2, false);
+        }
+      }
+      walk(k + 1, false);
+    }
+  };
+  walk(1, false);
+  return new Set(roles.flatMap((role, k) => (role.size === 1 && role.has("value") ? [k] : [])));
 }
 
 /** Whether a word has a brace group inside another, or braces that do not pair. */
@@ -4267,8 +4314,11 @@ function onlyReads(command, dialect, depth = 0, plainSink = null, outside = null
     // starts with a name stays, and is tested as an operand as spelled.
     if (parts.some((part) => part.unknown || part.glob)) {
       if (READERS_OF_ANY_WORD.has(name)) w = parts.filter((part) => !part.unknown && !part.wild).map((part) => part.word);
-      else if (parts.some((part, k) => (part.unknown && (part.split || !optionValueAt(name, w, k))) || part.wild ||
-        (part.glob && name === "uniq"))) return false;
+      else {
+        const values = optionValues(name, w);
+        if (parts.some((part, k) => (part.unknown && (part.split || !values.has(k))) || part.wild ||
+          (part.glob && name === "uniq"))) return false;
+      }
     }
     if (name === "git") return gitOnlyReads(w.slice(1));
     // A nested shell reads when the script it runs does.
@@ -4465,6 +4515,10 @@ function lexShell(text, dialect = "bash") {
       word = `${word ?? ""}${text.slice(i + 1, stop)}`;
       i = stop + 1;
     } else if (ch === '"') {
+      // $"...": bash's locale-translated string, which with no message
+      // catalog is the string itself, so the "$" is not part of the word
+      // (BUG-087: `sort $"-o"` hands sort -o).
+      if (d.ansiC && dollarAt === i - 1 && i > 0) word = word.slice(0, -1);
       word = word ?? "";
       i++;
       while (i < text.length && text[i] !== '"') {
