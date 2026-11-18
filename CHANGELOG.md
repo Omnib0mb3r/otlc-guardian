@@ -1573,6 +1573,30 @@ project (each project picks it up when `guardian update` is run there).
   temp folder sits inside the home folder; those tests now set the home
   folder themselves.
 
+- **A grep regex or a commit message is no longer read as a path glob,
+  and a `VAR=value` prefix reaches only its own command (BUG-087).** The
+  guarded-name check took every run of text holding `*`, `?` or `[` as a
+  glob, so in bypass mode `npm test | grep -E "passed, .* failed"` was
+  denied as naming `.claude` and `... | grep -o "[A-Z-]*"` as naming
+  `security`. A glob now counts where the bare word `security` does: in
+  the text `bareWordText()` leaves, so a stage that only reads at the end
+  of a pipeline, a message and a test run do not count, and a glob fed on
+  to another program still does (`ls -a | grep -x '.*' | xargs rm -rf`
+  asks). A spelled-out assignment in front of a command
+  (`GUARDIAN_TEST_HOOK_TIMEOUT_MS=90000 npm test | grep x`) took every
+  later stage's program as possibly replaced; it is now judged in its own
+  stage, which earns no exemption, and stays global only when it stands
+  alone, holds a variable or a substitution, or comes before a special
+  builtin. `cut`, and `uniq` with one operand at most (it writes the
+  second), are now read-only programs, so `npm test | grep x | sort |
+  uniq -c` is silent. Two shapes from the report stay denied as known
+  limits (Lex, 2026-11-18): a pipeline that ends in `awk` or a loop body,
+  because `awk` can run commands and write files and a loop's output is
+  not followed; and a glob inside inline code, because a string there can
+  be data or a shell command, and a `*` outside any string cannot be read
+  exactly as an operator without the language's own lexer (JavaScript's
+  `/` is division or a regex by context; Perl's `<*>` is a glob).
+
 ### Changed (behavior you will notice)
 
 - A write that used to produce a warning can now be refused.

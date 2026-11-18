@@ -7948,6 +7948,80 @@ describe("PreToolUse hook - a hook written after a cd into a folder git runs fil
 });
 
 // ---------------------------------------------------------------------------
+// BUG-087: a glob counts where the bare word does; a prefix taints one stage
+// ---------------------------------------------------------------------------
+//
+// The name check read every run of text holding *, ? or [ as a path glob,
+// so a grep regex (".*", "[A-Z-]*") or a commit message matched .claude or
+// security and the command was denied in bypass mode. The bare word was
+// already judged on the text bareWordText() leaves; a glob now is too. And
+// a VAR=value in front of a command took every later stage's program as
+// possibly replaced, though the value reaches that one command alone.
+
+describe("PreToolUse hook - a glob counts where the bare word does, and a prefix assignment taints its own stage (BUG-087)", () => {
+  // Each was denied in a bypass-mode session under the 1.5.0 hook.
+  for (const command of [
+    'GUARDIAN_TEST_HOOK_TIMEOUT_MS=90000 npm run test:staging 2>&1 | grep -E "Passed :|Failed :|Total  :|staged suites|passed, .* failed|FAIL" | tail -12',
+    'npm test | grep -E "passed, .* failed"',
+    'npm test | grep "s*" | tail -3',
+    'npm test 2>&1 | grep -c "[A-Z-]*"',
+    'git commit -m "fix: wildcard * in the parser"',
+    "GUARDIAN_TEST_HOOK_TIMEOUT_MS=90000 npm test | grep security",
+    "CHROME_PATH=/opt/chrome npm test && git commit -m security",
+    // cut and uniq read: a pipeline that ends in them is a reading suffix.
+    "npm test | grep security | sort | uniq -c",
+    "npm test 2>&1 | grep security | cut -c1-200",
+    "npm test | grep security | uniq -f 1 -s 2 --check-chars 3",
+    "npm test | grep security | cut -d , -f 1 --output-delimiter=: | uniq -",
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+
+  // A glob a program can act on, or one fed on to a program that is not
+  // known to only read, still names Guardian's files.
+  for (const [command, sub] of [
+    ["rm -rf .*", ""],
+    ["rm -rf *", ""],
+    ['npx rimraf "*"', ""],
+    ['npx rimraf ".c*"', ""],
+    ["ls -a | grep -x '.*' | xargs rm -rf", ""],
+    ['npm test | grep ".*" | xargs rm -rf', ""],
+    ['npm test | grep -e "$(rm -rf .c*)"', ""],
+    ['python - <<\'EOF\'\nimport glob, shutil\nfor p in glob.glob(".c*"): shutil.rmtree(p)\nEOF', ""],
+    // The prefixed stage itself: its program can run the value, from any folder.
+    ["X=1 npx rimraf security", ""],
+    ["X=1 npx rimraf security", "src"],
+    ["NODE_ENV=test GIT_EDITOR=./e.sh git commit -m security", ""],
+    ["X=/usr/bin/pytest security | cat", ""],
+    // The word after a prefix is still the command: eval can replace grep.
+    [`X=1 eval 'grep() { rm -rf "$1"; }'; npm test | grep security`, ""],
+    // An assignment that stays set, alone or before a special builtin, reaches what follows.
+    ["GIT_EDITOR=./e.sh; git commit -m security", ""],
+    ["BASH_ENV=./e.sh : ; git commit -m security", ""],
+    ["X=$(cat list) npm test | grep security", ""],
+    // uniq writes its second operand, an option's value apart.
+    ["npm test | grep security | uniq -f 1 - security/01-injection-guard.js", ""],
+    ["npm test | grep security | uniq -c --skip-fields 1 README.md .claude/settings.json", ""],
+    ["npm test | grep security | uniq -- - security/package.json", ""],
+    // Known limits (Lex, 2026-11-18). awk can run commands and write files,
+    // and a loop's data flow is not followed, so neither is a reader.
+    ["npm test | grep security | awk '{print $1}'", ""],
+    ["for b in 1 2; do grep -o \"[A-Z-]*\" README.md; done | sort", ""],
+    // Inline code: a string can be data or a shell command, and * outside
+    // a string is not read as an operator.
+    ["python - <<'EOF'\nx = \"- **\"\nEOF", ""],
+    ['python -c "print(2 * 3)"', ""],
+  ]) {
+    test(`asks${sub ? ` from ${sub}/` : ""}: ${command.split("\n")[0]}`, () => {
+      const out = runGuarded(command, { sub });
+      assert.ok(["ask", "deny"].includes(decisionOf(out)), out.slice(0, 200));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 
