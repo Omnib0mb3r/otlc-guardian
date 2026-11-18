@@ -4107,50 +4107,74 @@ function findOnlyReads(args, dialect, depth, outside = null) {
   return true;
 }
 
-/**
- * Whether every stage of a command is a known read-only command with no
- * redirect to a file. A command the reader left text out of without being
- * sure the shell does too (lexShell(), `uncertain`) is not known to.
- *
- * @param {((word: string) => boolean)|null} plainSink - redirect targets
- *   that still count as reading, for bareWordText(); none by default
- * @param {((spelled: string) => boolean)|null} outside - whether a path,
- *   as spelled, is absolute and outside the project (outsideProject());
- *   without it no program spelled with a path is known to only read
- */
+// The read-only programs no option can make write a file or run a
+// program, and whose every operand is a file or text they read. A word
+// whose content the reader cannot spell out (a substitution, a variable,
+// a glob, a brace form it does not expand) is harmless to them whatever
+// it becomes: reading a guarded file is not a write (BUG-087). Not here:
+// sort (-o), uniq (its second operand), less and more, rg (--pre), tree
+// (-o), file (-C), diff (-l runs pr), printf (-v), git, find and tee.
+const READERS_OF_ANY_WORD = new Set(["cat", "head", "tail", "grep", "egrep", "fgrep", "ls", "dir", "stat", "wc", "cut", "du", "df", "cmp",
+  "jq", "md5sum", "sha1sum", "sha256sum", "realpath", "readlink", "basename", "dirname", "type", "cd", "pushd", "popd", "pwd", "echo",
+  "test", "[", "true"]);
+// A variable or a substitution where bash expands it: $NAME, ${...}, $(...),
+// $1, $@ and the other specials, or a backtick.
+const EXPANSION = /\$[\w{(@*#?!$-]|`/;
+
 /**
  * A bash stage's words as bash hands them to the program (BUG-087,
- * re-probe of 551ed02): a brace list is expanded into its words, so
- * `sort {-o,x}` is `sort -o x` and `uniq {a,b}` has two operands. Null,
- * which is not known to only read, when a word cannot be spelled out: a
- * brace list with quotes in it or one expandBraces() does not expand
- * ({a..c}), and a glob that can match a word starting with - or +, which
- * the program takes as an option (a file named -o). `globbed` reports a
- * glob that can only stand for operands, of which there may be any number.
- * @returns {{ words: string[], globbed: boolean }|null}
+ * re-probes of 551ed02 and 1711c2b). A plain brace list is expanded into
+ * its words, so `sort {-o,x}` is `sort -o x` and `uniq {a,b}` has two
+ * operands. Every other word that bash changes is marked, for the caller
+ * to judge by program:
+ *   unknown  its content is not known: a variable or a substitution, or a
+ *            brace form expandBraces() does not fully handle (quotes,
+ *            escapes, nested groups, {a..c}), never expanded in part
+ *   split    bash can make it any number of words: the expansion is not
+ *            inside double quotes, or it is such a brace form
+ *   glob     a glob, standing for the names it matches
+ *   wild     a glob that can match a word starting with - or +, which a
+ *            program takes as an option (a file named -o)
+ * @returns {Array<{ word: string, unknown?: boolean, split?: boolean, glob?: boolean, wild?: boolean, braced?: boolean }>}
  */
 function expandedWords(toks, command) {
-  const words = [];
-  let globbed = false;
+  const parts = [];
   for (const tok of toks) {
     const raw = command.slice(tok.start, tok.end);
     const bare = quotesOut(raw);
+    if (EXPANSION.test(singleQuotesOut(raw))) {
+      parts.push({ word: tok.word, unknown: true, split: EXPANSION.test(bare) });
+      continue;
+    }
     const braced = BRACE_LIST.test(bare);
-    // Only a plain list is expanded here: quotes, escapes, variables,
-    // substitutions and nested groups ({a,{b,c}}) are not spelled out.
-    if (braced && (bare !== raw || /[\\$`]/.test(raw) || nestedBraces(raw))) return null;
+    if (braced && (bare !== raw || raw.includes("\\") || nestedBraces(raw))) {
+      parts.push({ word: tok.word, unknown: true, split: true, braced: true });
+      continue;
+    }
     const each = braced ? expandBraces(tok.word).split(/\s+/).filter(Boolean) : [tok.word];
+    if (each.some((word) => BRACE_LIST.test(word))) {
+      parts.push({ word: tok.word, unknown: true, split: true, braced: true });
+      continue;
+    }
     for (const word of each) {
-      if (braced && BRACE_LIST.test(word)) return null;
       const glob = (braced ? /[*?[]/.test(word) : /[*?[]/.test(bare)) && bare !== "[" && bare !== "[[";
-      if (glob) {
-        if (/^[-+*?[]/.test(word)) return null;
-        globbed = true;
-      }
-      words.push(word);
+      parts.push({ word, glob, wild: glob && /^[-+*?[]/.test(word), braced });
     }
   }
-  return { words, globbed };
+  return parts;
+}
+
+/**
+ * Whether the word at `k` is the value of an option that takes one as
+ * the next word (sort -k KEY, uniq -f N, uniq --skip-fields N), so the
+ * program never reads it as an option.
+ */
+function optionValueAt(name, words, k) {
+  const spec = READ_ONLY_OPTIONS[name];
+  const before = words[k - 1] ?? "";
+  if (!spec || words.slice(1, k).includes("--")) return false;
+  if (name === "uniq" && UNIQ_VALUED_LONG.test(before)) return true;
+  return /^-[A-Za-z]+$/.test(before) && spec.valued.has(before.at(-1)) && [...before.slice(1, -1)].every((letter) => spec.flags.has(letter));
 }
 
 /** Whether a word has a brace group inside another, or braces that do not pair. */
@@ -4163,6 +4187,17 @@ function nestedBraces(word) {
   return depth !== 0;
 }
 
+/**
+ * Whether every stage of a command is a known read-only command with no
+ * redirect to a file. A command the reader left text out of without being
+ * sure the shell does too (lexShell(), `uncertain`) is not known to.
+ *
+ * @param {((word: string) => boolean)|null} plainSink - redirect targets
+ *   that still count as reading, for bareWordText(); none by default
+ * @param {((spelled: string) => boolean)|null} outside - whether a path,
+ *   as spelled, is absolute and outside the project (outsideProject());
+ *   without it no program spelled with a path is known to only read
+ */
 function onlyReads(command, dialect, depth = 0, plainSink = null, outside = null) {
   if (depth > MAX_SHELL_DEPTH) return false;
   const { tokens, subs, uncertain } = lexShell(command, dialect);
@@ -4183,9 +4218,10 @@ function onlyReads(command, dialect, depth = 0, plainSink = null, outside = null
       if (toks === null) return false;
       if (toks.length === 0) return true;
     }
-    const expanded = dialect === "bash" ? expandedWords(toks, command) : { words: toks.map((tok) => tok.word), globbed: false };
-    if (expanded === null) return false;
-    const w = expanded.words;
+    const parts = dialect === "bash" ? expandedWords(toks, command) : toks.map((tok) => ({ word: tok.word }));
+    // The program is the one its name says only when the name is spelled out.
+    if (parts[0].unknown || parts[0].glob || parts[0].braced) return false;
+    let w = parts.map((part) => part.word);
     // What follows a PowerShell ( ) carries the expression on: an
     // operator and its operands (-match "x", -replace "a","b"), or a
     // property of the value (.Count, .Length -gt 0). It only reads when
@@ -4222,9 +4258,18 @@ function onlyReads(command, dialect, depth = 0, plainSink = null, outside = null
     // bin/cat are files of the project (re-probe 7, H6).
     if (/[\\/]/.test(w[0]) && !outside?.(w[0])) return false;
     const name = commandName(w[0]);
-    // A glob stands for any number of operands: uniq writes its second,
-    // and a program whose operands are tested cannot have them tested.
-    if (expanded.globbed && (name === "uniq" || READ_ONLY_OPTIONS[name]?.operand)) return false;
+    // A word bash changes (expandedWords()). A program no word can make
+    // write is judged on the words that are spelled out. Any other one
+    // does not only read when such a word can become an option or extra
+    // operands: an expansion outside double quotes, any expansion that is
+    // not an option's value, a glob that can start with - or +, and any
+    // glob given to uniq, which writes its second operand. A glob that
+    // starts with a name stays, and is tested as an operand as spelled.
+    if (parts.some((part) => part.unknown || part.glob)) {
+      if (READERS_OF_ANY_WORD.has(name)) w = parts.filter((part) => !part.unknown && !part.wild).map((part) => part.word);
+      else if (parts.some((part, k) => (part.unknown && (part.split || !optionValueAt(name, w, k))) || part.wild ||
+        (part.glob && name === "uniq"))) return false;
+    }
     if (name === "git") return gitOnlyReads(w.slice(1));
     // A nested shell reads when the script it runs does.
     if (SHELLS.has(name)) return w[1] === "-c" && w.length === 3 && onlyReads(w[2], "bash", depth + 1, null, outside);

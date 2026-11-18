@@ -1607,7 +1607,18 @@ project (each project picks it up when `guardian update` is run there).
   glob that can match a word starting with `-` or `+` is not read-only,
   and nor is any glob given to `uniq`. This also closes
   `sort {-o,.claude/settings.json} README.md`, which the hook let through
-  before BUG-087 as well.
+  before BUG-087 as well. Lex's second re-probe found the same gap for a
+  variable or a command substitution, whose words and content are not
+  known (`uniq $(echo README.md .claude/settings.json)`, `sort $(echo -o)
+  .claude/settings.json README.md`, `sort ${O:--o} ...`), and false asks
+  from failing closed on every program (`cat .claude/settings.json *.md`,
+  `ls * .claude`, `cat README{1..3}.md ...`). A word the reader cannot
+  spell out is now judged by program: a reader whose options never write
+  and whose operands are all read (`cat`, `grep`, `ls`, `head` and the
+  rest of `READERS_OF_ANY_WORD`) reads whatever it becomes; any other
+  program (`sort`, `uniq`, `less`, `rg`, `git`, `find`, `tee`) does not
+  only read when such a word can turn into an option or extra operands,
+  unless it is the value of an option (`sort -t "$SEP"`).
 
 ### Changed (behavior you will notice)
 

@@ -8064,14 +8064,31 @@ describe("PreToolUse hook - a read-only program is judged on its words after bra
     "echo x | tee {logs/a,.claude/settings.json}",
     // A glob that can match a word starting with - or + (a file named -o).
     "sort * .claude/settings.json",
-    "grep -rn x [-a-z]* .claude/settings.json",
+    "sort [-a-z]* .claude/settings.json",
     // A brace form expandBraces() does not spell out fails closed.
     "uniq {README.md,{a,.claude/settings.json}}",
     "sort {-o,.claude/{settings.json,x}} README.md",
     "sort {-o,.claude/settings.json\\,x} README.md",
     "sort {-o,'.claude/settings.json'} README.md",
     "uniq {a..b} .claude/settings.json",
-    "cat {README.md,$X} .claude/settings.json",
+    "sort {README.md,$X} .claude/settings.json",
+    // Re-probe of 1711c2b: a variable or a substitution is of unknown
+    // number and content, so it can be extra operands or an option.
+    "uniq $(echo README.md .claude/settings.json)",
+    "uniq -c $(echo README.md .claude/settings.json)",
+    "uniq `echo README.md .claude/settings.json`",
+    "uniq $(printf '%s ' README.md .claude/settings.json)",
+    "sort $(echo -o) .claude/settings.json README.md",
+    "sort `echo -o` .claude/settings.json README.md",
+    "sort ${O:--o} .claude/settings.json README.md",
+    // Inside double quotes it is one word, which can still be an option.
+    'sort "$(echo -o)" .claude/settings.json README.md',
+    'sort "$O" .claude/settings.json README.md',
+    'sort -- "$O" .claude/settings.json',
+    'uniq "$A" .claude/settings.json',
+    "less $L .claude/settings.json",
+    "git diff $(echo --output=x) -- .claude/settings.json",
+    "find .claude $(echo -delete)",
   ]) {
     stagedOnly(`asks: ${command}`, () => {
       const out = runGuarded(command);
@@ -8090,6 +8107,21 @@ describe("PreToolUse hook - a read-only program is judged on its words after bra
     "ls .claude/* security/*",
     "uniq -c .claude/settings.json",
     'GUARDIAN_TEST_HOOK_TIMEOUT_MS=90000 npm run test:staging 2>&1 | grep -E "Passed :|Failed :|Total  :|staged suites|passed, .* failed|FAIL" | tail -12',
+    // Re-probe of 1711c2b: false asks. A program no word can make write
+    // reads whatever an expansion becomes.
+    "cat .claude/settings.json *.md",
+    "ls * .claude",
+    "cat README{1..3}.md .claude/settings.json",
+    'cat {README.md,".claude/settings.json"}',
+    "sort .c*/settings.json",
+    "cat {README.md,$X} .claude/settings.json",
+    "grep -rn x [-a-z]* .claude/settings.json",
+    'grep -n "$PAT" .claude/settings.json',
+    "cat $(echo README.md) .claude/settings.json",
+    // An expansion that is an option's value is never read as an option.
+    'sort -t "$SEP" -k 2 .claude/settings.json',
+    'head -n "$N" .claude/settings.json',
+    'uniq -f "$F" .claude/settings.json',
   ]) {
     stagedOnly(`silent: ${command}`, () => {
       expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
