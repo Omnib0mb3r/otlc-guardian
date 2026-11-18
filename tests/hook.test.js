@@ -58,7 +58,18 @@ let passed = 0;
 let failed = 0;
 const failures = [];
 
+// GUARDIAN_TEST_ONLY names a file with one test name per line (a name's
+// first line): only those run, for a rerun of the tests a loaded machine
+// failed to start a hook for (0xC0000142; BUG-077).
+const ONLY = process.env.GUARDIAN_TEST_ONLY
+  ? new Set(readFileSync(process.env.GUARDIAN_TEST_ONLY, "utf8").split(/\r?\n/).filter(Boolean))
+  : null;
+let filtered = 0;
 function test(name, fn) {
+  if (ONLY && !ONLY.has(name.split("\n")[0])) {
+    filtered++;
+    return;
+  }
   try {
     fn();
     console.log(`  ✅ ${name}`);
@@ -8022,6 +8033,71 @@ describe("PreToolUse hook - a glob counts where the bare word does, and a prefix
 });
 
 // ---------------------------------------------------------------------------
+// BUG-087, re-probe of 551ed02: words are judged as bash hands them over
+// ---------------------------------------------------------------------------
+//
+// onlyReads() checked a read-only program's options and operands as typed,
+// and bash expands a brace list into more words: `sort {-o,x}` is `sort -o
+// x`, and `uniq {a,b}` writes b. The re-probe overwrote a file with each.
+
+describe("PreToolUse hook - a read-only program is judged on its words after brace and glob expansion (BUG-087 re-probe)", () => {
+  for (const command of [
+    // The re-probe's forms: old hook asked on the first five, new was silent.
+    "uniq {README.md,.claude/settings.json}",
+    "uniq -c {README.md,.claude/settings.json}",
+    "uniq {README.md,.c*/settings.json}",
+    "npm test | sort {-o,.c*/settings.json}",
+    "npm test | grep x | sort {-o,.c*/settings.json}",
+    // Silent in both hooks before this fix.
+    "sort {-o,.claude/settings.json} README.md",
+    // The same shape on the other programs the read-only list trusts.
+    "sort {--output=.claude/settings.json,README.md}",
+    "uniq .c*/settings.json",
+    "rg {--pre,./x.sh} foo .claude/settings.json",
+    "less {-o,.claude/settings.json} README.md",
+    "less +{x,y} .claude/settings.json",
+    "tree {-o,.claude/settings.json}",
+    "file {-C,-m} .claude/settings.json",
+    "git diff {--output=.claude/settings.json,HEAD}",
+    "git log {--ext-diff,-p} -- .claude/settings.json",
+    "find .claude {-delete,-print}",
+    "echo x | tee {logs/a,.claude/settings.json}",
+    // A glob that can match a word starting with - or + (a file named -o).
+    "sort * .claude/settings.json",
+    "grep -rn x [-a-z]* .claude/settings.json",
+    // A brace form expandBraces() does not spell out fails closed.
+    "uniq {README.md,{a,.claude/settings.json}}",
+    "sort {-o,.claude/{settings.json,x}} README.md",
+    "sort {-o,.claude/settings.json\\,x} README.md",
+    "sort {-o,'.claude/settings.json'} README.md",
+    "uniq {a..b} .claude/settings.json",
+    "cat {README.md,$X} .claude/settings.json",
+  ]) {
+    stagedOnly(`asks: ${command}`, () => {
+      const out = runGuarded(command);
+      assert.ok(["ask", "deny"].includes(decisionOf(out)), out.slice(0, 200));
+    });
+  }
+
+  // Truly read-only after expansion: every word is an operand it reads.
+  for (const command of [
+    "cut -c1 {README.md,.claude/settings.json} > /dev/null",
+    "cat {README.md,.claude/settings.json}",
+    "head -5 {README.md,.claude/settings.json}",
+    "grep -n hooks {README.md,.claude/settings.json}",
+    "wc -l .claude/{settings.json,hooks/injection-guard-hook.mjs}",
+    "grep -n x security/*.js .claude/settings.json",
+    "ls .claude/* security/*",
+    "uniq -c .claude/settings.json",
+    'GUARDIAN_TEST_HOOK_TIMEOUT_MS=90000 npm run test:staging 2>&1 | grep -E "Passed :|Failed :|Total  :|staged suites|passed, .* failed|FAIL" | tail -12',
+  ]) {
+    stagedOnly(`silent: ${command}`, () => {
+      expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // RESULTS
 // ---------------------------------------------------------------------------
 
@@ -8030,6 +8106,7 @@ console.log(`🔍 [OTLC GUARDIAN] hook.test.js RESULTS`);
 console.log(`   Passed : ${passed}`);
 console.log(`   Failed : ${failed}`);
 if (skipped > 0) console.log(`   Skipped: ${skipped} (fixed in staging only, not yet live)`);
+if (ONLY) console.log(`   Filtered: ${filtered} (not in GUARDIAN_TEST_ONLY)`);
 console.log(`   Total  : ${passed + failed}`);
 
 if (failures.length > 0) {

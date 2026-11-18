@@ -4118,6 +4118,51 @@ function findOnlyReads(args, dialect, depth, outside = null) {
  *   as spelled, is absolute and outside the project (outsideProject());
  *   without it no program spelled with a path is known to only read
  */
+/**
+ * A bash stage's words as bash hands them to the program (BUG-087,
+ * re-probe of 551ed02): a brace list is expanded into its words, so
+ * `sort {-o,x}` is `sort -o x` and `uniq {a,b}` has two operands. Null,
+ * which is not known to only read, when a word cannot be spelled out: a
+ * brace list with quotes in it or one expandBraces() does not expand
+ * ({a..c}), and a glob that can match a word starting with - or +, which
+ * the program takes as an option (a file named -o). `globbed` reports a
+ * glob that can only stand for operands, of which there may be any number.
+ * @returns {{ words: string[], globbed: boolean }|null}
+ */
+function expandedWords(toks, command) {
+  const words = [];
+  let globbed = false;
+  for (const tok of toks) {
+    const raw = command.slice(tok.start, tok.end);
+    const bare = quotesOut(raw);
+    const braced = BRACE_LIST.test(bare);
+    // Only a plain list is expanded here: quotes, escapes, variables,
+    // substitutions and nested groups ({a,{b,c}}) are not spelled out.
+    if (braced && (bare !== raw || /[\\$`]/.test(raw) || nestedBraces(raw))) return null;
+    const each = braced ? expandBraces(tok.word).split(/\s+/).filter(Boolean) : [tok.word];
+    for (const word of each) {
+      if (braced && BRACE_LIST.test(word)) return null;
+      const glob = (braced ? /[*?[]/.test(word) : /[*?[]/.test(bare)) && bare !== "[" && bare !== "[[";
+      if (glob) {
+        if (/^[-+*?[]/.test(word)) return null;
+        globbed = true;
+      }
+      words.push(word);
+    }
+  }
+  return { words, globbed };
+}
+
+/** Whether a word has a brace group inside another, or braces that do not pair. */
+function nestedBraces(word) {
+  let depth = 0;
+  for (const ch of word) {
+    if (ch === "{" && ++depth > 1) return true;
+    if (ch === "}" && --depth < 0) return true;
+  }
+  return depth !== 0;
+}
+
 function onlyReads(command, dialect, depth = 0, plainSink = null, outside = null) {
   if (depth > MAX_SHELL_DEPTH) return false;
   const { tokens, subs, uncertain } = lexShell(command, dialect);
@@ -4138,7 +4183,9 @@ function onlyReads(command, dialect, depth = 0, plainSink = null, outside = null
       if (toks === null) return false;
       if (toks.length === 0) return true;
     }
-    const w = toks.map((tok) => tok.word);
+    const expanded = dialect === "bash" ? expandedWords(toks, command) : { words: toks.map((tok) => tok.word), globbed: false };
+    if (expanded === null) return false;
+    const w = expanded.words;
     // What follows a PowerShell ( ) carries the expression on: an
     // operator and its operands (-match "x", -replace "a","b"), or a
     // property of the value (.Count, .Length -gt 0). It only reads when
@@ -4175,6 +4222,9 @@ function onlyReads(command, dialect, depth = 0, plainSink = null, outside = null
     // bin/cat are files of the project (re-probe 7, H6).
     if (/[\\/]/.test(w[0]) && !outside?.(w[0])) return false;
     const name = commandName(w[0]);
+    // A glob stands for any number of operands: uniq writes its second,
+    // and a program whose operands are tested cannot have them tested.
+    if (expanded.globbed && (name === "uniq" || READ_ONLY_OPTIONS[name]?.operand)) return false;
     if (name === "git") return gitOnlyReads(w.slice(1));
     // A nested shell reads when the script it runs does.
     if (SHELLS.has(name)) return w[1] === "-c" && w.length === 3 && onlyReads(w[2], "bash", depth + 1, null, outside);

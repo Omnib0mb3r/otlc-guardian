@@ -1596,6 +1596,18 @@ project (each project picks it up when `guardian update` is run there).
   be data or a shell command, and a `*` outside any string cannot be read
   exactly as an operator without the language's own lexer (JavaScript's
   `/` is division or a regex by context; Perl's `<*>` is a glob).
+  Lex's re-probe of the first version found five commands that overwrote
+  a file in bash and went silent: `uniq {README.md,.claude/settings.json}`
+  (bash hands `uniq` two operands, and it writes the second) and `npm test
+  | sort {-o,.c*/settings.json}` (bash hands `sort` its `-o`). The
+  read-only check read a program's options and operands as typed. It now
+  reads them as bash hands them over (`expandedWords()`): a plain brace
+  list is expanded, and any brace form that cannot be spelled out exactly
+  (nested, a sequence, quotes, escapes, a variable) is not read-only; a
+  glob that can match a word starting with `-` or `+` is not read-only,
+  and nor is any glob given to `uniq`. This also closes
+  `sort {-o,.claude/settings.json} README.md`, which the hook let through
+  before BUG-087 as well.
 
 ### Changed (behavior you will notice)
 
