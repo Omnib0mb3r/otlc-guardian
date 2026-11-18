@@ -2378,6 +2378,20 @@ Also denied in that session, and correct by the hook's rule, since each spells a
 
 Cost: a worker in bypass mode cannot run the staged gate as `staging/APPLY.md` and the handovers spell it, and has to guess a spelling the hook lets through. Related: BUG-080 (false asks on folders that are not Guardian's) and the re-probe 13 gaps parked in `TODO.md`.
 
+Investigated (worker, 2026-11-18). All three reproduced on the staged hook (the same blob as the live one) with the commands above, in bypass mode with `CLAUDE_PROJECT_DIR` set to this repo. Root cause, proven by cutting each command down:
+
+1. `guardedNameIn()` read every run of text holding `*`, `?` or `[` as a path glob, from every folder the command can be in, in every view of the raw text. The bare word `security` was judged on the text `bareWordText()` leaves, which blanks a stage that only reads at the end of a pipeline, a message and a test run; globs were not. Case 1: the grep regex `.*` matched `.claude`. Case 2: `[A-Z-]*` matched `security`. Case 3: the Python string `"- **"` matched `.claude/settings.local.json`. `git commit -m "x *"` and `python -c "print(2 * 3)"` were denied the same way.
+2. A `VAR=value` in front of a command (case 1's `GUARDIAN_TEST_HOOK_TIMEOUT_MS=90000 npm ...`) set `replacedFrom` in `plainCommand()`, so no stage after it earned an exemption, though the value reaches that one command alone. `GUARDIAN_TEST_HOOK_TIMEOUT_MS=90000 npm test | grep security` was denied on the bare word.
+
+Fix (staging, approved by Lex 2026-11-18): (A) the glob check runs on the text `bareWordText()` leaves; (B) a spelled-out prefix before a command that is not a special builtin is reported in `prefixed`, its own stage earns no exemption and is `unplaced`, and the word after it is still judged as the command; (C, Lex's option) `cut`, and `uniq` with one operand at most, are read-only programs (`uniqOperands()`). Case 1 is silent. Every guard still asks: `rm -rf .*`, `npx rimraf "*"`, `ls -a | grep -x '.*' | xargs rm -rf`, a substitution in a grep pattern, `glob.glob(".c*")` in a heredoc, `X=1 npx rimraf security` from `src/`, `X=/usr/bin/pytest security | cat`, `X=1 eval` defining `grep`, `GIT_EDITOR=x; git commit -m security`, `BASH_ENV=x : ;`, and `uniq` given a second operand.
+
+Known limits, by Lex's decision (2026-11-18), recorded in manual chapter 04 and CHANGELOG.md, and pinned by tests that expect an ask:
+
+- Case 2 stays denied. Its first pipeline ends in `awk`, and its second grep runs in a `for` loop. `awk` can run commands and write files, so it is not trusted as a reader, and a loop's output is not followed to where it goes, so a loop body is never plain.
+- Case 3 stays denied. A string in inline code can be data or a shell command (`s.index("- **")` against `os.system("rm -rf - **")`), and the text cannot tell which. A `*` outside any string (`print(2 * 3)`) is not read as an operator either, because that cannot be done exactly without each language's lexer: in JavaScript a `/` is division or the start of a regex by context, a Python 3.12 f-string can hold quotes of its own kind, and Perl's `<*>` is a glob outside any string.
+
+Staging commit: `551ed02` (2026-11-18). Staged suites: injection-guard 288/0, hook 3180/0. Live: hook 3169/0 with the 11 `stagedOnly()` tests skipped, injection-guard 288/0, init 93/0, agents-md 14/0, audit 407/0, sql-guard and inbound exit 0; self-audit clean, `guardian check` 18/0. Waits on Lex's re-probe and promotion to the live hook (`staging/APPLY.md`), then goes to SMOKE-TESTING. Smoke test: in a bypass-mode session under the applied hook, case 1 runs as written, cases 2 and 3 are still denied, and `ls -a | grep -x '.*' | xargs rm -rf` is still denied.
+
 ### BUG-088: Three hook tests fail on Linux CI
 
 **Status:** RESOLVED · **Found:** 2026-11-12 · **Fixed:** 2026-11-12
