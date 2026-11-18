@@ -98,7 +98,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-084 | SMOKE-TESTING | Hook without `CLAUDE_PROJECT_DIR` takes the session folder as the project root: from `src/` the project's `.mcp.json` and Guardian's files one level up are not judged |
 | BUG-085 | SMOKE-TESTING | HIGH (staged hook): the shell reader drops text that bash runs (a `$(...)` in a heredoc, a `#` that is no comment, an escaped quote in `$'...'`), so a delete of Guardian's files behind it is silent |
 | BUG-086 | SMOKE-TESTING | Nothing checks a file that arrives in Lex's mailbox before DevNeural ingests it: `guardian inbound-check` (contract v1, eight checks) does not exist yet |
-| BUG-087 | IN-PROGRESS | Live hook (after the 1.5.0 apply): false denies in bypass mode on shell commands that never spell a guarded name (`VAR=... npm run test:staging | grep`, a `sed -i` on CHANGELOG.md with a `for` loop, a Python heredoc) |
+| BUG-087 | SMOKE-TESTING | Live hook (after the 1.5.0 apply): false denies in bypass mode on shell commands that never spell a guarded name (`VAR=... npm run test:staging | grep`, a `sed -i` on CHANGELOG.md with a `for` loop, a Python heredoc) |
 | BUG-088 | RESOLVED | CI on Linux (run 43353978682, `15d9b14`): `tests/hook.test.js` fails 3 of 3131 that pass on Windows (`npx rimraf -t~` and `wget -P~ URL` silent, a PowerShell `cmd /c mklink /J` asks where a deny is expected) |
 
 <!-- INDEX END -->
@@ -2330,7 +2330,7 @@ Blocked (Lex, 2026-11-12): the smoke test cannot run until DevNeural builds the 
 
 ### BUG-087: The live hook denies commands that never spell a guarded name
 
-**Status:** IN-PROGRESS · **Found:** 2026-11-12
+**Status:** SMOKE-TESTING · **Found:** 2026-11-12
 
 Deferred (Lex, 2026-11-12): held for the weekly usage limit until 2026-11-17; investigation not started. Resumed (Lex, 2026-11-17): the hold is lifted; investigation started.
 
@@ -2418,6 +2418,18 @@ Fix: `optionValues(name, words)` replaces `optionValueAt()`. It walks the words 
 Known limit (Lex, 2026-11-18), not tested: `sort -T /tmp -t "$SEP" .claude/settings.json` asks, a false ask and pre-existing: `knownReadOptions()` reads `-T`'s separate value `/tmp` as an operand, and `sort`'s operand test refuses a one-segment `/x` word (a possible Windows `sort /o`).
 
 Staged suites on `cbe4d5d` with the new tests: injection-guard 288/0, hook 3251/0, no 0xC0000142. Live: hook 3169/0 with 82 `stagedOnly()` skipped, injection-guard 288/0, init 93/0, agents-md 14/0, audit 407/0, sql-guard and inbound exit 0; self-audit clean, `guardian check` clean. Waits on Lex's re-probe and promotion, then SMOKE-TESTING; the smoke test gains: `sort -T -t "$(echo -o)" .claude/settings.json README.md` and `sort $"-o" .claude/settings.json README.md` are denied.
+
+Re-probe of `f4a06f1` (Lex, 2026-11-18): CLEAR. No regressions across 228 variants; the A and B families ask, with their writes proven on a fixture; the BUG-087 false blocks are silent; the `rm -rf .*` forms still deny. Applied: Lex copied the staged hook to the live one in `e9aa65d` (the web guard and scanner were already identical, `.claude/settings.json` unchanged). Checks after the copy: six non-hook suites exit 0, live hook 3169/0 with 82 `stagedOnly()` skipped, the audit with `--fail-on-error` exit 0, `guardian check` clean. `staging/APPLY.md` step 4 (worker, 2026-11-18): the 82 tests are plain `test()` now. Live hook 3251/0 with none skipped; staged suites injection-guard 288/0, hook 3251/0; the three staged files are identical to the live ones. Status IN-PROGRESS to SMOKE-TESTING.
+
+Known limits (Lex, 2026-11-18), in manual chapter 04 and CHANGELOG.md:
+
+1. A variable set before the command, holding a guarded name or `-o`, cannot be judged from the text (re-probe 4).
+2. False ask, pre-existing: `sort -T /tmp -t "$SEP" .claude/settings.json`, as recorded above.
+3. Harmless false ask: `sort -S -t "$(echo -o)" .claude/settings.json README.md`. `optionValues()` takes `-t` as `-S`'s value, so the substitution stands where an option can; `sort` itself rejects `-t` as a buffer size.
+
+Plus the two from the first round: case 2 and case 3 stay denied.
+
+Smoke test (Lex runs it headless, `claude -p` with `--setting-sources project,local` in bypass mode in this repo): case 1, `npm test | grep x` and `git commit -m "x *"` run; cases 2 and 3 are still denied; `ls -a | grep -x '.*' | xargs rm -rf`, `sort {-o,.claude/settings.json} README.md`, `uniq {README.md,.claude/settings.json}`, `uniq $(echo README.md .claude/settings.json)`, `sort $(echo -o) .claude/settings.json README.md`, `sort -T -t "$(echo -o)" .claude/settings.json README.md` and `sort $"-o" .claude/settings.json README.md` are denied; `cat .claude/settings.json *.md` runs. Result: pending.
 
 ### BUG-088: Three hook tests fail on Linux CI
 

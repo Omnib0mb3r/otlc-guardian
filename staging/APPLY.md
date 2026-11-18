@@ -16,6 +16,17 @@ identical to the live ones. The tables below are the record of what that
 apply changed. The next staged fix starts from these files and gets a new
 row; until then there is nothing here to apply.
 
+**Applied on 2026-11-18, commit `e9aa65d`: the BUG-087 fix, staged through
+`f4a06f1`. Nothing is pending.** Lex's fourth re-probe of BUG-087, on
+`f4a06f1`, was clear (228 variants, no regressions). Lex copied
+`staging/hooks/injection-guard-hook.mjs` over the live hook; the web guard
+and the scanner were already identical, and `.claude/settings.json` did not
+change. Checks after the copy: the six non-hook suites exit 0, live hook
+3169/0 with 82 `stagedOnly()` skipped, the audit with `--fail-on-error`
+exit 0, `guardian check` clean. Step 4 is done: no test is `stagedOnly()`,
+and the three staged files are identical to the live ones. Its row is the
+last in the table below.
+
 What that means for the control: in Guardian's own repo the "a person
 confirms" step on its enforcement files is replaced by two things, an
 independent re-probe that must be clean and this runbook's checks with a
@@ -184,6 +195,7 @@ one of the cost rulings of re-probe 7 ((a), (b) and (c)) and re-probe 8.
 | BUG-066 (N1) | 29b2dd4 | hook | a glob copy or move out of a folder the command unpacks, clones or downloads into, or that is not on disk, lands on the target folder itself: the project root and a watched folder ask; cmd `copy` and `move` wildcards are read |
 | BUG-066 (P1) | d386456 | hook | once a command has unpacked, cloned or downloaded something, a later step that takes it to the project root, a folder above it or a watched path asks, and so does a copy with an argument that is not spelled out; `xcopy` and cmd `copy` and `move` read a folder source; a listing piped into `Copy-Item` or `Move-Item` is read; `ln -s` with a glob is read as a copy |
 | BUG-066 (P2) | 49feffe | hook | unread content into a folder git runs hooks from (`.git/hooks`, `.husky`, `.githooks`, the folder `core.hooksPath` names) asks, as in an instruction file; an unpack, clone or download into a place that is not spelled out asks |
+| BUG-087 | f4a06f1 (apply e9aa65d) | hook | a glob counts where the bare word does; a `VAR=value` prefix taints its own stage; `cut` and one-operand `uniq` read; a read-only program is judged on its words after brace, glob and variable expansion, with option values found by a getopt walk and `$"..."` read (staged in 551ed02, 1711c2b, 5d644e5, cbe4d5d, f4a06f1) |
 
 Documented, not fixed: an obfuscated payload moved out of a code fence
 (BUG-042, S7, f5ecc42), `xargs cp` fed its file names on stdin (S5), a
@@ -939,3 +951,4 @@ there, with who ran it and how. Restore any file a test changes with
 | BUG-080 (N2) | At the root of a scratch project ask Claude to run `npm config --loglevel silent set script-shell ./e.sh; npm run security`; see a Guardian prompt naming security; decline. In bypass mode `npm config --loglevel silent get registry && npm test -- security` gets no Guardian prompt. |
 | BUG-080 (K7) | In bypass mode, in a scratch git repository, ask Claude to run `echo "- note" >> CHANGELOG.md && git add CHANGELOG.md && git commit -m "chore: security changelog" && git tag v0.0.1`; no Guardian prompt. |
 | BUG-080 (K3) | In a scratch git repository with Guardian installed ask Claude to run `cd .git/hooks && cp ../../g.sh commit-msg && cd ../.. && git commit -m security`; see a Guardian prompt naming security; decline. In bypass mode `cd src && echo '## Security' >> notes.md && cd .. && git add -A && git commit -m docs` gets no Guardian prompt. |
+| BUG-087 | In bypass mode in this repo: case 1 of BUG-087's block, `npm test \| grep ...` and `git commit -m "x *"` run; cases 2 and 3 are still denied; `ls -a \| grep -x '.*' \| xargs rm -rf`, `sort {-o,.claude/settings.json} README.md`, `uniq {README.md,.claude/settings.json}`, `uniq $(echo README.md .claude/settings.json)`, `sort $(echo -o) .claude/settings.json README.md`, `sort -T -t "$(echo -o)" .claude/settings.json README.md` and `sort $"-o" .claude/settings.json README.md` are denied; `cat .claude/settings.json *.md` runs. Full steps in BUG-087's block. |

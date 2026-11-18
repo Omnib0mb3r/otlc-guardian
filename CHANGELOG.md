@@ -1631,7 +1631,8 @@ project (each project picks it up when `guardian update` is run there).
   string it is. One false ask stays as a known limit: `sort -T /tmp -t
   "$SEP" .claude/settings.json`, where `-T`'s value `/tmp` is read as an
   operand and `sort` refuses a one-segment `/x` operand (a possible
-  Windows `sort /o`).
+  Windows `sort /o`). The fourth re-probe, of `f4a06f1`, was clear, and
+  Lex applied the fix to the live hook on 2026-11-18 (`e9aa65d`).
 
 ### Changed (behavior you will notice)
 
@@ -1681,6 +1682,14 @@ project (each project picks it up when `guardian update` is run there).
   mode, and the hook cannot tell whether one is watching: Claude Code
   sends no such signal (BUG-035, deferred). Run unattended sessions in
   `bypassPermissions`, where every ask is a deny.
+- The read-only check on a command naming Guardian's files (BUG-087)
+  cannot judge a variable set before the command: when its value holds
+  a guarded name or `-o`, the command text does not show it (re-probe
+  4). Two harmless false asks remain:
+  `sort -T /tmp -t "$SEP" .claude/settings.json` (`-T`'s value read as a
+  `/x` operand) and `sort -S -t "$(echo -o)" ...` (`-t` is `-S`'s value,
+  which `sort` rejects as a size). A pipeline ending in `awk` or a loop
+  body, and a glob inside inline code, stay denied as noted under Fixed.
 - A CRITICAL pattern written into an instruction file is denied even when
   it is quoted as an example. This is intended (a model reads the quoted
   text too); use `otlcGuardian.ignorePaths` or a hand edit for such files.

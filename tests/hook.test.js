@@ -7985,7 +7985,7 @@ describe("PreToolUse hook - a glob counts where the bare word does, and a prefix
     "npm test | grep security | uniq -f 1 -s 2 --check-chars 3",
     "npm test | grep security | cut -d , -f 1 --output-delimiter=: | uniq -",
   ]) {
-    stagedOnly(`silent: ${command}`, () => {
+    test(`silent: ${command}`, () => {
       expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
     });
   }
@@ -8105,7 +8105,7 @@ describe("PreToolUse hook - a read-only program is judged on its words after bra
     "sort $'-o' .claude/settings.json README.md",
     "sort $'--output=.claude/settings.json' README.md",
   ]) {
-    stagedOnly(`asks: ${command}`, () => {
+    test(`asks: ${command}`, () => {
       const out = runGuarded(command);
       assert.ok(["ask", "deny"].includes(decisionOf(out)), out.slice(0, 200));
     });
@@ -8138,7 +8138,7 @@ describe("PreToolUse hook - a read-only program is judged on its words after bra
     'head -n "$N" .claude/settings.json',
     'uniq -f "$F" .claude/settings.json',
   ]) {
-    stagedOnly(`silent: ${command}`, () => {
+    test(`silent: ${command}`, () => {
       expectSilent(runGuarded(command, { mode: "bypassPermissions" }));
     });
   }
