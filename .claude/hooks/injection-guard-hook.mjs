@@ -2259,6 +2259,11 @@ const ASSIGNMENT = /^([A-Za-z_]\w*)\+?=/;
 // and the ones that declare a variable without running anything.
 const ENVIRONMENT_SETTERS = new Set(["export", "declare", "typeset", "readonly", "local", "env", "set", "setx"]);
 const DECLARERS = new Set(["export", "declare", "typeset", "readonly", "local"]);
+// The builtins after which an assignment in front of them stays set in
+// the shell (POSIX special builtins, and the wrappers that can run one),
+// so it reaches every later command.
+const SPECIAL_BUILTINS = new Set([":", ".", "source", "break", "continue", "eval", "exec", "exit", "export", "readonly", "return", "set",
+  "shift", "times", "trap", "unset", "command", "builtin", "declare", "typeset", "local"]);
 // An environment value can be what a program runs or loads (GIT_EXEC_PATH,
 // NODE_OPTIONS, PYTHONSTARTUP, HOME with its .gitconfig), and no list of
 // those is complete. These are the names known to carry nothing a
@@ -2422,15 +2427,21 @@ const PS_VARIABLE_SETTERS = new Set(["set-variable", "sv", "set", "new-variable"
  *
  * @param {((spelled: string) => boolean)|null} outside - whether a path,
  *   as spelled, is absolute and outside the project
- * @returns {{ opens: Array<{ start: number, end: number, word: string, sub: boolean, loose: boolean, expanded?: boolean }>, reads: Array<[number, number]>, redirects: boolean, at: (pos: number) => boolean, replacedFrom: number }|null}
+ * A spelled-out assignment in front of a command word that is not a
+ * special builtin reaches that command alone (BUG-087): it leaves the
+ * statement plain and is reported in `prefixed`, and bareWordText() gives
+ * its stage no exemption.
+ *
+ * @returns {{ opens: Array<{ start: number, end: number, word: string, sub: boolean, loose: boolean, expanded?: boolean }>, reads: Array<[number, number]>, redirects: boolean, at: (pos: number) => boolean, replacedFrom: number, prefixed: number[] }|null}
  *   null when nothing in the command is plain; else `opens`, the words
  *   that hold a glob, a brace list, a substitution (`sub`) or something
  *   the reader cannot spell out (`loose`), with the words a for loop's
  *   variable stands for (`expanded`); `reads`, the place of each
  *   PowerShell statement with a ( ) that only reads; `redirects`, whether
  *   PATH or a virtual environment is set; `at`, whether the statement at
- *   a place in the text is plain; and `replacedFrom`, the place from
- *   which a command word may run something else
+ *   a place in the text is plain; `replacedFrom`, the place from
+ *   which a command word may run something else; and `prefixed`, the
+ *   place of each assignment that is in one command's environment only
  */
 function plainCommand(text, tokens, dialect, outside = null) {
   // A PowerShell ( ) is an expression. It is no hazard when the statement
@@ -2525,6 +2536,7 @@ function plainCommand(text, tokens, dialect, outside = null) {
   let current = null;
   let depth = 0;
   let replacedFrom = Infinity;
+  const prefixed = [];
   /** Marks the statement being read not plain; true when the whole command is judged as one. */
   const spoils = (tok, replaces = false) => {
     if (whole) return true;
@@ -2590,6 +2602,15 @@ function plainCommand(text, tokens, dialect, outside = null) {
       if (/^env:/i.test(tok.word)) return null;
     } else if (!redirected && (first || ENVIRONMENT_SETTERS.has(stageName))) {
       const assigned = ASSIGNMENT.exec(tok.word);
+      // A spelled-out value in front of a command is in that command's
+      // environment alone, unless the command is a special builtin, after
+      // which it stays set (BUG-087). Its stage is `prefixed`, and the
+      // word after it is still the command.
+      const runs = first && assigned && !pattern && !/[$`]/.test(unquoted) ? prefixedCommand(tokens, i) : null;
+      if (runs !== null && !SPECIAL_BUILTINS.has(runs)) {
+        if (!HARMLESS_ENVIRONMENT.has(assigned[1])) prefixed.push(tok.start);
+        continue;
+      }
       if (assigned && !HARMLESS_ENVIRONMENT.has(assigned[1])) spoils(tok, true);
     }
     // Set when the reader cannot say what the word is: it holds a
@@ -2674,7 +2695,18 @@ function plainCommand(text, tokens, dialect, outside = null) {
   // "after" is not known there.
   if (replacedFrom < Infinity && tokens.some((tok) => tok.op === "&")) replacedFrom = -1;
   const at = (pos) => whole || statements.some((st) => pos >= st.start && pos < st.end && st.plain && st.start < replacedFrom);
-  return { opens, reads, redirects, at, replacedFrom: whole ? Infinity : replacedFrom };
+  return { opens, reads, redirects, at, replacedFrom: whole ? Infinity : replacedFrom, prefixed };
+}
+
+/**
+ * The name of the command the assignment at `i` stands in front of, past
+ * any other assignments, or null when no command word follows in its
+ * stage (the assignment stays set in the shell).
+ */
+function prefixedCommand(tokens, i) {
+  let k = i + 1;
+  while (tokens[k]?.word !== undefined && ASSIGNMENT.test(tokens[k].word)) k++;
+  return tokens[k]?.word === undefined ? null : commandName(tokens[k].word);
 }
 
 // A variable reference in a word: ${NAME}, ${NAME:-value} and their like
@@ -2967,7 +2999,11 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
     const declared = DECLARERS.has(s[0].word);
     return s.slice(declared ? 1 : 0).every((tok) => ASSIGNMENT.test(tok.word) || (declared && tok.word.startsWith("-")));
   };
-  const exempt = (s) => isTestRun(s.map((tok) => tok.word)) || messageSpans(s).length > 0 || scriptNameSpans(s).length > 0;
+  // A stage with a value set in front of its command: the value can be
+  // what the program runs (GIT_EDITOR, LESSOPEN), so the stage earns no
+  // exemption and its words count from any folder (BUG-087).
+  const prefixedStage = (s) => plain.prefixed.some((at) => at >= s[0].start && at < s.at(-1).end);
+  const exempt = (s) => !prefixedStage(s) && (isTestRun(s.map((tok) => tok.word)) || messageSpans(s).length > 0 || scriptNameSpans(s).length > 0);
   // What a stage can do to the others: `quiet`, it writes no file (it
   // moves, enters a virtual environment, assigns, or only reads with no
   // redirect); `settled`, it is quiet, or an exempt stage of its own, or
@@ -3031,7 +3067,7 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
   const passive = (s) => {
     const line = pipelines.find(({ stages: among }) => among.includes(s)).stages;
     const rest = line.slice(line.indexOf(s));
-    if (!plain.at(s[0].start) || !rest.every((one) => trusted(one, [commandName(one[0].word)]))) return false;
+    if (!plain.at(s[0].start) || rest.some(prefixedStage) || !rest.every((one) => trusted(one, [commandName(one[0].word)]))) return false;
     return (rest.length === 1 && gitKeeps(s)) || onlyReads(text.slice(s[0].start, rest.at(-1).at(-1).end), dialect, 0, null, outside);
   };
   /**
@@ -3202,7 +3238,7 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
     // does something else with what it prints (git commit -m security |
     // xargs rm -rf), so it earns nothing (G2b).
     const s = line[reading - 1];
-    if (s) {
+    if (s && !prefixedStage(s)) {
       const words = s.map((tok) => tok.word);
       const whole = place(s);
       const runs = isTestRun(words);
@@ -3232,7 +3268,7 @@ function bareWordText(text, dialect, plainSink = null, outside = null, hooksFold
     const runner = commandName(words[0]);
     const script = SHELLS.has(runner) || INTERPRETERS.has(runner) ? words.slice(1).find((word) => !word.startsWith("-")) : undefined;
     const names = [...programNames(words), ...(script ? [commandName(script)] : [])];
-    if (s[0].start >= plain.replacedFrom || replaced(s, names) || writesGitRun(s)) unplaced.push(place(s));
+    if (s[0].start >= plain.replacedFrom || prefixedStage(s) || replaced(s, names) || writesGitRun(s)) unplaced.push(place(s));
   }
   return { text: blanked(), unplaced };
 }
@@ -3302,14 +3338,6 @@ function guardedNameIn(texts, dialect, cwd, root, watches = () => false) {
     for (const view of views) {
       for (const { name, re } of GUARDED_NAME_PATTERNS) {
         for (const m of view.matchAll(re)) if (counts(view, name, m, PATH_RUN_CHAR)) return name;
-      }
-      for (const run of view.split(/[\s;|&<>()=,]+/)) {
-        if (!/[*?[]/.test(run)) continue;
-        for (const base of bases) {
-          const re = globRegex(path.resolve(base, run.replace(/^~(?=$|\/)/, os.homedir())).replace(/\\/g, "/").toLowerCase());
-          const globHit = re && guardedAbs.find((g) => re.test(g.abs));
-          if (globHit) return globHit.name;
-        }
       }
     }
     // A shell word with white space in it, read whole: a quoted path keeps
@@ -3383,6 +3411,21 @@ function guardedNameIn(texts, dialect, cwd, root, watches = () => false) {
       return names;
     };
     const { text: left, unplaced } = bareWordText(text, dialect, plainSink, outside, hooksFolder, matched);
+    // A glob is a word the shell or a program expands to names, so it
+    // counts where the bare word does: in the text bareWordText() leaves,
+    // from every folder the command can be in. A regex a stage that only
+    // reads is given (npm test | grep ".*"), or a commit message, is not
+    // a path (BUG-087).
+    for (const view of nameViews(left, PATH_RUN_CHAR, dialect)) {
+      for (const run of view.split(/[\s;|&<>()=,]+/)) {
+        if (!/[*?[]/.test(run)) continue;
+        for (const base of bases) {
+          const re = globRegex(path.resolve(base, run.replace(/^~(?=$|\/)/, os.homedir())).replace(/\\/g, "/").toLowerCase());
+          const globHit = re && guardedAbs.find((g) => re.test(g.abs));
+          if (globHit) return globHit.name;
+        }
+      }
+    }
     // In a stage whose program the command can have replaced, the word
     // counts wherever the shell is: that program need not resolve it
     // from the shell's folder (J1).
@@ -3668,7 +3711,7 @@ function wordAboveProject(texts, dialect, cwd, root) {
 const READ_ONLY_COMMANDS = new Set([
   "cat", "less", "more", "head", "tail", "grep", "egrep", "fgrep", "rg", "ls", "dir", "stat", "wc", "file", "diff",
   "cmp", "jq", "md5sum", "sha1sum", "sha256sum", "cd", "pushd", "popd", "pwd", "echo", "printf", "test", "[", "true",
-  "realpath", "readlink", "basename", "dirname", "type", "du", "df", "tree", "sort",
+  "realpath", "readlink", "basename", "dirname", "type", "du", "df", "tree", "sort", "cut", "uniq",
   "get-content", "gc", "get-childitem", "gci", "get-item", "gi", "test-path", "select-string", "sls",
   "get-filehash", "set-location", "sl", "resolve-path", "rvpa", "write-output", "write-host",
   "select-object", "where-object", "measure-object", "format-list", "format-table", "convertfrom-json", "out-string",
@@ -3732,6 +3775,13 @@ const READ_ONLY_OPTIONS = {
      time time-style tabsize width context zero`),
   stat: readOptions("Lft", "c", "dereference file-system format printf terse cached"),
   wc: readOptions("clmLw", "", "bytes chars lines max-line-length words files0-from total"),
+  // cut has no option that writes, and every operand is a file it reads (BUG-087).
+  cut: readOptions("nsz", "bcfd", "bytes characters fields delimiter complement only-delimited output-delimiter zero-terminated"),
+  // uniq [OPTION]... [INPUT [OUTPUT]] writes its second operand, so it
+  // reads only with one operand at most (uniqOperands(); BUG-087).
+  uniq: readOptions("cdDiuz", "fsw",
+    "count repeated all-repeated group skip-fields ignore-case skip-chars unique zero-terminated check-chars",
+    { digits: true, plus: /^\+\d+$/ }),
   // Not listed: -C / --compile, which writes a compiled magic file.
   file: readOptions("bcdEhikLlnNprsSzZ0", "eFfmP",
     `brief mime mime-type mime-encoding dereference no-dereference keep-going uncompress uncompress-noreport files-from
@@ -3950,7 +4000,25 @@ function readsWithOptions(name, w, dialect) {
     const switches = CMD_READ_SWITCHES[name];
     return args.every((a) => !/^\/[^\\/]+$/.test(a) || (switches !== null && switches.test(a)));
   }
+  if (name === "uniq" && uniqOperands(args) > 1) return false;
   return Object.hasOwn(READ_ONLY_OPTIONS, name) && knownReadOptions(READ_ONLY_OPTIONS[name], args);
+}
+
+// uniq's options whose value can be the next word: -f, -s, -w at the end
+// of a cluster, and their long forms without "=".
+const UNIQ_VALUED_LONG = /^--(?:skip-fields|skip-chars|check-chars)$/;
+
+/** How many operands uniq is given (INPUT, then OUTPUT, which it writes); the value of an option is none. */
+function uniqOperands(args) {
+  let count = 0;
+  let operands = false;
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    if (operands || a === "-" || !/^[-+]/.test(a)) count++;
+    else if (a === "--") operands = true;
+    else if (UNIQ_VALUED_LONG.test(a) || /^-[cdDiuz]*[fsw]$/.test(a)) k++;
+  }
+  return count;
 }
 
 /** Whether a git command is a read-only subcommand with options that only read. */
@@ -4039,6 +4107,133 @@ function findOnlyReads(args, dialect, depth, outside = null) {
   return true;
 }
 
+// The read-only programs no option can make write a file or run a
+// program, and whose every operand is a file or text they read. A word
+// whose content the reader cannot spell out (a substitution, a variable,
+// a glob, a brace form it does not expand) is harmless to them whatever
+// it becomes: reading a guarded file is not a write (BUG-087). Not here:
+// sort (-o), uniq (its second operand), less and more, rg (--pre), tree
+// (-o), file (-C), diff (-l runs pr), printf (-v), git, find and tee.
+const READERS_OF_ANY_WORD = new Set(["cat", "head", "tail", "grep", "egrep", "fgrep", "ls", "dir", "stat", "wc", "cut", "du", "df", "cmp",
+  "jq", "md5sum", "sha1sum", "sha256sum", "realpath", "readlink", "basename", "dirname", "type", "cd", "pushd", "popd", "pwd", "echo",
+  "test", "[", "true"]);
+// A variable or a substitution where bash expands it: $NAME, ${...}, $(...),
+// $1, $@ and the other specials, or a backtick.
+const EXPANSION = /\$[\w{(@*#?!$-]|`/;
+
+/**
+ * A bash stage's words as bash hands them to the program (BUG-087,
+ * re-probes of 551ed02 and 1711c2b). A plain brace list is expanded into
+ * its words, so `sort {-o,x}` is `sort -o x` and `uniq {a,b}` has two
+ * operands. Every other word that bash changes is marked, for the caller
+ * to judge by program:
+ *   unknown  its content is not known: a variable or a substitution, or a
+ *            brace form expandBraces() does not fully handle (quotes,
+ *            escapes, nested groups, {a..c}), never expanded in part
+ *   split    bash can make it any number of words: the expansion is not
+ *            inside double quotes, or it is such a brace form
+ *   glob     a glob, standing for the names it matches
+ *   wild     a glob that can match a word starting with - or +, which a
+ *            program takes as an option (a file named -o)
+ * @returns {Array<{ word: string, unknown?: boolean, split?: boolean, glob?: boolean, wild?: boolean, braced?: boolean }>}
+ */
+function expandedWords(toks, command) {
+  const parts = [];
+  for (const tok of toks) {
+    const raw = command.slice(tok.start, tok.end);
+    const bare = quotesOut(raw);
+    if (EXPANSION.test(singleQuotesOut(raw))) {
+      parts.push({ word: tok.word, unknown: true, split: EXPANSION.test(bare) });
+      continue;
+    }
+    const braced = BRACE_LIST.test(bare);
+    if (braced && (bare !== raw || raw.includes("\\") || nestedBraces(raw))) {
+      parts.push({ word: tok.word, unknown: true, split: true, braced: true });
+      continue;
+    }
+    const each = braced ? expandBraces(tok.word).split(/\s+/).filter(Boolean) : [tok.word];
+    if (each.some((word) => BRACE_LIST.test(word))) {
+      parts.push({ word: tok.word, unknown: true, split: true, braced: true });
+      continue;
+    }
+    for (const word of each) {
+      const glob = (braced ? /[*?[]/.test(word) : /[*?[]/.test(bare)) && bare !== "[" && bare !== "[[";
+      parts.push({ word, glob, wild: glob && /^[-+*?[]/.test(word), braced });
+    }
+  }
+  return parts;
+}
+
+/**
+ * The words of a program's command that are certainly the value of an
+ * option, found by walking its arguments from the first, as getopt does
+ * (BUG-087, re-probe of 5d644e5): a short option on the program's list
+ * of valued letters takes the rest of its cluster or else the next word,
+ * whatever that word looks like (`sort -T -t X`: -t is -T's value, and X
+ * stands where an option can), and `--` ends the options. A long option
+ * without "=" may or may not take the next word: both readings are
+ * walked, and only a word that is a value in every reading counts. A
+ * letter not on the list leaves the rest unknown.
+ * @returns {Set<number>} the indexes into `words` (words[0] is the program)
+ */
+function optionValues(name, words) {
+  const spec = READ_ONLY_OPTIONS[name];
+  if (!spec) return new Set();
+  const roles = words.map(() => new Set());
+  const seen = new Set();
+  const walk = (k, operandsOnly) => {
+    const key = `${k}:${operandsOnly}`;
+    if (k >= words.length || seen.has(key)) return;
+    seen.add(key);
+    const a = words[k];
+    if (operandsOnly || a === "-" || !/^[-+]/.test(a)) {
+      roles[k].add("operand");
+      walk(k + 1, operandsOnly || Boolean(spec.leading));
+    } else if (a === "--") {
+      roles[k].add("option");
+      walk(k + 1, true);
+    } else if (a.startsWith("--")) {
+      roles[k].add("option");
+      walk(k + 1, false);
+      const valued = name === "uniq" && UNIQ_VALUED_LONG.test(a);
+      if (!a.includes("=") && (valued || !/^--(?:help|version)$/.test(a))) {
+        if (k + 1 < words.length) roles[k + 1].add("value");
+        walk(k + 2, false);
+      }
+    } else {
+      roles[k].add("option");
+      if (a.startsWith("+") || (spec.digits && /^-\d+$/.test(a))) return walk(k + 1, false);
+      for (let j = 1; j < a.length; j++) {
+        const letter = a[j];
+        if (spec.valued.has(letter)) {
+          if (j + 1 < a.length) return walk(k + 1, false);
+          if (k + 1 < words.length) roles[k + 1].add("value");
+          return walk(k + 2, false);
+        }
+        if (!spec.flags.has(letter)) {
+          // Not on the list: it may take a value or not.
+          walk(k + 1, false);
+          if (k + 1 < words.length) roles[k + 1].add("value");
+          return walk(k + 2, false);
+        }
+      }
+      walk(k + 1, false);
+    }
+  };
+  walk(1, false);
+  return new Set(roles.flatMap((role, k) => (role.size === 1 && role.has("value") ? [k] : [])));
+}
+
+/** Whether a word has a brace group inside another, or braces that do not pair. */
+function nestedBraces(word) {
+  let depth = 0;
+  for (const ch of word) {
+    if (ch === "{" && ++depth > 1) return true;
+    if (ch === "}" && --depth < 0) return true;
+  }
+  return depth !== 0;
+}
+
 /**
  * Whether every stage of a command is a known read-only command with no
  * redirect to a file. A command the reader left text out of without being
@@ -4070,7 +4265,10 @@ function onlyReads(command, dialect, depth = 0, plainSink = null, outside = null
       if (toks === null) return false;
       if (toks.length === 0) return true;
     }
-    const w = toks.map((tok) => tok.word);
+    const parts = dialect === "bash" ? expandedWords(toks, command) : toks.map((tok) => ({ word: tok.word }));
+    // The program is the one its name says only when the name is spelled out.
+    if (parts[0].unknown || parts[0].glob || parts[0].braced) return false;
+    let w = parts.map((part) => part.word);
     // What follows a PowerShell ( ) carries the expression on: an
     // operator and its operands (-match "x", -replace "a","b"), or a
     // property of the value (.Count, .Length -gt 0). It only reads when
@@ -4107,6 +4305,21 @@ function onlyReads(command, dialect, depth = 0, plainSink = null, outside = null
     // bin/cat are files of the project (re-probe 7, H6).
     if (/[\\/]/.test(w[0]) && !outside?.(w[0])) return false;
     const name = commandName(w[0]);
+    // A word bash changes (expandedWords()). A program no word can make
+    // write is judged on the words that are spelled out. Any other one
+    // does not only read when such a word can become an option or extra
+    // operands: an expansion outside double quotes, any expansion that is
+    // not an option's value, a glob that can start with - or +, and any
+    // glob given to uniq, which writes its second operand. A glob that
+    // starts with a name stays, and is tested as an operand as spelled.
+    if (parts.some((part) => part.unknown || part.glob)) {
+      if (READERS_OF_ANY_WORD.has(name)) w = parts.filter((part) => !part.unknown && !part.wild).map((part) => part.word);
+      else {
+        const values = optionValues(name, w);
+        if (parts.some((part, k) => (part.unknown && (part.split || !values.has(k))) || part.wild ||
+          (part.glob && name === "uniq"))) return false;
+      }
+    }
     if (name === "git") return gitOnlyReads(w.slice(1));
     // A nested shell reads when the script it runs does.
     if (SHELLS.has(name)) return w[1] === "-c" && w.length === 3 && onlyReads(w[2], "bash", depth + 1, null, outside);
@@ -4302,6 +4515,10 @@ function lexShell(text, dialect = "bash") {
       word = `${word ?? ""}${text.slice(i + 1, stop)}`;
       i = stop + 1;
     } else if (ch === '"') {
+      // $"...": bash's locale-translated string, which with no message
+      // catalog is the string itself, so the "$" is not part of the word
+      // (BUG-087: `sort $"-o"` hands sort -o).
+      if (d.ansiC && dollarAt === i - 1 && i > 0) word = word.slice(0, -1);
       word = word ?? "";
       i++;
       while (i < text.length && text[i] !== '"') {
