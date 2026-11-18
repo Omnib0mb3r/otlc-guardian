@@ -1618,7 +1618,20 @@ project (each project picks it up when `guardian update` is run there).
   rest of `READERS_OF_ANY_WORD`) reads whatever it becomes; any other
   program (`sort`, `uniq`, `less`, `rg`, `git`, `find`, `tee`) does not
   only read when such a word can turn into an option or extra operands,
-  unless it is the value of an option (`sort -t "$SEP"`).
+  unless it is the value of an option (`sort -t "$SEP"`). Lex's third
+  re-probe found two more silent writes, both older than BUG-087. The
+  option-value check looked only at the word before, so in `sort -T -t
+  "$(echo -o)" .claude/settings.json README.md` the substitution passed
+  as `-t`'s value though `-t` is `-T`'s value. An option's value is now
+  found by walking the words from the first, as getopt does
+  (`optionValues()`); a long option without `=`, or a letter the table
+  does not list, is walked both ways, and a word counts as a value only
+  in every reading. And bash's `$"..."` kept its `$`, so `sort $"-o" ...`
+  handed `sort` an unseen `-o`; it is now read as the double-quoted
+  string it is. One false ask stays as a known limit: `sort -T /tmp -t
+  "$SEP" .claude/settings.json`, where `-T`'s value `/tmp` is read as an
+  operand and `sort` refuses a one-segment `/x` operand (a possible
+  Windows `sort /o`).
 
 ### Changed (behavior you will notice)
 

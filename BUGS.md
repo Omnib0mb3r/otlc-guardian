@@ -2408,6 +2408,17 @@ Fix: `expandedWords()` now marks each word instead of failing for all programs: 
 
 Staging commit: `5d644e5` (2026-11-18). Staged suites: injection-guard 288/0, hook 3240/0, no 0xC0000142. Live: hook 3169/0 with 71 `stagedOnly()` skipped, injection-guard 288/0, init 93/0, agents-md 14/0, audit 407/0, sql-guard and inbound exit 0; self-audit clean, `guardian check` 18/0. Waits on Lex's re-probe and promotion, then SMOKE-TESTING; the smoke test gains: `uniq $(echo README.md .claude/settings.json)` and `sort $(echo -o) .claude/settings.json README.md` are denied, and `cat .claude/settings.json *.md` runs.
 
+Re-probe of `5d644e5` (Lex, 2026-11-18): NOT CLEAR, not applied; Lex ruled this the last self-protection round on BUG-087 (further pre-existing exotic forms become known limits). Two findings, both silent writes older than BUG-087, each proven on a scratch fixture:
+
+- A, option-value walk: `sort -T -t "$(echo -o)" .claude/settings.json README.md`, `sort -T -T "$(echo -o)" ...`, `sort --temporary-directory -t "$(echo -o)" ...`, `sort -T -t "${O:--o}" ...`, the `"$O"` and backtick forms, `sort -T -t "$(echo --output=.claude/settings.json)" README.md`. `optionValueAt()` looked only at the word before, so the substitution passed as `-t`'s value though `-t` is `-T`'s value.
+- B, locale quoting: `sort $"-o" .claude/settings.json README.md` and `sort $"--output=.claude/settings.json" README.md`. `lexShell()` kept the `$` of `$"..."` in the word, so `sort` got an unseen `-o`.
+
+Fix: `optionValues(name, words)` replaces `optionValueAt()`. It walks the words from the first as getopt does, per `READ_ONLY_OPTIONS`: a valued letter takes the rest of its cluster or else the next word, `--` ends the options, and a long option without `=` or a letter not on the table is walked both ways; a word counts as a value only when it is one in every reading. `lexShell()` drops the `$` before a double-quoted string. The `$'...'` forms already asked (decoded by `lexShell()`) and are pinned as guards; `sort [-a-z]* ...` and `sort {README.md,$X} ...` keep asking. Code in `cbe4d5d` (committed untested at a handover, pushed by Lex during the handover review); tests and docs in the commit after it. The 13 new and kept tests fail 9 of 13 against `5d644e5`'s staged hook (the 4 that pass there: the two `$'...'` guards, `sort [-a-z]*`, `sort {README.md,$X}`).
+
+Known limit (Lex, 2026-11-18), not tested: `sort -T /tmp -t "$SEP" .claude/settings.json` asks, a false ask and pre-existing: `knownReadOptions()` reads `-T`'s separate value `/tmp` as an operand, and `sort`'s operand test refuses a one-segment `/x` word (a possible Windows `sort /o`).
+
+Staged suites on `cbe4d5d` with the new tests: injection-guard 288/0, hook 3251/0, no 0xC0000142. Live: hook 3169/0 with 82 `stagedOnly()` skipped, injection-guard 288/0, init 93/0, agents-md 14/0, audit 407/0, sql-guard and inbound exit 0; self-audit clean, `guardian check` clean. Waits on Lex's re-probe and promotion, then SMOKE-TESTING; the smoke test gains: `sort -T -t "$(echo -o)" .claude/settings.json README.md` and `sort $"-o" .claude/settings.json README.md` are denied.
+
 ### BUG-088: Three hook tests fail on Linux CI
 
 **Status:** RESOLVED · **Found:** 2026-11-12 · **Fixed:** 2026-11-12

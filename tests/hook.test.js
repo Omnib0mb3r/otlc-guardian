@@ -8089,6 +8089,21 @@ describe("PreToolUse hook - a read-only program is judged on its words after bra
     "less $L .claude/settings.json",
     "git diff $(echo --output=x) -- .claude/settings.json",
     "find .claude $(echo -delete)",
+    // Re-probe of 5d644e5: an option's value is found by walking the words
+    // from the first, as getopt does. Here -T takes -t as its value, so the
+    // expansion after it can be an option.
+    'sort -T -t "$(echo -o)" .claude/settings.json README.md',
+    'sort -T -T "$(echo -o)" .claude/settings.json README.md',
+    'sort --temporary-directory -t "$(echo -o)" .claude/settings.json README.md',
+    'sort -T -t "${O:--o}" .claude/settings.json README.md',
+    'sort -T -t "$O" .claude/settings.json README.md',
+    'sort -T -t "`echo -o`" .claude/settings.json README.md',
+    'sort -T -t "$(echo --output=.claude/settings.json)" README.md',
+    // bash's $"..." is a double-quoted string, and $'...' a decoded one.
+    'sort $"-o" .claude/settings.json README.md',
+    'sort $"--output=.claude/settings.json" README.md',
+    "sort $'-o' .claude/settings.json README.md",
+    "sort $'--output=.claude/settings.json' README.md",
   ]) {
     stagedOnly(`asks: ${command}`, () => {
       const out = runGuarded(command);
