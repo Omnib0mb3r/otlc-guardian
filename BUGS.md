@@ -98,7 +98,7 @@ Statuses: `OPEN` (confirmed, not fixed) → `SMOKE-TESTING` (fix applied, verify
 | BUG-084 | SMOKE-TESTING | Hook without `CLAUDE_PROJECT_DIR` takes the session folder as the project root: from `src/` the project's `.mcp.json` and Guardian's files one level up are not judged |
 | BUG-085 | SMOKE-TESTING | HIGH (staged hook): the shell reader drops text that bash runs (a `$(...)` in a heredoc, a `#` that is no comment, an escaped quote in `$'...'`), so a delete of Guardian's files behind it is silent |
 | BUG-086 | SMOKE-TESTING | Nothing checks a file that arrives in Lex's mailbox before DevNeural ingests it: `guardian inbound-check` (contract v1, eight checks) does not exist yet |
-| BUG-087 | SMOKE-TESTING | Live hook (after the 1.5.0 apply): false denies in bypass mode on shell commands that never spell a guarded name (`VAR=... npm run test:staging | grep`, a `sed -i` on CHANGELOG.md with a `for` loop, a Python heredoc) |
+| BUG-087 | RESOLVED | Live hook (after the 1.5.0 apply): false denies in bypass mode on shell commands that never spell a guarded name (`VAR=... npm run test:staging | grep`, a `sed -i` on CHANGELOG.md with a `for` loop, a Python heredoc) |
 | BUG-088 | RESOLVED | CI on Linux (run 43353978682, `15d9b14`): `tests/hook.test.js` fails 3 of 3131 that pass on Windows (`npx rimraf -t~` and `wget -P~ URL` silent, a PowerShell `cmd /c mklink /J` asks where a deny is expected) |
 
 <!-- INDEX END -->
@@ -2330,7 +2330,7 @@ Blocked (Lex, 2026-11-12): the smoke test cannot run until DevNeural builds the 
 
 ### BUG-087: The live hook denies commands that never spell a guarded name
 
-**Status:** SMOKE-TESTING · **Found:** 2026-11-12
+**Status:** RESOLVED · **Found:** 2026-11-12 · **Fixed:** 2026-11-18 (live in `e9aa65d`)
 
 Deferred (Lex, 2026-11-12): held for the weekly usage limit until 2026-11-17; investigation not started. Resumed (Lex, 2026-11-17): the hold is lifted; investigation started.
 
@@ -2429,7 +2429,9 @@ Known limits (Lex, 2026-11-18), in manual chapter 04 and CHANGELOG.md:
 
 Plus the two from the first round: case 2 and case 3 stay denied.
 
-Smoke test (Lex runs it headless, `claude -p` with `--setting-sources project,local` in bypass mode in this repo): case 1, `npm test | grep x` and `git commit -m "x *"` run; cases 2 and 3 are still denied; `ls -a | grep -x '.*' | xargs rm -rf`, `sort {-o,.claude/settings.json} README.md`, `uniq {README.md,.claude/settings.json}`, `uniq $(echo README.md .claude/settings.json)`, `sort $(echo -o) .claude/settings.json README.md`, `sort -T -t "$(echo -o)" .claude/settings.json README.md` and `sort $"-o" .claude/settings.json README.md` are denied; `cat .claude/settings.json *.md` runs. Result: pending.
+Smoke test (Lex runs it headless, `claude -p` with `--setting-sources project,local` in bypass mode in this repo): case 1, `npm test | grep x` and `git commit -m "x *"` run; cases 2 and 3 are still denied; `ls -a | grep -x '.*' | xargs rm -rf`, `sort {-o,.claude/settings.json} README.md`, `uniq {README.md,.claude/settings.json}`, `uniq $(echo README.md .claude/settings.json)`, `sort $(echo -o) .claude/settings.json README.md`, `sort -T -t "$(echo -o)" .claude/settings.json README.md` and `sort $"-o" .claude/settings.json README.md` are denied; `cat .claude/settings.json *.md` runs. Result: PASSED.
+
+Smoke test PASSED (Lex, 2026-11-18, about 09:40Z): the worker's script `smoke-087.mjs` (session scratchpad, not in the repo) in a fresh local clone at `6a65291`, each case a fresh `claude -p` with `--setting-sources project,local` in bypass mode, judged from the stream-json tool results. 13 of 13: case 1, the `npm test | grep security` form with a prefix, `git commit -m "x *"` (with `--allow-empty`) and `cat .claude/settings.json *.md` ran; case 2 (shortened to three loop numbers) and case 3 denied, the recorded limits; `sort {-o,...}`, `uniq {...}`, `uniq $(...)`, `sort $(echo -o)`, `sort -T -t "$(echo -o)"`, `sort $"-o"` and `ls -a | grep -x '.*' | xargs rm -rf` denied. Cases 1 to 12 ran on haiku; 10 and 13 were inconclusive there (the model declined to call Bash) and passed on a rerun with sonnet. Status SMOKE-TESTING to RESOLVED.
 
 ### BUG-088: Three hook tests fail on Linux CI
 
